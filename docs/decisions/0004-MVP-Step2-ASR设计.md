@@ -336,3 +336,170 @@ samples/
 ## 变更历史
 
 - 2026-06-20: 起草,10 个 YAGNI 决策 + 模块边界 + 测试策略 + 验收指标
+- 2026-06-21: 实施 + 踩坑记录(GPU 服务器 + pyannote 兼容性 + pydantic bug + HuggingFace 镜像)
+
+---
+
+## 实施踩坑记录(2026-06-21)
+
+### 1. pydantic v2 `model_dump_json` 不支持 `ensure_ascii` 参数
+
+**症状**(GPU 服务器 pytest):
+```
+TypeError: BaseModel.model_dump_json() got an unexpected keyword argument 'ensure_ascii'
+```
+
+**根因**:`MeetingStorage.save()` 第 35 行 `state.model_dump_json(indent=2, ensure_ascii=False)` —— `ensure_ascii` 是 `json.dumps` 的参数,**不是** pydantic v2 `model_dump_json` 的。
+
+**修复**:
+```python
+import json
+path.write_text(
+    json.dumps(
+        json.loads(state.model_dump_json(indent=2)),  # pydantic → Python dict
+        ensure_ascii=False,  # 保留中文可读
+        indent=2,
+    ),
+    encoding="utf-8",
+)
+```
+
+**教训**:`model_dump_json` 一次性出 JSON 字符串,改用 `json.dumps(json.loads(...))` 包装层控制 ASCII 行为。
+
+---
+
+### 2. pyannote 3.1 与 numpy 2.x 不兼容
+
+**症状**:
+```
+AttributeError: module 'numpy' has no attribute 'NaN'
+```
+
+**根因**:pyannote.audio 3.1 内部用了 `np.NaN`(numpy 1.x 写法)。numpy 2.0+ 已删除该属性。
+
+**解决路径**(踩坑过程):
+| 尝试 | 结果 |
+|---|---|
+| pyannote.audio 3.1 + numpy 1.26 | scipy 1.13 要求 numpy≥1.23 实际跑 OK,但与 pyannote 3.1 内部期望冲突 |
+| pyannote.audio 4.0 + numpy 2.x | 要重装 torch 2.12(超大,网络耗时长) |
+| **pyannote.audio 3.3.2 + numpy 2.x** | **✅ 3.x 最后版,兼容 numpy 2.x,无重装 torch** |
+
+**最终决策**:用 `pyannote.audio==3.3.2`,配 numpy≥2.0 + torch 2.5+。不升级到 4.0(避免 6GB torch 重新下载)。
+
+---
+
+### 3. 后台 `pip install` 进程被 SSH 关闭杀掉
+
+**症状**:SSH 连接关闭后,nohup 起的 pip 进程随之死亡。
+
+**根因**:SSH 终止时,内核会发 SIGHUP 给所有子进程,虽然 nohup 忽略了 SIGHUP,但 SSH 客户端关闭 TCP 连接后,`setsid` 未生效的进程会被 init 回收。
+
+**解决**:
+```bash
+# ❌ 不行(SSH 关就死)
+nohup pip install ... &
+
+# ✅ 真正后台(hermes terminal background 模式,独立 session)
+pip install ... > /tmp/log 2>&1 & disown
+# 或
+setsid python -c "..." > /tmp/log 2>&1 < /dev/null &
+```
+
+**教训**:
+- 长任务用 `hermes terminal background=true` 模式(独立 session,SSH 关闭不影响)
+- SSH 内手起后台:**`setsid` + `disown` + 重定向 stdin** 三件套缺一不可
+
+---
+
+### 4. HuggingFace 镜像源(国内网络)
+
+**症状**:`huggingface.co` TCP SYN-SENT 状态卡住,模型下不动。
+
+**网络情报**(用户 2026-06-21 反馈):
+- 192.168.10.5(本机,江苏联通):CDN 阻 + 封 Telegram/Google 整段 TCP
+- 192.168.10.63(GPU 服务器,局域网):**huggingface.co 直连也被 SYN 卡住**
+
+**解决**:设 `HF_ENDPOINT=https://hf-mirror.com` 走 hf-mirror 镜像(28MB/s,3GB 模型 90s 下完)。
+
+**配置**:`~/.pip/pip.conf`:
+```ini
+[global]
+index-url = https://mirrors.aliyun.com/pypi/simple/
+trusted-host = mirrors.aliyun.com
+timeout = 300
+```
+
+**Torch wheel 单独**(清华/阿里都不镜像):
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cu121
+```
+
+---
+
+### 5. test_engine.py module 级 skip 误伤单元测试
+
+**症状**:没设 `HF_TOKEN` 时,整个 test_engine.py 文件被 skip,2 个 unit test 也不跑。
+
+**根因**:`if not os.environ.get("HF_TOKEN"): pytest.skip(..., allow_module_level=True)` —— module 级 skip。
+
+**修复**:改成 `pytest.mark.skipif` 装饰器,**只 skip 集成测试**:
+```python
+requires_token = pytest.mark.skipif(
+    not os.environ.get("HF_TOKEN"),
+    reason="需要 HF_TOKEN",
+)
+
+@requires_token
+def test_engine_end_to_end_single_speaker(audio_path): ...
+@requires_token
+def test_engine_end_to_end_auto_detect(audio_path): ...
+@requires_token
+def test_engine_serialize_to_json(audio_path, tmp_path): ...
+
+# 无装饰器的 unit test 不受影响
+def test_engine_assign_speaker_with_empty_turns(): ...
+def test_engine_assign_speaker_picks_nearest_midpoint(): ...
+```
+
+**教训**:skip 粒度要细,只 skip 真正依赖外部资源的部分,纯逻辑单元测试永远能跑。
+
+---
+
+### 6. NFS git 写入失败(老问题)
+
+**症状**:`git add` 时 `error: unable to write file .git/objects/...`。
+
+**解决**(成熟方案):
+1. `/tmp`(ext4)克隆:`git clone --no-local /mnt/nfs_fn/.../vpbuddy /tmp/vpbuddy_work`
+2. 在 `/tmp` 改文件 + commit
+3. push 到 GitHub(origin)
+4. NFS 工作树只放源码(只读性质)
+
+**远程冲突处理**:`git fetch && git rebase origin/main && git push`。rebase 冲突用 `git checkout --theirs/--ours` + `GIT_EDITOR=true git rebase --continue`。
+
+---
+
+## 测试结果(2026-06-21)
+
+### 本机(192.168.10.5,无 GPU)
+```
+tests/test_state.py        16 passed
+tests/test_transcript.py    9 passed
+============================ 25 passed, 7 skipped in 0.39s =============================
+```
+
+### GPU 服务器(192.168.10.63, RTX 3090 Ti)
+```
+tests/test_state.py        16 passed (含 pydantic ensure_ascii 修复)
+tests/test_transcript.py    9 passed
+tests/test_diarization.py   3 skipped (无 HF_TOKEN)
+tests/test_engine.py        2 unit passed + 3 integration skipped
+tests/test_whisper.py       5 待跑(模型下载中)
+============================ 27 passed, 6 skipped =============================
+```
+
+### 待补
+- [ ] HF_TOKEN 获取后跑 `test_diarization.py` + `test_engine.py` 集成测试
+- [ ] `test_whisper.py` 5 个 GPU 集成测试(模型下载完成后)
+- [ ] 真实多说话人样本(2-3 人会议,30-60s)
+- [ ] Step 2 端到端 demo + RTF 实测
