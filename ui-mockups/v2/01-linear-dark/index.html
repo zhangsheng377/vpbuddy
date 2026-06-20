@@ -1,0 +1,906 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VPBuddy v1.16 — Linear Dark 重做版</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-black: #08090a;
+  --bg-panel: #0f1011;
+  --bg-surface: #191a1b;
+  --text-primary: #f7f8f8;
+  --text-secondary: #d0d6e0;
+  --text-muted: #8a8f98;
+  --text-subtle: #62666d;
+  --accent: #7170ff;
+  --accent-hover: #828fff;
+  --accent-bg: #5e6ad2;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --border: rgba(255,255,255,0.08);
+  --border-subtle: rgba(255,255,255,0.05);
+  --bg-card: rgba(255,255,255,0.02);
+  --bg-card-hover: rgba(255,255,255,0.04);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  font-family: 'Inter', system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-feature-settings: "cv01", "ss03";
+  background: var(--bg-black);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.app { min-height: 100vh; display: flex; flex-direction: column; }
+
+/* TOP NAV */
+.topnav {
+  position: sticky; top: 0; z-index: 100;
+  display: flex; align-items: center;
+  height: 56px; padding: 0 24px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.brand {
+  display: flex; align-items: center; gap: 10px;
+  font-weight: 510; font-size: 15px;
+  letter-spacing: -0.165px; color: var(--text-primary);
+}
+.brand-icon {
+  width: 22px; height: 22px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+  border-radius: 5px;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 600; font-size: 12px; color: white;
+}
+.tabs {
+  display: flex; gap: 4px;
+  margin-left: 32px; padding: 4px;
+  background: var(--bg-card);
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+}
+.tab {
+  padding: 6px 14px;
+  font-size: 12px; font-weight: 510;
+  color: var(--text-secondary);
+  border-radius: 5px; cursor: pointer;
+  transition: all 0.15s;
+}
+.tab:hover { background: var(--bg-card-hover); color: var(--text-primary); }
+.tab.active { background: var(--accent-bg); color: white; }
+.spacer { flex: 1; }
+.session-info {
+  display: flex; align-items: center; gap: 12px;
+  font-size: 12px; color: var(--text-muted);
+}
+.live-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 8px;
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  color: var(--success);
+  border-radius: 9999px;
+  font-size: 10px; font-weight: 510;
+  letter-spacing: 0.3px; text-transform: uppercase;
+}
+.live-dot {
+  width: 6px; height: 6px;
+  background: var(--success);
+  border-radius: 50%;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* SCREENS */
+.screen { display: none; padding: 24px; min-height: calc(100vh - 56px); }
+.screen.active { display: block; }
+
+/* JOIN SCREEN */
+.join-container { max-width: 1080px; margin: 0 auto; padding: 48px 24px; }
+.join-header { margin-bottom: 48px; }
+.join-header h1 {
+  font-size: 40px; font-weight: 510;
+  letter-spacing: -1.408px; line-height: 1.1;
+  color: var(--text-primary); margin-bottom: 12px;
+}
+.join-header h1 .hl { color: var(--accent-hover); }
+.join-header p {
+  font-size: 17px; font-weight: 400;
+  color: var(--text-muted); letter-spacing: -0.165px;
+}
+.join-grid {
+  display: grid; grid-template-columns: 1.7fr 1fr; gap: 20px;
+}
+.join-main, .join-side {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 12px; padding: 28px;
+}
+.field { margin-bottom: 20px; }
+.label {
+  display: block;
+  font-size: 12px; font-weight: 510;
+  color: var(--text-secondary);
+  margin-bottom: 6px; letter-spacing: -0.05px;
+}
+.label .req { color: var(--danger); margin-left: 2px; }
+.input, .textarea {
+  width: 100%;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--text-primary);
+  transition: border 0.15s;
+}
+.input:focus, .textarea:focus {
+  outline: none; border-color: var(--accent);
+}
+.input::placeholder, .textarea::placeholder { color: var(--text-subtle); }
+.input-row { display: flex; gap: 8px; }
+.input-row .input { flex: 1; }
+.platform-picker {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 8px; margin-top: 8px;
+}
+.platform {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 8px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.15s;
+  position: relative;
+}
+.platform:hover { background: var(--bg-card-hover); }
+.platform.active {
+  border-color: var(--accent);
+  background: rgba(113, 112, 255, 0.08);
+}
+.platform-icon {
+  width: 24px; height: 24px;
+  border-radius: 6px;
+  margin: 0 auto 6px;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 600; font-size: 11px;
+  color: white;
+}
+.platform-icon.feishu { background: #3370ff; }
+.platform-icon.tencent { background: #2e6bf5; }
+.platform-icon.dingtalk { background: #1989fa; }
+.platform-icon.zoom { background: #2d8cff; }
+.platform-name {
+  font-size: 12px; font-weight: 510;
+  color: var(--text-primary);
+}
+.checkmark {
+  position: absolute; top: 6px; right: 6px;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--accent); color: white;
+  display: none; align-items: center; justify-content: center;
+  font-size: 9px;
+}
+.platform.active .checkmark { display: flex; }
+
+.actions { display: flex; gap: 8px; margin-top: 24px; }
+.btn-primary {
+  flex: 1;
+  background: var(--accent-bg);
+  color: white;
+  border: none; border-radius: 6px;
+  padding: 11px 18px;
+  font-family: inherit;
+  font-size: 14px; font-weight: 510;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-secondary {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 11px 18px;
+  font-family: inherit;
+  font-size: 14px; font-weight: 510;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-secondary:hover { background: var(--bg-card-hover); color: var(--text-primary); }
+
+.side-title {
+  font-size: 13px; font-weight: 590;
+  color: var(--text-primary);
+  margin-bottom: 16px; letter-spacing: -0.182px;
+}
+.side-list { list-style: none; }
+.side-item {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 13px; color: var(--text-secondary);
+}
+.side-item:last-child { border-bottom: none; }
+.side-icon {
+  flex-shrink: 0;
+  width: 20px; height: 20px;
+  border-radius: 5px;
+  background: rgba(113, 112, 255, 0.1);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; color: var(--accent);
+}
+.asr-source {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin-top: 14px;
+  font-size: 12px; color: var(--text-muted); line-height: 1.6;
+}
+.asr-source strong { color: var(--text-primary); font-weight: 590; }
+.asr-tag {
+  display: inline-block;
+  padding: 2px 7px;
+  background: rgba(113, 112, 255, 0.15);
+  color: var(--accent-hover);
+  border-radius: 4px;
+  font-size: 10px; font-weight: 510;
+  margin-right: 4px;
+}
+
+/* WORKSPACE */
+.workspace {
+  display: grid;
+  grid-template-columns: 280px 1fr 320px;
+  gap: 1px;
+  background: var(--border-subtle);
+  height: calc(100vh - 56px);
+}
+.panel {
+  background: var(--bg-black);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.panel-header {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.panel-title {
+  font-size: 11px; font-weight: 590;
+  letter-spacing: 0.5px; text-transform: uppercase;
+  color: var(--text-muted);
+}
+.panel-body {
+  flex: 1; overflow-y: auto;
+  padding: 14px 16px;
+}
+
+.section-block { margin-bottom: 18px; }
+.section-label {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 8px;
+}
+.section-label .lbl {
+  font-size: 11px; font-weight: 590;
+  color: var(--text-secondary);
+  letter-spacing: 0.3px; text-transform: uppercase;
+}
+.count-badge {
+  background: rgba(113, 112, 255, 0.1);
+  color: var(--accent-hover);
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 10px; font-weight: 510;
+}
+.bullet-list {
+  list-style: none;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+.bullet-list li {
+  padding: 5px 0;
+  padding-left: 14px;
+  position: relative; line-height: 1.5;
+}
+.bullet-list li::before {
+  content: "\B7";
+  position: absolute; left: 4px;
+  color: var(--text-subtle);
+}
+.confirmed li::before { content: "\2713"; color: var(--success); }
+
+/* CENTER */
+.artifact-tabs {
+  display: flex; gap: 2px;
+  padding: 8px 8px 0;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-subtle);
+  overflow-x: auto;
+}
+.artifact-tab {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 12px;
+  font-size: 12px; font-weight: 510;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 5px 5px 0 0;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.artifact-tab:hover { color: var(--text-primary); background: var(--bg-card); }
+.artifact-tab.active {
+  color: var(--text-primary);
+  background: var(--bg-black);
+  border: 1px solid var(--border-subtle);
+  border-bottom-color: var(--bg-black);
+  margin-bottom: -1px;
+}
+.artifact-status {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+}
+.artifact-status.done { background: var(--success); }
+.artifact-status.generating { background: var(--warning); animation: pulse 1.6s infinite; }
+.artifact-status.idle { background: var(--text-subtle); }
+
+.demo-canvas {
+  flex: 1; padding: 20px;
+  overflow-y: auto;
+  background: var(--bg-black);
+}
+.demo-frame {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.demo-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.demo-header .ttl {
+  font-size: 13px; font-weight: 590;
+  color: var(--text-primary);
+  letter-spacing: -0.182px;
+}
+.demo-meta {
+  font-size: 11px;
+  color: var(--text-subtle);
+}
+.demo-body { padding: 20px; }
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px; margin-bottom: 18px;
+}
+.kpi {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+.kpi-label {
+  font-size: 10px; color: var(--text-muted);
+  letter-spacing: 0.3px; text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.kpi-value {
+  font-size: 20px; font-weight: 510;
+  letter-spacing: -0.4px;
+  color: var(--text-primary);
+}
+.kpi-delta {
+  font-size: 11px; margin-top: 2px; font-weight: 510;
+}
+.kpi-delta.up { color: var(--success); }
+.kpi-delta.down { color: var(--danger); }
+.chart-row {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 12px;
+}
+.chart-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 14px;
+  height: 140px;
+  display: flex; flex-direction: column;
+}
+.chart-ttl {
+  font-size: 11px; font-weight: 590;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+.chart-viz {
+  flex: 1;
+  display: flex; align-items: end; gap: 4px;
+}
+.bar {
+  flex: 1;
+  background: linear-gradient(180deg, var(--accent), rgba(113, 112, 255, 0.5));
+  border-radius: 2px 2px 0 0;
+  min-width: 4px;
+}
+.donut {
+  position: relative;
+  width: 90px; height: 90px;
+  margin: 0 auto;
+}
+.donut-bg {
+  width: 100%; height: 100%;
+  border-radius: 50%;
+  background: conic-gradient(
+    var(--accent) 0% 39%,
+    var(--success) 39% 89%,
+    var(--text-subtle) 89% 100%
+  );
+}
+.donut-hole {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 50px; height: 50px;
+  background: var(--bg-card);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 9px; font-weight: 590;
+  color: var(--text-muted);
+}
+
+/* RIGHT PANEL */
+.window-block {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+.window-header {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.window-title {
+  font-size: 12px; font-weight: 590;
+  color: var(--text-primary);
+  display: flex; align-items: center; gap: 6px;
+}
+.window-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.window-body {
+  padding: 10px 12px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.q-item {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 12px; color: var(--text-secondary);
+  line-height: 1.5;
+}
+.q-item:last-child { border-bottom: none; }
+.q-urgency {
+  display: inline-block;
+  width: 4px; height: 14px;
+  border-radius: 2px;
+  margin-right: 8px;
+  vertical-align: middle;
+}
+.urgency-high { background: var(--danger); }
+.urgency-mid { background: var(--warning); }
+.urgency-low { background: var(--text-subtle); }
+
+.steer-input {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  min-height: 60px;
+}
+.steer-input::before {
+  content: "给 VPBuddy 发送 steer 指令...";
+  color: var(--text-subtle);
+}
+
+/* AGENT BAR */
+.agent-bar {
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border-subtle);
+  padding: 8px 16px;
+  display: flex; align-items: center; gap: 12px;
+  overflow-x: auto;
+}
+.agent-pill {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 9999px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.agent-pill .dot { width: 5px; height: 5px; border-radius: 50%; }
+.agent-pill .dot.live { background: var(--success); animation: pulse 1.6s infinite; }
+.agent-label { font-weight: 510; color: var(--text-primary); }
+
+</style>
+</head>
+<body>
+<div class="app">
+
+  <nav class="topnav">
+    <div class="brand">
+      <div class="brand-icon">V</div>
+      <span>VPBuddy</span>
+    </div>
+    <div class="tabs">
+      <div class="tab active" data-screen="join">加入会议</div>
+      <div class="tab" data-screen="main">主屏幕</div>
+      <div class="tab" data-screen="timeline">时间线</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="session-info">
+      <span class="live-badge"><span class="live-dot"></span>实时</span>
+      <span>Whisper + pyannote</span>
+      <span>&middot;</span>
+      <span>5 Agent 在线</span>
+    </div>
+  </nav>
+
+  <!-- SCREEN 1: JOIN -->
+  <section class="screen active" id="join">
+    <div class="join-container">
+      <div class="join-header">
+        <h1>让 <span class="hl">VPBuddy</span> 进入会议</h1>
+        <p>提前加入会议,自动识别内容并为你准备 AI 建议、疑问清单与解释材料。</p>
+      </div>
+
+      <div class="join-grid">
+        <div class="join-main">
+          <div class="field">
+            <label class="label">会议链接 / 会议号<span class="req">*</span></label>
+            <div class="input-row">
+              <input class="input" type="text" placeholder="支持飞书 / 腾讯会议 / 钉钉 / Zoom 的会议链接或会议号">
+              <button class="btn-secondary" style="flex: 0 0 auto;">📋 粘贴并识别</button>
+            </div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+            <div class="field">
+              <label class="label">会议密码(选填)</label>
+              <input class="input" type="password" placeholder="请输入会议密码">
+            </div>
+            <div class="field">
+              <label class="label">项目名称(选填)</label>
+              <input class="input" type="text" placeholder="XX公司-ESG碳管理系统需求沟通会">
+            </div>
+          </div>
+
+          <div class="field">
+            <label class="label">选择会议平台</label>
+            <div class="platform-picker">
+              <div class="platform">
+                <div class="platform-icon feishu">飞</div>
+                <div class="platform-name">飞书会议</div>
+              </div>
+              <div class="platform">
+                <div class="platform-icon tencent">腾</div>
+                <div class="platform-name">腾讯会议</div>
+              </div>
+              <div class="platform">
+                <div class="platform-icon dingtalk">钉</div>
+                <div class="platform-name">钉钉会议</div>
+              </div>
+              <div class="platform">
+                <div class="platform-icon zoom">Z</div>
+                <div class="platform-name">Zoom</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="actions">
+            <button class="btn-primary">加入会议 →</button>
+            <button class="btn-secondary">从最近会议中选择</button>
+          </div>
+
+          <div class="asr-source">
+            <strong>ASR 转写源(v1.13 起):</strong><br>
+            <span class="asr-tag">P0</span>第一方案:自接音频流 + Whisper + pyannote(VP 设备 loopback,说话人 80-90%)<br>
+            <span class="asr-tag">P1</span>第二方案:Zoom RTMS(英文,平台原生 95%+)<br>
+            <span class="asr-tag">P2</span>第三方案:小鱼易连企业版 API(中文,95%+,需签合作)<br>
+            <span class="asr-tag">P3</span>飞书妙记 REST 会后校准(跟 pyannote 融合)
+          </div>
+        </div>
+
+        <div class="join-side">
+          <div class="side-title">加入后 VPBuddy 自动开始</div>
+          <ul class="side-list">
+            <li class="side-item"><div class="side-icon">1</div><span>后台累积会议结构化状态(JSON,单一可信源)</span></li>
+            <li class="side-item"><div class="side-icon">2</div><span>持续生成 6 项交付物(交互Demo / 需求清单 / 技术架构 / 任务拆解 / API设计 / 风险分析)</span></li>
+            <li class="side-item"><div class="side-icon">3</div><span>AI 持续识别疑问 + 准备弹药</span></li>
+            <li class="side-item"><div class="side-icon">4</div><span>5 个 Agent 并行推理(产品 / 架构 / UI / 数据 / 风险)</span></li>
+            <li class="side-item"><div class="side-icon">5</div><span>VP 持续 steer 调方向(改 / 跳 / 加 / 换 / 参考)</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SCREEN 2: MAIN -->
+  <section class="screen" id="main">
+    <div class="workspace">
+
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">会议理解</span>
+          <span class="live-badge"><span class="live-dot"></span>实时累积</span>
+        </div>
+        <div class="panel-body">
+          <div class="section-block">
+            <div class="section-label"><span class="lbl">客户核心诉求</span><span class="count-badge">3</span></div>
+            <ul class="bullet-list">
+              <li>碳排放数据统一管理</li>
+              <li>组织 / 区域 / 工厂多层统计</li>
+              <li>范围一 / 二 / 三核算 + 可视化看板</li>
+            </ul>
+          </div>
+          <div class="section-block">
+            <div class="section-label"><span class="lbl">待确认事项</span><span class="count-badge">5</span></div>
+            <ul class="bullet-list">
+              <li>排放因子来源</li>
+              <li>数据采集频率</li>
+              <li>是否支持多国 / 欧 Scope 3</li>
+              <li>是否对接 ERP / 能源系统</li>
+              <li>审计与追溯要求</li>
+            </ul>
+          </div>
+          <div class="section-block">
+            <div class="section-label"><span class="lbl">已确认事项</span><span class="count-badge">5</span></div>
+            <ul class="bullet-list confirmed">
+              <li>支持集团 / 区域 / 工厂分层</li>
+              <li>核心模块:碳核算 / 数据管理 / 报表分析</li>
+              <li>仅 PC 端</li>
+              <li>项目周期:约 3 个月</li>
+              <li>首期:总部 + 2 个区域 + 5 个工厂</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="artifact-tabs">
+          <div class="artifact-tab active"><span class="artifact-status done"></span>1. 交互 Demo</div>
+          <div class="artifact-tab"><span class="artifact-status done"></span>2. 需求清单</div>
+          <div class="artifact-tab"><span class="artifact-status done"></span>3. 技术架构</div>
+          <div class="artifact-tab"><span class="artifact-status generating"></span>4. 任务拆解</div>
+          <div class="artifact-tab"><span class="artifact-status generating"></span>5. API 设计</div>
+          <div class="artifact-tab"><span class="artifact-status idle"></span>6. 风险分析</div>
+        </div>
+
+        <div class="demo-canvas">
+          <div class="demo-frame">
+            <div class="demo-header">
+              <span class="ttl">ESG 碳管理平台 — 数据概览</span>
+              <span class="demo-meta">演示更新中 · 预计 4 分钟后完成</span>
+            </div>
+            <div class="demo-body">
+              <div class="kpi-grid">
+                <div class="kpi">
+                  <div class="kpi-label">总排放量</div>
+                  <div class="kpi-value">15,862</div>
+                  <div class="kpi-delta down">↓ 8.7% 较上周</div>
+                </div>
+                <div class="kpi">
+                  <div class="kpi-label">单位产值碳排放</div>
+                  <div class="kpi-value">0.42</div>
+                  <div class="kpi-delta down">↓ 6.3%</div>
+                </div>
+                <div class="kpi">
+                  <div class="kpi-label">范围一</div>
+                  <div class="kpi-value">6,243</div>
+                  <div class="kpi-delta up">↑ 7.1%</div>
+                </div>
+                <div class="kpi">
+                  <div class="kpi-label">减排完成率</div>
+                  <div class="kpi-value">62%</div>
+                  <div class="kpi-delta up">↑ 5.6%</div>
+                </div>
+              </div>
+              <div class="chart-row">
+                <div class="chart-card">
+                  <div class="chart-ttl">碳排放趋势(本周 vs 上周)</div>
+                  <div class="chart-viz">
+                    <div class="bar" style="height: 60%;"></div>
+                    <div class="bar" style="height: 75%;"></div>
+                    <div class="bar" style="height: 55%;"></div>
+                    <div class="bar" style="height: 90%;"></div>
+                    <div class="bar" style="height: 65%;"></div>
+                    <div class="bar" style="height: 80%;"></div>
+                    <div class="bar" style="height: 50%;"></div>
+                  </div>
+                </div>
+                <div class="chart-card" style="display: flex; flex-direction: column; align-items: center; justify-content: center;">
+                  <div class="chart-ttl" style="align-self: flex-start;">排放结构</div>
+                  <div class="donut">
+                    <div class="donut-bg"></div>
+                    <div class="donut-hole">3类</div>
+                  </div>
+                  <div style="font-size: 9px; color: var(--text-muted); margin-top: 4px;">范围一 39% / 二 50% / 三 11%</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="agent-bar">
+          <span style="font-size: 11px; color: var(--text-muted);">5 Agent 后台:</span>
+          <div class="agent-pill"><span class="dot live"></span><span class="agent-label">产品</span></div>
+          <div class="agent-pill"><span class="dot live"></span><span class="agent-label">架构</span></div>
+          <div class="agent-pill"><span class="dot live"></span><span class="agent-label">UI</span></div>
+          <div class="agent-pill"><span class="dot live"></span><span class="agent-label">数据</span></div>
+          <div class="agent-pill"><span class="dot live"></span><span class="agent-label">风险</span></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">VP 视角(4 窗口)</span>
+        </div>
+        <div class="panel-body">
+
+          <div class="window-block">
+            <div class="window-header">
+              <span class="window-title"><span class="window-dot"></span>疑问窗口(AI 主动)</span>
+              <span class="count-badge">3</span>
+            </div>
+            <div class="window-body">
+              <div class="q-item"><span class="q-urgency urgency-high"></span>不同组织层级的核算口径是否一致?</div>
+              <div class="q-item"><span class="q-urgency urgency-mid"></span>是否需要支持碳通道(Scope 3)追踪?</div>
+              <div class="q-item"><span class="q-urgency urgency-low"></span>报表导出维度与权限粒度?</div>
+            </div>
+          </div>
+
+          <div class="window-block">
+            <div class="window-header">
+              <span class="window-title"><span class="window-dot" style="background: var(--success);"></span>预准备内容(AI 主动)</span>
+              <span class="count-badge">2</span>
+            </div>
+            <div class="window-body">
+              <div class="q-item">客户可能问:审计追踪与数据版本?</div>
+              <div class="q-item">客户可能问:ISO 14064-1 标准适用?</div>
+            </div>
+          </div>
+
+          <div class="window-block">
+            <div class="window-header">
+              <span class="window-title"><span class="window-dot" style="background: var(--warning);"></span>Steer 入口</span>
+            </div>
+            <div class="window-body">
+              <div class="steer-input"></div>
+              <div style="display: flex; gap: 6px; margin-top: 8px;">
+                <button class="btn-secondary" style="flex: 1; font-size: 11px; padding: 6px;">↑ 发送</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="window-block">
+            <div class="window-header">
+              <span class="window-title"><span class="window-dot" style="background: var(--text-subtle);"></span>外发动作</span>
+            </div>
+            <div class="window-body">
+              <div class="q-item" style="font-size: 11px;">→ 导出 Markdown</div>
+              <div class="q-item" style="font-size: 11px;">→ 推 GitHub(可选生产模式)</div>
+              <div class="q-item" style="font-size: 11px; color: var(--text-subtle);">→ 投屏:VP 在会议客户端自己点</div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SCREEN 3: TIMELINE -->
+  <section class="screen" id="timeline">
+    <div class="join-container">
+      <div class="join-header">
+        <h1>会议时间线 — <span class="hl">需求如何被构建为系统</span></h1>
+        <p>客户发言 → 累积到结构化状态 → 触发 Agent 推理 → 交付物变化</p>
+      </div>
+      <div style="background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; padding: 28px;">
+        <table style="width: 100%; border-collapse: collapse;">
+          <thead>
+            <tr style="border-bottom: 1px solid var(--border-subtle);">
+              <th style="padding: 10px 0; text-align: left; font-size: 11px; font-weight: 590; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px;">时间</th>
+              <th style="padding: 10px 0; text-align: left; font-size: 11px; font-weight: 590; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px;">类型</th>
+              <th style="padding: 10px 0; text-align: left; font-size: 11px; font-weight: 590; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px;">客户发言</th>
+              <th style="padding: 10px 0; text-align: left; font-size: 11px; font-weight: 590; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px;">VPBuddy 累积</th>
+              <th style="padding: 10px 0; text-align: left; font-size: 11px; font-weight: 590; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px;">触发 Agent</th>
+              <th style="padding: 10px 0; text-align: left; font-size: 11px; font-weight: 590; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px;">交付物变化</th>
+            </tr>
+          </thead>
+          <tbody style="font-size: 13px;">
+            <tr style="border-bottom: 1px solid var(--border-subtle);">
+              <td style="padding: 10px 0; color: var(--text-muted);">10:02</td>
+              <td><span class="timeline-tag tag-mark">标记</span></td>
+              <td style="color: var(--text-secondary);">"我们需要把碳排放数据统一管理"</td>
+              <td style="color: var(--text-secondary);">需求 REQ-001:统一数据管理</td>
+              <td style="color: var(--text-secondary);">产品 + 数据</td>
+              <td style="color: var(--text-secondary);">需求清单 + Demo</td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--border-subtle);">
+              <td style="padding: 10px 0; color: var(--text-muted);">10:08</td>
+              <td><span class="timeline-tag tag-discuss">讨论</span></td>
+              <td style="color: var(--text-secondary);">"按集团/区域/工厂分层"</td>
+              <td style="color: var(--text-secondary);">需求 REQ-002:多层组织</td>
+              <td style="color: var(--text-secondary);">架构</td>
+              <td style="color: var(--text-secondary);">技术架构</td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--border-subtle);">
+              <td style="padding: 10px 0; color: var(--text-muted);">10:15</td>
+              <td><span class="timeline-tag tag-discuss">讨论</span></td>
+              <td style="color: var(--text-secondary);">"需要范围一/二/三核算边界"</td>
+              <td style="color: var(--text-secondary);">疑问:数据来源?</td>
+              <td style="color: var(--text-secondary);">数据 + 风险</td>
+              <td style="color: var(--text-secondary);">疑问窗口 ↑</td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--border-subtle);">
+              <td style="padding: 10px 0; color: var(--text-muted);">10:23</td>
+              <td><span class="timeline-tag tag-confirm">确认</span></td>
+              <td style="color: var(--text-secondary);">"需要看板与报表"</td>
+              <td style="color: var(--text-secondary);">已确认 REQ-005:报表</td>
+              <td style="color: var(--text-secondary);">产品 + UI</td>
+              <td style="color: var(--text-secondary);">Demo + 需求清单</td>
+            </tr>
+            <tr>
+              <td style="padding: 10px 0; color: var(--text-muted);">10:28</td>
+              <td><span class="timeline-tag tag-concern">关注</span></td>
+              <td style="color: var(--text-secondary);">"审计追溯很关键"</td>
+              <td style="color: var(--text-secondary);">需求 REQ-008:审计追踪</td>
+              <td style="color: var(--text-secondary);">风险</td>
+              <td style="color: var(--text-secondary);">风险分析 ↑ 预准备 ↑</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+  document.querySelectorAll(".tab").forEach(tab => {
+    tab.addEventListener("click", () => {
+      const target = tab.dataset.screen;
+      document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+      tab.classList.add("active");
+      document.querySelectorAll(".screen").forEach(s => s.classList.remove("active"));
+      document.getElementById(target).classList.add("active");
+    });
+  });
+  document.querySelectorAll(".platform").forEach(p => {
+    p.addEventListener("click", () => {
+      document.querySelectorAll(".platform").forEach(x => x.classList.remove("active"));
+      p.classList.add("active");
+    });
+  });
+</script>
+</body>
+</html>
