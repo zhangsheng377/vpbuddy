@@ -1,4 +1,4 @@
-|> **说明**:本文档是 `VPBuddy_产品说明书_v1.12_2026-06-20.docx` 的 Markdown 渲染副本。
+|> **说明**:本文档是 `VPBuddy_产品说明书_v1.13_2026-06-21.docx` 的 Markdown 渲染副本。
 > 原始 .docx 文件同目录保留。
 >
 > **版本历史**:
@@ -15,6 +15,7 @@
 > - **v1.10**: 疑问窗口 + 预准备内容
 > - **v1.11**: 重大简化 — 默认用平台原生 ASR/转写
 > - **v1.12** (2026-06-20): **双轨 ASR** — 第一方案默认 Whisper 自接 + pyannote(VP 设备 loopback + 服务端 faster-whisper);第二方案 Zoom RTMS(英文);第三方案 小鱼易连企业版 API(需 VPBuddy 签企业合作);飞书妙记降为"会后校准源";VPBuddy 内部跨源融合补全 speaker_name;**新增 VP 设备硬约束**(必须用桌面客户端)
+> - **v1.13** (2026-06-21): **Step 2 落地 + Step 3 子 session 循环架构**;(1) Step 2 38/38 tests 全过(详见 [ADR-0004](../decisions/0004-MVP-Step2-ASR设计.md));(2) **国内无 HF 账号方案**——用 ModelScope 镜像替代 HF_TOKEN(详见 [ADR-0005](../decisions/0005-ModelScope-替代HF_TOKEN.md));(3) **6 个常驻子 session 各维护一种交付物**(`meeting:{mid}:{doc_kind}`,doc_kind ∈ req/arch/tasks/api/risk/demo);(4) **完全复用 Hermes 已有能力**——工具调用/历史上下文/cron 调度用 `delegate_task` + `session_search`,不自己造;(5) **共享累积 = 1 个 MeetingState JSON**(Step 1 已实现,无新数据库);(6) **子 session 直接写文件**(不输出 JSON 让别的进程写);(7) **知识库统一 sqlite-vec**(不分"双模式");详见 [ADR-0006](../decisions/0006-MVP-Step3-子session架构.md) + [总体架构 v1.17](../design/总体架构.md)
 
 ---
 
@@ -139,6 +140,33 @@ Sub-agent系统：
 
 核心机制:交付物后台持续生成+ 持续累积演化(无延迟约束)+ **VP 在过程中持续 steer**(改/跳/加/换/参考,任何时候给出方向性输入,AI 实时整合,无『已完成』概念);投屏/外发 = VP 任何时候想看/想发当前状态
 
+### v1.13: 6 个子 session 常驻循环实现(Step 3)
+
+**核心架构**:每种交付物由 1 个**独立常驻子 session** 持续维护,共 6 个:
+
+| session_id | doc_kind | 输出 | 维护的文档 |
+|---|---|---|---|
+| `meeting:{mid}:req` | req | Markdown 需求清单 | `docs/{mid}/req.md` |
+| `meeting:{mid}:arch` | arch | Markdown 架构图 | `docs/{mid}/arch.md` |
+| `meeting:{mid}:tasks` | tasks | Markdown 任务卡片 | `docs/{mid}/tasks.md` |
+| `meeting:{mid}:api` | api | OpenAPI / GraphQL schema | `docs/{mid}/api.md` |
+| `meeting:{mid}:risk` | risk | Markdown 风险评估 | `docs/{mid}/risk.md` |
+| `meeting:{mid}:demo` | demo | **可运行的 HTML/代码/mermaid** | `docs/{mid}/demo/` |
+
+**子 session 怎么工作**:
+1. 同一个 `session_id` 跨轮触发 → **Hermes 自动保留历史上下文**
+2. 每次触发:读 MeetingState JSON + 自己之前的 doc → 判断是否更新 → **直接 write_file/patch 改文档**(不输出 JSON 让别的进程写)
+3. 后台循环:`sub_session_controller.py` 脚本 + `hermes cron` 每 30s 触发一轮
+
+**关键不做的**(YAGNI):
+- ❌ 自己设计 VPBuddy 专用 tool(直接用 Hermes 通用 tool)
+- ❌ 自己实现 session 持久化(用 Hermes `session_search` + 同 `session_id`)
+- ❌ 自己设计知识库"双模式"(统一 sqlite-vec + 跨会议 RAG)
+- ❌ 子 session 输出 JSON 让别人写(LLM 自己写文件)
+- ❌ 注入量精确控制(跑起来再说)
+
+详见 [ADR-0006](../decisions/0006-MVP-Step3-子session架构.md) + [总体架构 v1.17 §三](../design/总体架构.md)
+
 七、Steer 控制层(Steer Center,v1.5 改名)
 
 VP与VPBuddy唯一交互入口(v1.5 改为『steer 入口』)
@@ -175,41 +203,32 @@ VP 在会议中**持续 steer(方向盘式引导)**:随时给出方向性输入,
 
 ## 九、统一知识库系统（核心升级）
 
-知识库包含三类知识,采用**展示+检索**双模式;后台**实时提取并展示**,VP 可改但**不阻塞 AI 继续做 demo**;约束**不注入 system prompt**。
+知识库包含三类知识,采用**统一搜索模式**(v1.13 简化:删 v1.3 的"双模式"概念);后台**实时提取并展示**,VP 可改但**不阻塞 AI 继续做 demo**;**v1.13 起 UI 展示什么,AI prompt 就有什么**(张胜东纠正:不区分"AI 主动拉")。
 
 1. 个人知识
 
 - VP经验
-
 - 决策逻辑
-
 - 个人方案习惯
 
 2. 企业知识
 
 - PRD / MRD
-
 - 技术规范
-
 - UI规范
-
 - 历史项目
-
 - SOP与交付标准
 
 3. 行业知识
 
 - 行业标准方案
-
 - 通用架构
-
 - 竞品方案
-
 - 最佳实践
 
 作用：
 
-知识分两类,各有用法:① **展示类**(`mode: constraint`)= 后台实时识别,展示在 Demo/页面/数据模型上,VP 可看/改/问,**不强制确认,不阻塞 AI 继续做**;② **检索类**(`mode: retrieval`)= 按需 RAG 检索历史案例,VP 采纳后替换当前展示。**约束不注入 system prompt**,只是给 VP 看的标注。详细机制见 v1.5 架构 §4.5
+知识**统一存**到 sqlite-vec(单一表 + embedding),按 query 做 RAG 检索,跨会议/跨类型。**v1.13 起 UI 展示什么,AI prompt 就有什么**(不区分"展示 vs 检索");子 session 读 meeting_state.json 时,所有累积项(REQ/RISK/QUE)都进 context,直接被 LLM 看到。详细机制见 [总体架构 v1.17 §九](../design/总体架构.md) + [ADR-0006](../decisions/0006-MVP-Step3-子session架构.md)
 
 影响：
 
