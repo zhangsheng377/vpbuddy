@@ -47,3 +47,6 @@
 |---|---|---|---|
 | [0001](./0001-MVP-选型.md) | MVP 选型(第一平台/范围/租户/开源/数据归属) | Accepted | 2026-06-20 |
 | [0002](./0002-UI-vs-架构冲突-review.md) | UI vs 架构冲突 Review(9 个冲突 + 6 决策) | Accepted | 2026-06-20 |
+| [0003](./0003-MVP-Step1-YAGNI-review.md) | MVP Step 1 YAGNI Review | Accepted | 2026-06-20 |
+| [0004](./0004-MVP-Step2-ASR设计.md) | MVP Step 2 — Whisper + pyannote 链路 | Accepted | 2026-06-20 |
+| [0005](./0005-ModelScope-替代HF_TOKEN.md) | ModelScope 镜像替代 HF_TOKEN(国内无账号) | Accepted | 2026-06-21 |
