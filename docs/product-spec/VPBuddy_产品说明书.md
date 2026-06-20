@@ -1,4 +1,4 @@
-> **说明**:本文档是 `VPBuddy_产品说明书_v1.7_2026-06-20.docx` 的 Markdown 渲染副本。
+> **说明**:本文档是 `VPBuddy_产品说明书_v1.8_2026-06-20.docx` 的 Markdown 渲染副本。
 > 原始 .docx 文件同目录保留,便于在 Word/WPS 中编辑。
 > 两者内容应保持一致;如有不一致以 .docx 为准。
 >
@@ -6,14 +6,15 @@
 > - **v1** (2026-06-20): 初版
 > - **v1.1**: 去掉"实时"假设
 > - **v1.2**: 后台并行生成交付物
-> - **v1.3**: §九 知识库"约束 vs 检索"改为双模式
-> - **v1.4**: §九 强化"展示模式不注入 system prompt,不阻塞 AI"
-> - **v1.5**: §七 改名 Steer 控制层;§六/§十 强化"VP 持续 steer(对持续过程)"
-> - **v1.6**: Hermes-native(VPBuddy 运行在 Hermes Agent 之上;会议 = hermes session)+ 可选生产模式
-> - **v1.7** (2026-06-20): 与总体架构 v1.8 对齐 — ① **投屏 = 会议平台原生功能**(VPBuddy 不实现,只触发 SDK);② **steer + session 生命周期感知**(idle/active/completed/reactivated,不让 VP 看到裸的 hermes 错误);§七 强化这两点
+> - **v1.3**: §九 知识库双模式
+> - **v1.4**: 展示模式不注入 system prompt
+> - **v1.5**: Steer 控制层
+> - **v1.6**: Hermes-native + 可选生产模式
+> - **v1.7**: 投屏 = 会议原生 + (尝试加 session 生命周期感知)
+> - **v1.8** (2026-06-20): **回退 session 生命周期感知**(YAGNI,过度工程);**只保留**"投屏 = 会议原生"这一处简化;真遇到 bug 再加
 >
-> 源文件:`VPBuddy_产品说明书_v1.7_2026-06-20.docx`
-> 历史备份:[v1](VPBuddy_产品说明书_v1_2026-06-20.docx) · [v1.1](VPBuddy_产品说明书_v1.1_2026-06-20.docx) · [v1.2](VPBuddy_产品说明书_v1.2_2026-06-20.docx) · [v1.3](VPBuddy_产品说明书_v1.3_2026-06-20.docx) · [v1.4](VPBuddy_产品说明书_v1.4_2026-06-20.docx) · [v1.5](VPBuddy_产品说明书_v1.5_2026-06-20.docx) · [v1.6](VPBuddy_产品说明书_v1.6_2026-06-20.docx) · [source/0620_*.zip](source/)
+> 源文件:`VPBuddy_产品说明书_v1.8_2026-06-20.docx`
+> 历史备份:[v1](VPBuddy_产品说明书_v1_2026-06-20.docx) · [v1.1](VPBuddy_产品说明书_v1.1_2026-06-20.docx) · [v1.2](VPBuddy_产品说明书_v1.2_2026-06-20.docx) · [v1.3](VPBuddy_产品说明书_v1.3_2026-06-20.docx) · [v1.4](VPBuddy_产品说明书_v1.4_2026-06-20.docx) · [v1.5](VPBuddy_产品说明书_v1.5_2026-06-20.docx) · [v1.6](VPBuddy_产品说明书_v1.6_2026-06-20.docx) · [v1.7](VPBuddy_产品说明书_v1.7_2026-06-20.docx) · [source/0620_*.zip](source/)
 
 ---
 
@@ -268,5 +269,3 @@ VPBuddy不是传统AI助手。
 - 企业知识驱动的交付生成系统
 
 VP 任何时候投屏/外发(无『完成』前提)
-
-Session 生命周期感知(v1.7 新增):steer 之前必须检查 hermes session 状态:① idle 自动启动+排队 ② active 直接处理 ③ completed 提示 VP"会议已结束,新开会/续会?" ④ reactivated 续会正常处理。**关键**:不让 VP 看到 hermes 内部错误,VPBuddy 全部转成"人话"
