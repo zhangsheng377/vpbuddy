@@ -337,6 +337,63 @@ samples/
 
 - 2026-06-20: 起草,10 个 YAGNI 决策 + 模块边界 + 测试策略 + 验收指标
 - 2026-06-21: 实施 + 踩坑记录(GPU 服务器 + pyannote 兼容性 + pydantic bug + HuggingFace 镜像)
+- 2026-06-21 晚: **重大突破 — ModelScope 镜像替代 HF_TOKEN**,所有 pyannote 测试无需 token 全过
+
+---
+
+## 🔥 关键发现:ModelScope 镜像 + 本地 .bin(2026-06-21 晚)
+
+**问题**:pyannote/speaker-diarization-3.1 是 HF **gated** 模型,需要登录 huggingface.co 同意用户协议 + 拿到 HF_TOKEN。**国内打不开 huggingface.co**,整个流程走不通。
+
+**解决**:用 ModelScope(阿里达摩院,国内 CDN)镜像下载 + 本地 .bin 加载:
+
+```bash
+# 一次性下载(用 modelscope SDK,完全国内网络)
+pip install modelscope
+mkdir -p /tmp/pyannote_models
+modelscope download --model pyannote/speaker-diarization-3.1 --local_dir /tmp/pyannote_models/speaker-diarization-3.1
+modelscope download --model pyannote/segmentation-3.0 --local_dir /tmp/pyannote_models/segmentation-3.0
+modelscope download --model pyannote/wespeaker-voxceleb-resnet34-LM --local_dir /tmp/pyannote_models/wespeaker-voxceleb-resnet34-LM
+
+# 之后用 PyannoteDiarizer(自动从本地加载,无需 HF_TOKEN)
+export PYANNOTE_LOCAL_DIR=/tmp/pyannote_models
+python -c "from vpbuddy.diarization import PyannoteDiarizer; print(PyannoteDiarizer().get_speaker_turns('audio.wav'))"
+```
+
+**技术细节**(踩坑后总结):
+| 坑 | 原因 | 解法 |
+|---|---|---|
+| `Pipeline.from_pretrained("pyannote/...")` 报 403 gated | HF API 鉴权 | 不走 from_pretrained,手动 `OmegaConf` + `instantiate` |
+| `hf_hub_download` 报 `use_auth_token` unknown kwarg | pyannote 旧 API 用了 deprecated 参数 | monkey-patch: `use_auth_token` → `token` |
+| `Pipeline.instantiate(params)` 报 "only sub-pipeline params" | 顶层 params 里有 `clustering` + `segmentation` 子 dict | 嵌套调用,只传子 dict |
+| `clustering="AgglomerativeClustering"` 字符串 | 实际是 `Clustering` 枚举查表 | 直接传字符串 "AgglomerativeClustering" |
+| 周华健 44.1kHz/2ch/MP3 报 tensor size mismatch | pyannote 内部 batch 重采样出问题 | 先用 `torchaudio` 转 16kHz mono PCM |
+
+**`PyannoteDiarizer` 改造**(src/vpbuddy/diarization.py):
+- 删除 `hf_token` 参数(改用 `local_models_dir` 或 `$PYANNOTE_LOCAL_DIR`)
+- 启动时自动 `ensure_pyannote_models()` 调 ModelScope 补齐缺失模型
+- 手动 `OmegaConf.create(config.yaml)` + `hydra.utils.instantiate()` 实例化
+- `pipeline.instantiate({"clustering": {...}, "segmentation": {...}})` 设置默认参数
+- 内部 `pipeline.to("cuda")`
+
+**`TranscriptionEngine.default()` 同步改造**(src/vpbuddy/engine.py):
+- `hf_token` 参数改 `pyannote_local_dir`(`hf_token` 留作兼容旧 API 的 deprecation alias)
+- `RUN_GPU_INTEGRATION=1` 环境变量启用完整 e2e 测试(平时默认 skip,避免本机无 GPU 时报大量 skip)
+
+**测试结果**(2026-06-21 22:xx,GPU 服务器完整套件):
+```
+============================ 38 passed in 45.58s ============================
+tests/test_state.py        16 PASSED  (Step 1)
+tests/test_transcript.py    9 PASSED  (Step 2 单元)
+tests/test_whisper.py       5 PASSED  (Step 2 GPU 集成)
+tests/test_diarization.py   3 PASSED  (Step 2 GPU 集成,无 HF_TOKEN!)
+tests/test_engine.py        5 PASSED  (Step 2 端到端,自动检测 2 speakers)
+```
+
+**端到端 demo**(周华健《明天我要嫁给你了》8MB → 16kHz mono):
+- 转写:38 segments, "明天我要嫁给你了" 准确识别
+- 说话人:40 turns, 主 SPEAKER_00(周华健)+ 副 SPEAKER_01(疑似和声)
+- 端到端:34 segs,2 speakers detected,RTF=0.026(38x 实时)
 
 ---
 

@@ -1,7 +1,7 @@
 """Step 2 — TranscriptionEngine 测试
 
 - 单元测试(assign_speaker):不需要 GPU/HF_TOKEN
-- 集成测试(e2e, serialize):需要 faster-whisper + pyannote + HF_TOKEN
+- 集成测试(e2e, serialize):需要 faster-whisper + pyannote 模型(用 ModelScope 镜像,不需要 HF_TOKEN)
 """
 import sys
 import os
@@ -13,11 +13,13 @@ import json
 
 pytest.importorskip("faster_whisper", reason="faster-whisper 未安装")
 pytest.importorskip("pyannote.audio", reason="pyannote.audio 未安装")
+pytest.importorskip("modelscope", reason="modelscope 未安装(用于拉 pyannote 模型)")
 
-# 不在 module 级 skip —— 让 unit test 也能跑(GPU 集成测试在 fixture 里 skip)
-requires_token = pytest.mark.skipif(
-    not os.environ.get("HF_TOKEN"),
-    reason="需要 HF_TOKEN 才能跑 pyannote + 部分 whisper 模型",
+# 不再需要 HF_TOKEN —— 改用 ModelScope 镜像
+# 仍然需要 GPU(跑 whisper + pyannote)
+requires_gpu = pytest.mark.skipif(
+    not os.environ.get("RUN_GPU_INTEGRATION"),
+    reason="集成测试需要 GPU,设 RUN_GPU_INTEGRATION=1 启用",
 )
 
 
@@ -26,9 +28,10 @@ from vpbuddy.transcript import TranscriptResult, DiarizedSegment
 
 
 @pytest.fixture(scope="module")
-def audio_path():
-    from tests.test_whisper import audio_path as _ap
-    return _ap()
+def audio_path_16k() -> Path:
+    """获取 16kHz mono PCM 音频(避免 pyannote 内部重采样错误)"""
+    from tests.test_diarization import get_16k_audio
+    return get_16k_audio()
 
 
 def test_engine_assign_speaker_with_empty_turns():
@@ -54,15 +57,15 @@ def test_engine_assign_speaker_picks_nearest_midpoint():
     assert label == "SPEAKER_01"
 
 
-@requires_token
-def test_engine_end_to_end_single_speaker(audio_path):
+@requires_gpu
+def test_engine_end_to_end_single_speaker(audio_path_16k):
     """端到端:单说话人音频 → 所有 segments 同一 speaker"""
     eng = TranscriptionEngine.default(
         model_size="large-v3", device="cuda",
         compute_type="float16",
-        hf_token=os.environ.get("HF_TOKEN"),
+        pyannote_local_dir=os.environ.get("PYANNOTE_LOCAL_DIR"),
     )
-    result = eng.process(audio_path, language="zh", num_speakers=1)
+    result = eng.process(audio_path_16k, language="zh", num_speakers=1)
     assert isinstance(result, TranscriptResult)
     assert len(result.segments) >= 1
     # 单说话人:所有 segments 同一 speaker_id
@@ -75,29 +78,29 @@ def test_engine_end_to_end_single_speaker(audio_path):
     print(f"E2E OK: {len(result.segments)} segs, 1 speaker, {result.duration_sec:.1f}s")
 
 
-@requires_token
-def test_engine_end_to_end_auto_detect(audio_path):
+@requires_gpu
+def test_engine_end_to_end_auto_detect(audio_path_16k):
     """端到端:自动检测说话人数(num_speakers=None)"""
     eng = TranscriptionEngine.default(
         model_size="large-v3", device="cuda",
         compute_type="float16",
-        hf_token=os.environ.get("HF_TOKEN"),
+        pyannote_local_dir=os.environ.get("PYANNOTE_LOCAL_DIR"),
     )
-    result = eng.process(audio_path, language="zh")  # 不指定 num
+    result = eng.process(audio_path_16k, language="zh")  # 不指定 num
     # 自动检测可能 ≥ 1
     assert result.num_speakers >= 1
     print(f"Auto-detect: {result.num_speakers} speakers")
 
 
-@requires_token
-def test_engine_serialize_to_json(audio_path, tmp_path):
+@requires_gpu
+def test_engine_serialize_to_json(audio_path_16k, tmp_path):
     """完整 result 序列化到 JSON 文件"""
     eng = TranscriptionEngine.default(
         model_size="large-v3", device="cuda",
         compute_type="float16",
-        hf_token=os.environ.get("HF_TOKEN"),
+        pyannote_local_dir=os.environ.get("PYANNOTE_LOCAL_DIR"),
     )
-    result = eng.process(audio_path, language="zh", num_speakers=1)
+    result = eng.process(audio_path_16k, language="zh", num_speakers=1)
     out = tmp_path / "transcript.json"
     with open(out, "w", encoding="utf-8") as f:
         json.dump(result.to_dict(), f, ensure_ascii=False, indent=2)

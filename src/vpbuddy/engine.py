@@ -37,16 +37,28 @@ class TranscriptionEngine:
         model_size: str = "large-v3",
         device: str = "cuda",
         compute_type: str = "float16",
-        hf_token: Optional[str] = None,
+        hf_token: Optional[str] = None,  # 兼容旧 API(已弃用,见 ADR-0004)
+        pyannote_local_dir: Optional[str] = None,
     ) -> "TranscriptionEngine":
-        """便利工厂:用推荐配置初始化"""
+        """便利工厂:用推荐配置初始化
+
+        Args:
+            model_size: Whisper 模型大小(large-v3 / medium / ...)
+            device: cuda / cpu
+            compute_type: float16 / int8 / float32
+            hf_token: 已弃用(2026-06-21)。改用 ModelScope 镜像 + 本地 .bin。
+            pyannote_local_dir: pyannote 模型目录(默认 $PYANNOTE_LOCAL_DIR 或 /tmp/pyannote_models)
+        """
         return cls(
             whisper=WhisperProvider(
                 model_size=model_size,
                 device=device,
                 compute_type=compute_type,
             ),
-            diarizer=PyannoteDiarizer(hf_token=hf_token, device=device),
+            diarizer=PyannoteDiarizer(
+                local_models_dir=pyannote_local_dir,
+                device=device,
+            ),
         )
 
     def _assign_speaker(self, seg: TranscriptSegment, turns: list) -> str:
