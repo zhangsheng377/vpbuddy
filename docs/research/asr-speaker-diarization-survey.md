@@ -153,12 +153,236 @@ interface TranscriptSegment {
 
 ---
 
-## 六、待调研(下一步)
+---
 
-- ⏳ **实时推送机制**:Webhook / WebSocket / 长轮询?(各平台实时获取转写的具体方式 + 延迟)
-- ⏳ **飞书 Webhook 事件订阅**详细 schema
-- ⏳ **腾讯会议 OpenAPI** 实时通道
-- ⏳ **Zoom WebSocket** 流式输出
-- ⏳ **钉钉 Stream API** 推送模式
+# v2(2026-06-20 追加):"实时拿到 ASR 文字"的真实方案
 
-(下次调研更新)
+**触发问题**: "它显示的实时字幕,你能拿到吗?" + "我们需要能实时拿到 asr 文字的方案"
+
+**关键结论**:
+- ❌ **飞书 / 腾讯会议 / 钉钉:实时字幕是客户端 UI,没有开放流式 API 给开发者**
+- ✅ **Zoom RTMS SDK:唯一主流平台原生流式 ASR(英文为主)**
+- ✅ **自接音频流 + 第三方 ASR:真正通用的中文实时方案**(讯飞 RTASR / WhisperLiveKit)
+- ✅ **小鱼易连 WebSocket 协议:最完整的协议参考模板**
+
+---
+
+## 一、平台原生"实时字幕流"曝光度
+
+| 平台 | 实时字幕 UI | **API 是否暴露流式字幕** | 程序能拿流? |
+|---|---|---|---|
+| **飞书** | ✅ 会中滚动(用户可见) | ❌ **没暴露** | 仅会后妙记完整转写(Webhook → REST) |
+| **腾讯会议** | ✅ 会中滚动 | ❌ **没暴露** | 仅会后云录制转写 |
+| **Zoom** | ✅ | ✅ **RTMS SDK** | ✅ per-participant audio + transcript over WebSocket |
+| **钉钉** | ✅ | ❌ 未明确 | — |
+| **小鱼易连** | ✅ | ✅ **WebSocket push_result** | ✅ 流式 |
+
+**关键解释(飞书为例)**:
+- 飞书开放平台的 WebSocket 长连接(`lark-oapi` SDK)用于接收 **IM 消息 / 卡片交互 / 会议事件**(如 `meeting.recording_ready`),**不是接收字幕流**
+- 飞书妙记的"实时"= 会中 UI 滚动 + 会后完整转写(两件事,**API 只能拿会后那个**)
+- `meeting.recording_ready` Webhook → 调用 GET API 拿完整转写(带说话人)= **会后**,不是会中段段推
+
+---
+
+## 二、4 个"实时拿 ASR 文字"方案
+
+### 方案 A: Zoom RTMS SDK ⭐⭐⭐⭐⭐(英文场景首选)
+
+**SDK**: `github.com/zoom/rtms` — C++ SDK + Node.js/Python/Go bindings
+
+**工作流**:
+1. 配置 Zoom App Marketplace 订阅 RTMS 生命周期事件(Webhook)
+2. 服务端启动 RTMS SDK,加入会议流(per-participant)
+3. 通过 WebSocket 实时接收 audio + transcript 段
+4. SDK 支持:Audio(原始 PCM) + Video + Transcript(平台 ASR)
+
+**代码示例**(Node.js):
+```js
+import rtms from "@zoom/rtms";
+const client = new rtms.Client();
+client.onAudioData((data, timestamp, metadata) => {
+  // data: 原始音频字节(PCM)
+  // metadata.userName: 说话人
+});
+client.join({
+  meeting_uuid: "xxx",
+  rtms_stream_id: "xxx",
+  server_urls: "wss://rtms.zoom.us",
+});
+```
+
+**限制**:
+- ⚠️ **英文为主**(46 种语言是 AI Companion 翻译能力,不是 ASR)
+- ⚠️ 需付费账号
+- ✅ Node.js 22+ / Python 3.10+ / darwin-arm64 / linux-x64
+
+### 方案 B: 自接音频流 + 讯飞 RTASR ⭐⭐⭐⭐(中文场景首选)
+
+**协议**: `wss://rtasr.xfyun.cn/v1/ws?appid=xx&ts=yy&signa=zz`
+- 鉴权:HMAC-SHA1(已弃) 或 HMAC-SHA256(新)
+- 握手 → 流式推音频 → 流式收结果
+
+**推送数据**(麦克风采集的 PCM 音频):
+```
+二进制帧:每帧 ~40ms PCM(16kHz,16bit,单声道)
+```
+
+**接收结果**(JSON):
+```json
+{
+  "action": "result",
+  "code": "0",
+  "data": "{...中间结果...}",
+  "desc": "success",
+  "sid": "rta0000000e@ch..."
+}
+```
+
+**价格**:
+- 免费包:24 小时(15 天有效期,1 路并发)
+- 新用户礼包:最高 50 小时(免费,1 年)
+- 套餐:¥9.9/小时起;¥4.9/小时(3000 小时套餐)
+- 并发套餐:1 万-2 万元/路/年
+
+**关键问题**: **怎么拿到会议音频?** → VPBuddy 跑在 VP 设备上,接 VP **系统的扬声器回放**(loopback) 或 VP 的麦克风
+- **macOS/iOS**: `AVAudioEngine` + `AVAudioSession` 输出 tap
+- **Windows**: WASAPI loopback
+- **Linux**: PulseAudio monitor source
+
+**说话人识别**: ⚠️ 讯飞 RTASR 不带说话人分离 —— 需要自接 `pyannote-audio`(开源声纹聚类,准确率 80-90%)
+
+### 方案 C: 自接音频流 + WhisperLiveKit ⭐⭐⭐⭐(完全开源)
+
+**优势**:
+- 完全开源(MIT 协议)
+- 中文 + 英文 + 多语种
+- 本地运行,无平台锁定
+- 价格: **¥0**(只需 GPU 服务器,4090 一块够)
+
+**架构**:
+- VP 设备 loopback → WhisperLiveKit 服务(自托管 GPU)→ WebSocket 流式转写
+- 说话人识别:pyannote-audio(同方案 B)
+
+**限制**:
+- ⚠️ 需要 GPU 服务器(MiniMax/4090/3090 级别)
+- ⚠️ 延迟稍高(本地推理 100-500ms)
+- ⚠️ 说话人识别准确度看声纹质量
+
+### 方案 D: 小鱼易连 WebSocket 协议 ⭐⭐⭐(协议参考)
+
+**完整协议**:
+```
+握手 URL: ws://host:port/recv/asr/result/v1?appid=xx&ts=yy&signature=zz
+   - 签名:HMAC_SHA256(appid + ts, secret) → base64 → urlencode
+
+握手成功后:
+  ↓
+开始: action=begin, sid=ch312c0e3f63609f0900, meetingId=...
+  ↓
+段段推: action=push_result
+  data: {
+    "callNumber": "+86-10506",   ← 说话人号码(平台唯一)
+    "dn": "测试员",              ← 说话人姓名
+    "callUri": "240438186@DESK",
+    "pid": 65664,
+    "seId": "jy2i2kb623ikj...",  ← 声纹 ID
+    "srcLang": "zh",
+    "src": "好的领导",           ← 转写文本(实时段段推!)
+    "targetLang": "en",
+    "target": "Good leadership.",
+    "startTime": 1772447728343,  ← 段开始毫秒
+    "endTime": 1772447730743,    ← 段结束毫秒
+    "seqNo": 1,
+    "isActive": true,
+    "isEnd": false
+  }
+  ↓
+结束: action=end
+```
+
+**价值**: 即使不用小鱼易连,**这个协议是 VPBuddy 自接 ASR 的内部协议模板** —— VPBuddy 也可以用同样的 push_result 协议把转写段喂给后端。
+
+---
+
+## 三、推荐方案:v1.13 双轨混合
+
+| 场景 | 实时转写来源 | 说话人识别 |
+|---|---|---|
+| **飞书 / 腾讯 / 钉钉(中文为主)** | 自接音频流 + 讯飞 RTASR 或 WhisperLiveKit | pyannote-audio 声纹聚类 |
+| **Zoom(英文为主)** | Zoom RTMS SDK | 平台原生(per-participant) |
+| **Otter.ai / 通用第三方** | Otter live transcription API | Otter 原生 speaker ID |
+| **小鱼易连(参考协议)** | 平台原生 WebSocket push_result | callNumber/seId |
+
+---
+
+## 四、对 VPBuddy 架构的影响(v1.13 候选)
+
+### 新增模块(§4.1 会议接入层)
+
+```
+MeetingAdapter
+├── PlatformASRAdapter       (平台原生,飞书/Zoom 等)
+├── LocalAudioCapture         (新!) — VP 设备 loopback / 麦克风
+├── ASRProvider               (新!) — 讯飞 RTASR / WhisperLiveKit
+├── Diarization               (新!) — pyannote-audio 声纹聚类
+└── RealtimeSegmentStream     (新!) — 统一 push_result 协议
+```
+
+### v1.13 修改清单
+
+| § | v1.12 | v1.13 |
+|---|---|---|
+| §3.1 数据流 | "平台原生 ASR" 单通道 | **双通道**:平台原生(后处理)+ 自接音频流(实时) |
+| §4.1 接入层 | 仅 MeetingAdapter.getTranscript() | **+3 模块**:LocalAudioCapture + ASRProvider + Diarization |
+| §六 技术选型 | 飞书默认 | **+ 自接音频流(讯飞/WhisperLiveKit) + pyannote** |
+| §7.1 风险 | 平台 ASR 说话人识别错 | **+ 设备 loopback 权限 + pyannote 准确度 + 中英文混合** |
+| §九 版本表 | v1.12 | **+ v1.13** |
+
+### 关键约束(VP 设备)
+
+- ✅ **VP 必须用桌面客户端**(不是手机/iPad)
+- ✅ **VP 必须给 VPBuddy 麦克风/系统音频权限**
+- ✅ **OS 支持**:
+  - macOS: `AVAudioEngine` 输出 tap
+  - Windows: WASAPI loopback
+  - Linux: PulseAudio monitor source
+
+### 说话人识别双源融合
+
+- **飞书用户自动关联昵称**(会后 REST 转写带)
+- **pyannote 声纹聚类**(自接音频流,带 speaker_id 0/1/2)
+- **VPBuddy 内部合并**:用 callNumber 或声纹 ID 做 key,跨源对齐
+
+---
+
+## 五、待验证(下次)
+
+- ⏳ pyannote-audio 中文声纹准确度(实测 80-90% 准确率是否可接受?)
+- ⏳ 飞书会议 VP 设备 loopback 实际延迟(讯飞 RTASR 全链路 < 2s?)
+- ⏳ pyannote + 飞书 REST 说话人融合的归一化逻辑
+- ⏳ WhisperLiveKit GPU 服务器成本 vs 讯飞 API 成本(MVP 阶段哪个合适?)
+
+---
+
+## 六、参考链接
+
+**平台官方文档**:
+- 飞书会议妙记介绍: <https://www.feishu.cn/content/article/7602953875972263132>
+- 飞书开放平台事件订阅: <https://open.feishu.cn/document/event-subscription-guide/callback-subscription/callback-overview>
+- 腾讯会议转写 API: <https://meeting.tencent.com/support-doc-detail/797/index.html>
+- 腾讯会议 Webhook: <https://meeting.tencent.com/support/topic/589>
+- Zoom RTMS SDK GitHub: <https://github.com/zoom/rtms>
+- Zoom RTMS 文档: <https://developers.zoom.us/docs/rtms/sdk>
+- Zoom AI Companion 转写 API 论坛: <https://devforum.zoom.us/t/api-to-get-an-ai-companion-generated-transcript/142661>
+
+**第三方 ASR**:
+- 讯飞 RTASR WebAPI: <https://www.xfyun.cn/doc/asr/rtasr/API.html>
+- 讯飞实时语音转写(标准版): <https://www.xfyun.cn/service/lfasr>
+- 小鱼易连实时转写回调协议: <https://openapi.xylink.com/common/meeting/doc/ai_realtime_transcription_callback>
+
+**开源**:
+- WhisperLiveKit: 见 GitHub 多个 fork
+- pyannote-audio: <https://github.com/pyannote/pyannote-audio>
+
+**WhisperLiveKit + 飞书集成参考**: <https://adg.csdn.net/697076b9437a6b40336a5e02.html>
+
