@@ -29,11 +29,19 @@ class MeetingStorage:
         return self.data_dir / f"{meeting_id}.json"
 
     def save(self, state: MeetingState) -> None:
-        """保存状态到 JSON 文件(立即落盘)"""
+        """保存状态到 JSON 文件(立即落盘)
+
+        pydantic v2 的 model_dump_json 不支持 ensure_ascii 参数,
+        改用 json.dumps + json.loads 包装一层来保留中文(可读)。
+        """
         path = self._path(state.meeting_id)
         path.write_text(
-            state.model_dump_json(indent=2, ensure_ascii=False),
-            encoding="utf-8"
+            json.dumps(
+                json.loads(state.model_dump_json(indent=2)),
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
         )
 
     def load(self, meeting_id: str) -> MeetingState:
