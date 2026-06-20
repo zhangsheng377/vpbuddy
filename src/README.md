@@ -1,30 +1,35 @@
-# 源代码 (Source)
+# VPBuddy 源代码
 
-本目录用于 VPBuddy 的最终实现。
+VPBuddy 实现目录。
 
-## 状态
+## 当前状态
 
-⏳ 待启动。
+**MVP Step 1 完成 ✅**(2026-06-20)
+- `vpbuddy/state.py`:MeetingState(单一可信源,5 类累积项)
+- `vpbuddy/storage.py`:JSON 持久化(NFS)
+- `tests/test_state.py`:16 个测试,全通过
 
-## 计划
+详见 [`vpbuddy/README.md`](vpbuddy/README.md)
 
-在启动实现前,先完成:
-
-1. `docs/design/` 下的系统设计文档
-2. `docs/decisions/` 下的关键 ADR(语言选型、Agent 框架、知识库选型等)
-3. 技术选型确定后,在此目录初始化子项目(预期是 monorepo 结构,涵盖 backend / agent-runtime / frontend / knowledge-base 等子模块)
-
-## 预期子目录(待定)
+## 目录
 
 ```
 src/
-├── backend/                 # 后端服务(API / 任务调度 / 持久化)
-├── agent-runtime/           # Sub-agent 运行时(产品/架构/UI/数据/风险 Agent)
-├── meeting-adapters/        # 会议平台适配器(腾讯会议/飞书/钉钉/Zoom)
-├── artifact-engine/         # 交付物生成引擎(Demo / 页面 / API / 任务)
-├── knowledge-base/          # 统一知识库系统(个人/企业/行业三层)
-├── command-center/          # 指令控制层(自然语言指令解析与执行)
-└── frontend/                # 前端 UI(与 ui-mockups/ 对应)
+├── vpbuddy/
+│   ├── __init__.py
+│   ├── state.py         # MeetingState
+│   ├── storage.py       # MeetingStorage
+│   └── README.md
+└── tests/
+    └── test_state.py
 ```
 
-> ⚠️ **以上为初步规划,实际模块划分以 `docs/design/` 定稿为准。**
+## 跑测试
+
+```bash
+PYTHONPATH=src python3 -m pytest src/tests/test_state.py -v
+```
+
+## 下一步
+
+Step 2: 自接音频流 + Whisper + pyannote(见 `docs/research/asr-speaker-diarization-survey.md` v2)
