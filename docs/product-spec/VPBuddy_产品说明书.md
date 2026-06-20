@@ -1,4 +1,4 @@
-> **说明**:本文档是 `VPBuddy_产品说明书_v1.6_2026-06-20.docx` 的 Markdown 渲染副本。
+> **说明**:本文档是 `VPBuddy_产品说明书_v1.7_2026-06-20.docx` 的 Markdown 渲染副本。
 > 原始 .docx 文件同目录保留,便于在 Word/WPS 中编辑。
 > 两者内容应保持一致;如有不一致以 .docx 为准。
 >
@@ -9,10 +9,11 @@
 > - **v1.3**: §九 知识库"约束 vs 检索"改为双模式
 > - **v1.4**: §九 强化"展示模式不注入 system prompt,不阻塞 AI"
 > - **v1.5**: §七 改名 Steer 控制层;§六/§十 强化"VP 持续 steer(对持续过程)"
-> - **v1.6** (2026-06-20): 与总体架构 v1.7 对齐 — **Hermes-native**: VPBuddy 运行在 Hermes Agent 之上;**软化"不是代码 IDE"**: 默认原型模式 + **可选生产模式**(VP 显式启用后,会议结束自动转生产:导出代码+推 GitHub+部署测试);所有能力作为 **hermes skill 集合**实现,跨会议上下文自动接上
+> - **v1.6**: Hermes-native(VPBuddy 运行在 Hermes Agent 之上;会议 = hermes session)+ 可选生产模式
+> - **v1.7** (2026-06-20): 与总体架构 v1.8 对齐 — ① **投屏 = 会议平台原生功能**(VPBuddy 不实现,只触发 SDK);② **steer + session 生命周期感知**(idle/active/completed/reactivated,不让 VP 看到裸的 hermes 错误);§七 强化这两点
 >
-> 源文件:`VPBuddy_产品说明书_v1.6_2026-06-20.docx`
-> 历史备份:[v1](VPBuddy_产品说明书_v1_2026-06-20.docx) · [v1.1](VPBuddy_产品说明书_v1.1_2026-06-20.docx) · [v1.2](VPBuddy_产品说明书_v1.2_2026-06-20.docx) · [v1.3](VPBuddy_产品说明书_v1.3_2026-06-20.docx) · [v1.4](VPBuddy_产品说明书_v1.4_2026-06-20.docx) · [v1.5](VPBuddy_产品说明书_v1.5_2026-06-20.docx) · [source/0620_*.zip](source/)
+> 源文件:`VPBuddy_产品说明书_v1.7_2026-06-20.docx`
+> 历史备份:[v1](VPBuddy_产品说明书_v1_2026-06-20.docx) · [v1.1](VPBuddy_产品说明书_v1.1_2026-06-20.docx) · [v1.2](VPBuddy_产品说明书_v1.2_2026-06-20.docx) · [v1.3](VPBuddy_产品说明书_v1.3_2026-06-20.docx) · [v1.4](VPBuddy_产品说明书_v1.4_2026-06-20.docx) · [v1.5](VPBuddy_产品说明书_v1.5_2026-06-20.docx) · [v1.6](VPBuddy_产品说明书_v1.6_2026-06-20.docx) · [source/0620_*.zip](source/)
 
 ---
 
@@ -158,7 +159,7 @@ VP 在会议中**持续 steer(方向盘式引导)**:随时给出方向性输入,
 
 - 控制 AI 行为(steer prompt)
 
-本质:**方向盘式引导**(v1.5 改),不是"批改已完成的成果";VP 在过程中持续 steer,AI 持续整合,投屏/外发是 VP 想看/想发的时刻,不是"完成"标志
+本质:**方向盘式引导**(v1.5 改),不是"批改已完成的成果";VP 在过程中持续 steer,AI 持续整合。**外发** = VP 想把当前状态导出/发送;**投屏** = 会议平台原生屏幕共享功能(腾讯/飞书/Zoom 都有),VPBuddy 不实现投屏本身,只提供按钮触发会议 SDK
 
 ## 八、会议时间轴（需求演化系统）
 
@@ -267,3 +268,5 @@ VPBuddy不是传统AI助手。
 - 企业知识驱动的交付生成系统
 
 VP 任何时候投屏/外发(无『完成』前提)
+
+Session 生命周期感知(v1.7 新增):steer 之前必须检查 hermes session 状态:① idle 自动启动+排队 ② active 直接处理 ③ completed 提示 VP"会议已结束,新开会/续会?" ④ reactivated 续会正常处理。**关键**:不让 VP 看到 hermes 内部错误,VPBuddy 全部转成"人话"
