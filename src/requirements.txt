@@ -1,0 +1,23 @@
+# faster-whisper >= 1.0
+# pyannote.audio == 3.3.2 (避坑:3.1 用 np.NaN 不兼容 numpy 2.x)
+# numpy >= 2.0
+# modelscope >= 1.28 (国内模型下载)
+# pytorch-lightning >= 2.5
+# pydantic >= 2.0
+# soundfile
+# omegaconf
+# hydra-core
+faster-whisper>=1.0.0
+pyannote-audio==3.3.2
+pyannote-core>=6.0.0,<7
+numpy>=2.0.0,<2.8
+scipy>=1.11.0,<1.14
+torch>=2.5.0
+torchaudio>=2.5.0
+pytorch-lightning>=2.5.0,<3
+torchmetrics>=1.5.0,<2
+pydantic>=2.10.0
+soundfile>=0.12.0
+omegaconf>=2.3.0
+hydra-core>=1.3.0
+modelscope>=1.28.0
