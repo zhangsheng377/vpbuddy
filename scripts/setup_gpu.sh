@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # VPBuddy GPU 服务器一键部署脚本
 # 在新 GPU 服务器(任何发行版)上跑这个脚本即可完成全部部署
-# 用法: bash setup_gpu.sh
+# 用法: bash setup_gpu.sh [--help]
 #
 # 设计原则(YAGNI):
 # - 不假设发行版(ubuntu/centos/arch 都跑)
@@ -18,6 +18,25 @@
 # 2026-06-21 张胜东 + Hermes 写
 
 set -euo pipefail
+
+# === --help 处理(防止误触发实际跑) ===
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    cat <<EOF
+VPBuddy GPU 服务器一键部署脚本
+
+用法: bash setup_gpu.sh [--help]
+
+完成后:
+  - miniconda3 在 ~/miniconda3
+  - conda env: vpbuddy-gpu (python 3.11)
+  - 模型在 ~/.cache/modelscope + ~/.cache/huggingface/hub
+  - 调用: conda activate vpbuddy-gpu && python scripts/gpu_transcribe.py xxx.wav
+
+详细文档: docs/部署/gpu服务器部署.md
+踩坑记录: docs/部署/踩坑记录.md
+EOF
+    exit 0
+fi
 
 # === 配置区(改这里就能定制) ===
 ENV_NAME="vpbuddy-gpu"
