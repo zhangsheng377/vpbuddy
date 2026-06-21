@@ -82,6 +82,11 @@ class FeishuAdapter(PlatformAdapter):
     - API: open.feishu.cn (开放平台)
     - Auth: 应用凭证 (app_id + app_secret) → tenant_access_token
     - 文档: https://open.feishu.cn/document/server-docs/minutes-v1/minute/get
+
+    设计原则(YAGNI):
+    - VPBuddy 不主动发消息到飞书(我们的输出是文件,不是消息)
+    - 所以 **不实现 chat.send** — 之前 Step 6 我自作主张加了 3 平台的 chat.send 标 implemented,实际是谎言
+    - 现在明确: feishu 的 4 能力全部是"接收/读",无"发送/写"
     """
     @property
     def meta(self) -> PlatformMeta:
@@ -97,8 +102,7 @@ class FeishuAdapter(PlatformAdapter):
                 Capability("minutes.fetch", "拉取妙记 metadata (会议标题/时间/参与人)", implemented=True),
                 Capability("minutes.transcript", "拉取妙记完整逐字稿(段级时间戳+说话人)", implemented=False),
                 Capability("minutes.summary", "拉取妙记 AI 总结(章节纪要+待办)", implemented=False),
-                Capability("chat.send", "发送飞书消息(文本/卡片/富文本)", implemented=True),
-                Capability("calendar.event", "读写飞书日历事件", implemented=False),
+                # 注意: 不实现 chat.send — VPBuddy 输出是文件,不发消息
             ],
         )
 
@@ -153,8 +157,7 @@ class DingTalkAdapter(PlatformAdapter):
                 Capability("meeting.list", "列出企业会议", implemented=False),
                 Capability("minutes.fetch", "拉取钉钉智能会议转写", implemented=False),
                 Capability("minutes.transcript", "拉取逐字稿", implemented=False),
-                Capability("chat.send", "发送钉钉工作通知", implemented=True),
-                Capability("stream.callback", "接收事件回调(Stream 模式)", implemented=False),
+                # 注意: 不实现 chat.send — VPBuddy 输出是文件
             ],
         )
 
@@ -181,8 +184,7 @@ class WeComAdapter(PlatformAdapter):
                 Capability("meeting.list", "列出企业会议", implemented=False),
                 Capability("minutes.fetch", "拉取会议录制转写", implemented=False),
                 Capability("minutes.transcript", "拉取逐字稿", implemented=False),
-                Capability("chat.send", "发送企业微信应用消息", implemented=True),
-                Capability("contact.user", "通讯录用户管理", implemented=False),
+                # 注意: 不实现 chat.send — VPBuddy 输出是文件
             ],
         )
 
