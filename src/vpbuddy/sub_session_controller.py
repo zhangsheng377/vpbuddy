@@ -198,6 +198,16 @@ def trigger_sub_session(meeting_id: str, doc_kind: str, dry_run: bool = False) -
     except Exception as e:
         result["error"] = f"{type(e).__name__}: {e}"
 
+    # 5. 写完文档后,自动存进知识库(跨会议 RAG,YAGNI:失败也不影响主流程)
+    if result["triggered"] and doc_path.exists():
+        try:
+            from .knowledge_base import get_kb
+            kb = get_kb()
+            kb.add_document(meeting_id, doc_kind, doc_path.read_text(encoding="utf-8"))
+            result["kb_stored"] = True
+        except Exception as e:
+            result["kb_error"] = f"{type(e).__name__}: {str(e)[:200]}"
+
     return result
 
 
