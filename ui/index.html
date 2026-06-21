@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VPBuddy — UI Shell</title>
+<style>
+  :root {
+    --bg-black: #08090a;
+    --bg-panel: #0f1011;
+    --bg-surface: #191a1b;
+    --text-primary: #f7f8f8;
+    --text-secondary: #d0d6e0;
+    --text-muted: #8a8f98;
+    --text-subtle: #62666d;
+    --accent: #7170ff;
+    --accent-bg: #5e6ad2;
+    --success: #10b981;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+    --border: rgba(255,255,255,0.08);
+    --border-subtle: rgba(255,255,255,0.05);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    font-family: -apple-system, "Inter", "Segoe UI", sans-serif;
+    background: var(--bg-black); color: var(--text-primary);
+    font-size: 13px; line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  body { min-height: 100vh; display: flex; flex-direction: column; }
+
+  /* Top nav */
+  .topnav {
+    position: sticky; top: 0; z-index: 100;
+    display: flex; align-items: center; gap: 16px;
+    height: 56px; padding: 0 24px;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .brand {
+    display: flex; align-items: center; gap: 10px;
+    font-weight: 510; font-size: 15px;
+  }
+  .brand-icon {
+    width: 22px; height: 22px;
+    background: linear-gradient(135deg, var(--accent), #828fff);
+    border-radius: 5px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 600; font-size: 12px; color: white;
+  }
+  .tabs { display: flex; gap: 4px; margin-left: 8px; }
+  .tab {
+    padding: 7px 14px;
+    font-size: 12px; font-weight: 510;
+    color: var(--text-secondary);
+    border-radius: 6px; cursor: pointer;
+    transition: all 0.15s;
+  }
+  .tab:hover { background: rgba(255,255,255,0.04); color: var(--text-primary); }
+  .tab.active { background: var(--accent-bg); color: white; }
+  .spacer { flex: 1; }
+  .status-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--text-muted);
+    padding: 4px 10px; border-radius: 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+  }
+  .status-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--success);
+  }
+  .status-dot.warn { background: var(--warning); }
+  .status-dot.error { background: var(--danger); }
+
+  /* Main */
+  .main { flex: 1; padding: 24px; min-height: 0; }
+  .tab-content { display: none; height: 100%; }
+  .tab-content.active { display: block; }
+
+  /* Tab 1 — Main screen (embed dashboard) */
+  .meeting-selector {
+    display: flex; gap: 8px; align-items: center;
+    margin-bottom: 16px;
+  }
+  .meeting-selector select {
+    background: var(--bg-panel); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 10px; font-size: 12px; min-width: 280px;
+  }
+  .meeting-selector button {
+    background: var(--accent-bg); color: white;
+    border: none; padding: 6px 14px; border-radius: 5px;
+    font-size: 12px; cursor: pointer;
+  }
+  iframe { width: 100%; height: calc(100vh - 180px); border: none; background: white; border-radius: 8px; }
+
+  /* Tab 2 — Timeline */
+  .timeline-list { display: flex; flex-direction: column; gap: 6px; max-width: 1200px; }
+  .timeline-item {
+    display: grid; grid-template-columns: 100px 80px 1fr 100px;
+    gap: 12px; padding: 12px 16px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    font-size: 12px;
+  }
+  .timeline-time { color: var(--text-muted); font-family: ui-monospace, monospace; }
+  .timeline-tag {
+    display: inline-block; padding: 2px 8px;
+    border-radius: 3px; font-size: 10px; font-weight: 500;
+    text-align: center; text-transform: uppercase;
+  }
+  .tag-req { background: rgba(112, 112, 255, 0.15); color: #a8a8ff; }
+  .tag-goal { background: rgba(16, 185, 129, 0.15); color: #6ee7b7; }
+  .tag-feat { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
+  .tag-risk { background: rgba(239, 68, 68, 0.15); color: #fca5a5; }
+  .tag-que { background: rgba(156, 163, 175, 0.15); color: #d1d5db; }
+  .timeline-text { color: var(--text-secondary); }
+  .timeline-priority { color: var(--text-muted); font-size: 11px; }
+
+  /* Tab 3 — Knowledge base */
+  .kb-search { display: flex; gap: 8px; margin-bottom: 16px; max-width: 800px; }
+  .kb-search input {
+    flex: 1; background: var(--bg-panel); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 12px; font-size: 13px;
+  }
+  .kb-search button {
+    background: var(--accent-bg); color: white;
+    border: none; padding: 8px 18px; border-radius: 6px;
+    font-size: 13px; cursor: pointer;
+  }
+  .kb-result {
+    padding: 14px 16px; margin-bottom: 8px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+  }
+  .kb-result-head {
+    display: flex; gap: 8px; align-items: center;
+    margin-bottom: 6px; font-size: 11px; color: var(--text-muted);
+  }
+  .kb-result-head .badge {
+    background: var(--accent-bg); color: white;
+    padding: 2px 8px; border-radius: 3px;
+    font-size: 10px; font-weight: 500;
+  }
+  .kb-result-text { color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+  .kb-result-dist { color: var(--text-subtle); font-family: ui-monospace, monospace; }
+
+  /* Tab 4 — Settings */
+  .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; max-width: 1200px; }
+  .settings-card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    padding: 16px 20px;
+  }
+  .settings-card h3 {
+    font-size: 13px; font-weight: 500; color: var(--text-primary);
+    margin-bottom: 12px; padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .kv { display: flex; justify-content: space-between; padding: 6px 0; font-size: 12px; }
+  .kv-key { color: var(--text-muted); }
+  .kv-val { color: var(--text-primary); font-family: ui-monospace, monospace; font-size: 11px; }
+  .empty { color: var(--text-muted); font-style: italic; padding: 20px; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="topnav">
+  <div class="brand">
+    <div class="brand-icon">V</div>
+    <span>VPBuddy</span>
+  </div>
+  <div class="tabs">
+    <div class="tab active" data-tab="main">主屏</div>
+    <div class="tab" data-tab="timeline">时间线</div>
+    <div class="tab" data-tab="kb">知识库</div>
+    <div class="tab" data-tab="settings">设置</div>
+  </div>
+  <div class="spacer"></div>
+  <div class="status-pill" id="status-pill">
+    <div class="status-dot" id="status-dot"></div>
+    <span id="status-text">检查中...</span>
+  </div>
+</div>
+
+<div class="main">
+  <!-- Tab 1: Main -->
+  <div class="tab-content active" id="tab-main">
+    <div class="meeting-selector">
+      <label>会议:</label>
+      <select id="meeting-select"></select>
+      <button onclick="refreshDashboard()">刷新</button>
+    </div>
+    <iframe id="dashboard-frame" src=""></iframe>
+  </div>
+
+  <!-- Tab 2: Timeline -->
+  <div class="tab-content" id="tab-timeline">
+    <h2 style="font-size:14px;font-weight:500;margin-bottom:16px;">累积时间线(全部会议)</h2>
+    <div class="timeline-list" id="timeline-list"></div>
+  </div>
+
+  <!-- Tab 3: Knowledge base -->
+  <div class="tab-content" id="tab-kb">
+    <h2 style="font-size:14px;font-weight:500;margin-bottom:16px;">跨会议 RAG 检索</h2>
+    <div class="kb-search">
+      <input type="text" id="kb-query" placeholder="输入查询(如:SSO 走哪个 IdP / 碳排放 排放因子)" />
+      <button onclick="searchKB()">检索</button>
+    </div>
+    <div id="kb-results"></div>
+  </div>
+
+  <!-- Tab 4: Settings -->
+  <div class="tab-content" id="tab-settings">
+    <h2 style="font-size:14px;font-weight:500;margin-bottom:16px;">系统状态</h2>
+    <div class="settings-grid" id="settings-grid"></div>
+  </div>
+</div>
+
+<script>
+// === Tab 切换 ===
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+    // 懒加载
+    if (tab.dataset.tab === 'timeline') loadTimeline();
+    if (tab.dataset.tab === 'kb') document.getElementById('kb-query').focus();
+    if (tab.dataset.tab === 'settings') loadSettings();
+  });
+});
+
+// === Main: meetings + dashboard ===
+async function loadMeetings() {
+  const r = await fetch('/api/meetings');
+  const data = await r.json();
+  const sel = document.getElementById('meeting-select');
+  sel.innerHTML = data.meetings.map(m =>
+    `<option value="${m.meeting_id}">${m.meeting_id}${m.project_name ? ' — ' + m.project_name : ''} (${m.item_count} 项)</option>`
+  ).join('');
+  if (data.meetings.length > 0) {
+    document.getElementById('dashboard-frame').src = `/docs/${data.meetings[0].meeting_id}/dashboard.html`;
+  }
+}
+function refreshDashboard() {
+  const mid = document.getElementById('meeting-select').value;
+  document.getElementById('dashboard-frame').src = `/docs/${mid}/dashboard.html`;
+}
+document.getElementById('meeting-select').addEventListener('change', refreshDashboard);
+
+// === Timeline ===
+async function loadTimeline() {
+  const list = document.getElementById('timeline-list');
+  list.innerHTML = '<div class="empty">加载中...</div>';
+  const r = await fetch('/api/timeline');
+  const data = await r.json();
+  if (data.events.length === 0) {
+    list.innerHTML = '<div class="empty">暂无累积项</div>';
+    return;
+  }
+  list.innerHTML = data.events.map(e => {
+    const time = new Date(e.created_at).toLocaleString('zh-CN', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+    return `<div class="timeline-item">
+      <div class="timeline-time">${time}</div>
+      <div><span class="timeline-tag tag-${e.kind.toLowerCase()}">${e.kind}</span></div>
+      <div class="timeline-text">${e.id} · ${escapeHtml(e.text)}</div>
+      <div class="timeline-priority">[${e.priority}] ${e.meeting_id.slice(0,8)}</div>
+    </div>`;
+  }).join('');
+}
+
+// === Knowledge base ===
+async function searchKB() {
+  const q = document.getElementById('kb-query').value.trim();
+  if (!q) return;
+  const results = document.getElementById('kb-results');
+  results.innerHTML = '<div class="empty">检索中...</div>';
+  const r = await fetch('/api/kb/search?q=' + encodeURIComponent(q));
+  const data = await r.json();
+  if (data.results.length === 0) {
+    results.innerHTML = '<div class="empty">无结果</div>';
+    return;
+  }
+  results.innerHTML = data.results.map(x => `
+    <div class="kb-result">
+      <div class="kb-result-head">
+        <span class="badge">${x.meeting_id}/${x.doc_kind}</span>
+        <span class="kb-result-dist">dist=${x.distance.toFixed(3)}</span>
+      </div>
+      <div class="kb-result-text">${escapeHtml(x.snippet)}</div>
+    </div>
+  `).join('');
+}
+document.getElementById('kb-query').addEventListener('keypress', e => {
+  if (e.key === 'Enter') searchKB();
+});
+
+// === Settings ===
+async function loadSettings() {
+  const r = await fetch('/api/status');
+  const data = await r.json();
+  const grid = document.getElementById('settings-grid');
+  grid.innerHTML = `
+    <div class="settings-card">
+      <h3>Controller</h3>
+      <div class="kv"><span class="kv-key">PID</span><span class="kv-val">${data.controller.pid || 'N/A'}</span></div>
+      <div class="kv"><span class="kv-key">状态</span><span class="kv-val">${data.controller.running ? '✅ 运行中' : '❌ 已停止'}</span></div>
+      <div class="kv"><span class="kv-key">Poll 间隔</span><span class="kv-val">${data.controller.poll_interval}s</span></div>
+      <div class="kv"><span class="kv-key">最后日志</span><span class="kv-val">${data.controller.last_log || 'N/A'}</span></div>
+    </div>
+    <div class="settings-card">
+      <h3>数据</h3>
+      <div class="kv"><span class="kv-key">活跃会议</span><span class="kv-val">${data.stats.active_meetings}</span></div>
+      <div class="kv"><span class="kv-key">已生成文档</span><span class="kv-val">${data.stats.total_docs}</span></div>
+      <div class="kv"><span class="kv-key">知识库文档</span><span class="kv-val">${data.stats.kb_docs}</span></div>
+      <div class="kv"><span class="kv-key">DATA_DIR</span><span class="kv-val">${data.paths.data_dir}</span></div>
+    </div>
+    <div class="settings-card">
+      <h3>API 端点</h3>
+      <div class="kv"><span class="kv-key">GET</span><span class="kv-val">/api/meetings</span></div>
+      <div class="kv"><span class="kv-key">GET</span><span class="kv-val">/api/timeline</span></div>
+      <div class="kv"><span class="kv-key">POST</span><span class="kv-val">/api/kb/search?q=...</span></div>
+      <div class="kv"><span class="kv-key">GET</span><span class="kv-val">/api/status</span></div>
+    </div>
+    <div class="settings-card">
+      <h3>最近会议</h3>
+      ${data.meetings.map(m => `<div class="kv"><span class="kv-key">${m.meeting_id}</span><span class="kv-val">${m.item_count} 项 · ${m.platform}</span></div>`).join('')}
+    </div>
+  `;
+}
+
+// === 工具 ===
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// === 状态指示器 ===
+async function checkStatus() {
+  try {
+    const r = await fetch('/api/status');
+    const d = await r.json();
+    const dot = document.getElementById('status-dot');
+    const txt = document.getElementById('status-text');
+    if (d.controller.running) {
+      dot.className = 'status-dot';
+      txt.textContent = 'Controller 运行中';
+    } else {
+      dot.className = 'status-dot error';
+      txt.textContent = 'Controller 停止';
+    }
+  } catch (e) {
+    document.getElementById('status-text').textContent = 'Server 不可达';
+  }
+}
+
+// === 启动 ===
+loadMeetings();
+checkStatus();
+setInterval(checkStatus, 10000);
+</script>
+</body>
+</html>
