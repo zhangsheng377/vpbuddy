@@ -172,6 +172,15 @@ def trigger_sub_session(meeting_id: str, doc_kind: str, dry_run: bool = False) -
         result["dry_run"] = True
         return result
 
+    # 4b. direct 模式:渲染 prompt 到 stdout,主 session 看到后用 write_file 写
+    #     (原因:hermes sub-session 没 file 写工具,直接调会失败)
+    if os.environ.get("VPBUDDY_DIRECT"):
+        result["triggered"] = True
+        result["direct"] = True
+        result["prompt"] = prompt
+        result["doc_path"] = str(doc_path)
+        return result
+
     try:
         # 注:不传 --resume(不需要历史),全 context 在 prompt 里
         # 这样:LLM 每次拿到最新 meeting_state + 上次 doc 输出,自己判断要不要更新
@@ -199,7 +208,7 @@ def trigger_sub_session(meeting_id: str, doc_kind: str, dry_run: bool = False) -
         result["error"] = f"{type(e).__name__}: {e}"
 
     # 5. 写完文档后,自动存进知识库(跨会议 RAG,YAGNI:失败也不影响主流程)
-    if result["triggered"] and doc_path.exists():
+    if result["triggered"] and not result.get("direct") and doc_path.exists():
         try:
             from .knowledge_base import get_kb
             kb = get_kb()

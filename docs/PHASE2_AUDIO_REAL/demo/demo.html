@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>VPBuddy · PHASE2_AUDIO_REAL · GPU Pipeline 端到端 demo</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true, theme:'dark', securityLevel:'loose'});</script>
+<style>
+  :root {
+    --bg: #0f1216; --panel: #181c22; --border: #2a313b;
+    --text: #e6e9ef; --muted: #8b95a3; --accent: #4dd0e1;
+    --ok: #4caf50; --warn: #ffb74d; --danger: #ef5350;
+    --s0: #ef5350; --s1: #ffb74d; --s2: #ffd54f; --s3: #aed581;
+    --s4: #4dd0e1; --s5: #7986cb; --s6: #ba68c8; --s7: #f06292;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: var(--bg); color: var(--text); line-height: 1.55; }
+  header { padding: 28px 40px 20px; border-bottom: 1px solid var(--border);
+           background: linear-gradient(180deg, #1a2029, var(--bg)); }
+  header h1 { margin:0 0 6px; font-size: 26px; font-weight: 600; }
+  header .meta { color: var(--muted); font-size: 13px; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  header .badges { margin-top: 10px; }
+  .badge { display: inline-block; padding: 2px 8px; margin-right: 6px; border-radius: 4px;
+           font-size: 11px; font-weight: 600; background: var(--panel); border: 1px solid var(--border); }
+  .badge.v { color: var(--accent); border-color: var(--accent); }
+  .badge.ok { color: var(--ok); border-color: var(--ok); }
+  main { max-width: 1280px; margin: 0 auto; padding: 24px 40px 60px; }
+  section { margin-bottom: 40px; }
+  h2 { font-size: 18px; font-weight: 600; margin: 0 0 16px; padding-bottom: 8px;
+       border-bottom: 1px solid var(--border); color: var(--text); }
+  h2 .num { color: var(--accent); margin-right: 8px; font-family: ui-monospace, monospace; }
+  .panel { background: var(--panel); border: 1px solid var(--border);
+           border-radius: 8px; padding: 20px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+          padding: 16px; text-align: center; }
+  .stat .v { font-size: 28px; font-weight: 700; color: var(--accent);
+             font-family: ui-monospace, "SF Mono", monospace; }
+  .stat .l { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .stat.warn .v { color: var(--warn); }
+  .stat.danger .v { color: var(--danger); }
+
+  /* Pipeline flow */
+  .flow { display: flex; align-items: stretch; gap: 0; flex-wrap: wrap; }
+  .flow .node { flex: 1; min-width: 130px; background: var(--panel); border: 1px solid var(--border);
+                border-radius: 6px; padding: 12px 14px; text-align: center; }
+  .flow .node strong { display: block; color: var(--accent); font-size: 13px; }
+  .flow .node span { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .flow .arrow { display: flex; align-items: center; padding: 0 6px;
+                 color: var(--muted); font-size: 18px; }
+  .flow .branch { flex: 1.6; display: flex; gap: 8px; }
+  .flow .branch .node { flex: 1; }
+
+  /* Speaker timeline */
+  .timeline { position: relative; }
+  .tl-axis { position: relative; height: 18px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+  .tl-tick { position: absolute; top: 0; font-size: 10px; color: var(--muted);
+             font-family: ui-monospace, monospace; transform: translateX(-50%); }
+  .tl-row { display: flex; align-items: center; height: 26px; margin-bottom: 4px; }
+  .tl-label { width: 110px; font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace; }
+  .tl-track { flex: 1; position: relative; height: 22px; background: #11151a;
+              border-radius: 3px; overflow: hidden; }
+  .tl-seg { position: absolute; top: 0; bottom: 0; border-radius: 2px;
+            opacity: 0.85; transition: opacity 0.15s; }
+  .tl-seg:hover { opacity: 1; }
+  .tl-legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; font-size: 11px; }
+  .tl-legend .item { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  .tl-legend .dot { width: 10px; height: 10px; border-radius: 2px; }
+
+  /* Lyrics table */
+  table.lyrics { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.lyrics th, table.lyrics td { padding: 6px 10px; border-bottom: 1px solid var(--border);
+                                      text-align: left; vertical-align: top; }
+  table.lyrics th { color: var(--muted); font-weight: 500; font-size: 11px;
+                    text-transform: uppercase; letter-spacing: 0.5px; }
+  table.lyrics td.spk { white-space: nowrap; font-family: ui-monospace, monospace;
+                        font-size: 11px; }
+  table.lyrics td.t { font-family: ui-monospace, monospace; color: var(--muted);
+                      font-size: 11px; white-space: nowrap; }
+  .spk-tag { display: inline-block; padding: 1px 6px; border-radius: 3px;
+             font-size: 10px; font-weight: 600; }
+  .spk-00 { background: var(--s0); color: #000; }
+  .spk-01 { background: var(--s1); color: #000; }
+  .spk-02 { background: var(--s2); color: #000; }
+  .spk-03 { background: var(--s3); color: #000; }
+  .spk-04 { background: var(--s4); color: #000; }
+  .spk-05 { background: var(--s5); color: #fff; }
+  .spk-06 { background: var(--s6); color: #fff; }
+  .spk-07 { background: var(--s7); color: #000; }
+
+  /* Risk callout */
+  .callout { border-left: 4px solid var(--warn); background: rgba(255, 183, 77, 0.06);
+             padding: 14px 18px; border-radius: 4px; margin-top: 12px; }
+  .callout.danger { border-color: var(--danger); background: rgba(239, 83, 80, 0.06); }
+  .callout h4 { margin: 0 0 6px; font-size: 14px; color: var(--warn); }
+  .callout.danger h4 { color: var(--danger); }
+  .callout p, .callout ul { margin: 4px 0; font-size: 13px; color: var(--text); }
+  .callout ul { padding-left: 20px; }
+
+  code { background: #11151a; padding: 1px 5px; border-radius: 3px;
+         font-family: ui-monospace, "SF Mono", monospace; font-size: 12px;
+         color: var(--accent); }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+  .muted { color: var(--muted); }
+  footer { text-align: center; padding: 20px; color: var(--muted); font-size: 11px;
+           border-top: 1px solid var(--border); margin-top: 40px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>VPBuddy · PHASE2_AUDIO_REAL — GPU Pipeline 端到端 demo</h1>
+  <div class="meta">
+    v1 · 最后更新 2026-06-21 · session_id: <code>meeting:PHASE2_AUDIO_REAL:demo</code>
+  </div>
+  <div class="badges">
+    <span class="badge v">v1</span>
+    <span class="badge ok">RTF 0.002 (500× 实时)</span>
+    <span class="badge ok">RTX 3090 Ti + float16</span>
+    <span class="badge" style="color:var(--warn);border-color:var(--warn)">RISK-1E352E OPEN</span>
+  </div>
+</header>
+
+<main>
+
+<!-- ============ 1. Pipeline ============ -->
+<section>
+  <h2><span class="num">01</span>Pipeline 端到端流程</h2>
+  <div class="panel">
+    <div class="flow">
+      <div class="node">
+        <strong>测试音频</strong>
+        <span>wav 209s</span>
+        <span style="color:var(--text)">《明天我要嫁给你》</span>
+      </div>
+      <div class="arrow">▶</div>
+      <div class="node">
+        <strong>GPU 推理</strong>
+        <span>192.168.10.63</span>
+        <span style="color:var(--text)">RTX 3090 Ti · float16</span>
+      </div>
+      <div class="arrow">▶</div>
+      <div class="branch">
+        <div class="node">
+          <strong>SenseVoice ASR</strong>
+          <span>FunASR · ModelScope</span>
+          <span style="color:var(--ok)">0.5s</span>
+        </div>
+        <div class="node">
+          <strong>campplus 说话人</strong>
+          <span>FunASR · 聚类</span>
+          <span style="color:var(--ok)">1.5s</span>
+        </div>
+      </div>
+      <div class="arrow">▶</div>
+      <div class="node">
+        <strong>融合</strong>
+        <span>DiarizedSegment</span>
+        <span>46 句 · 8 speaker</span>
+      </div>
+      <div class="arrow">▶</div>
+      <div class="node">
+        <strong>MeetingState</strong>
+        <span>NFS JSON</span>
+        <span>共享累积</span>
+      </div>
+      <div class="arrow">▶</div>
+      <div class="node">
+        <strong>6 sub-sessions</strong>
+        <span>req/arch/tasks/api/risk/demo</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 2. Performance ============ -->
+<section>
+  <h2><span class="num">02</span>性能数字(RTX 3090 Ti + cuda float16)</h2>
+  <div class="grid-4">
+    <div class="stat">
+      <div class="v">209s</div>
+      <div class="l">音频长度 · 完整 1 首歌</div>
+    </div>
+    <div class="stat">
+      <div class="v">0.5s</div>
+      <div class="l">SenseVoice ASR · 418× 实时</div>
+    </div>
+    <div class="stat">
+      <div class="v">1.5s</div>
+      <div class="l">campplus 说话人 · 139× 实时</div>
+    </div>
+    <div class="stat ok">
+      <div class="v">0.002</div>
+      <div class="l">总 RTF · <strong>500× 实时</strong></div>
+    </div>
+  </div>
+  <div class="grid-4" style="margin-top:12px">
+    <div class="stat">
+      <div class="v">46</div>
+      <div class="l">timestamped 句子</div>
+    </div>
+    <div class="stat warn">
+      <div class="v">8</div>
+      <div class="l">speaker 聚类(应=1) ⚠</div>
+    </div>
+    <div class="stat">
+      <div class="v">60%</div>
+      <div class="l">SPEAKER_00 主唱占比</div>
+    </div>
+    <div class="stat">
+      <div class="v">0.704</div>
+      <div class="l">campplus threshold</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 3. Speaker Timeline ============ -->
+<section>
+  <h2><span class="num">03</span>说话人时间线(0 ~ 209s)</h2>
+  <div class="panel">
+    <p class="muted" style="margin-top:0;font-size:12px">
+      实际 1 人演唱,被聚类成 8 个 speaker — 主唱占 60%,其余是和声 / 重复段 / 气口
+    </p>
+    <div class="timeline">
+      <div class="tl-axis">
+        <div class="tl-tick" style="left:0%">0s</div>
+        <div class="tl-tick" style="left:25%">52s</div>
+        <div class="tl-tick" style="left:50%">104s</div>
+        <div class="tl-tick" style="left:75%">157s</div>
+        <div class="tl-tick" style="left:100%">209s</div>
+      </div>
+
+      <!-- SPEAKER_00 王心凌主唱 -->
+      <div class="tl-row">
+        <div class="tl-label"><span class="spk-tag spk-00">S00</span> 王心凌主唱</div>
+        <div class="tl-track">
+          <div class="tl-seg" style="left:0%; width:3%; background:var(--s0)" title="0-6s 数拍"></div>
+          <div class="tl-seg" style="left:4%; width:9%; background:var(--s0)" title="8-27s 主歌"></div>
+          <div class="tl-seg" style="left:14%; width:7%; background:var(--s0)" title="30-44s 主歌"></div>
+          <div class="tl-seg" style="left:22%; width:14%; background:var(--s0)" title="46-75s 副歌"></div>
+          <div class="tl-seg" style="left:36%; width:8%; background:var(--s0)" title="76-93s 过渡"></div>
+          <div class="tl-seg" style="left:45%; width:15%; background:var(--s0)" title="95-126s 副歌反复"></div>
+          <div class="tl-seg" style="left:60%; width:6%; background:var(--s0)" title="127-140s"></div>
+          <div class="tl-seg" style="left:67%; width:5%; background:var(--s0)" title="140-150s"></div>
+          <div class="tl-seg" style="left:74%; width:14%; background:var(--s0)" title="155-184s 副歌"></div>
+        </div>
+      </div>
+      <!-- SPEAKER_01 和声1 -->
+      <div class="tl-row">
+        <div class="tl-label"><span class="spk-tag spk-01">S01</span> 和声1</div>
+        <div class="tl-track">
+          <div class="tl-seg" style="left:22%; width:3%; background:var(--s1)" title="和声片段"></div>
+          <div class="tl-seg" style="left:46%; width:4%; background:var(--s1)"></div>
+          <div class="tl-seg" style="left:75%; width:5%; background:var(--s1)"></div>
+        </div>
+      </div>
+      <!-- SPEAKER_02 主唱A(重复段) -->
+      <div class="tl-row">
+        <div class="tl-label"><span class="spk-tag spk-02">S02</span> 主唱A</div>
+        <div class="tl-track">
+          <div class="tl-seg" style="left:25%; width:4%; background:var(--s2)"></div>
+          <div class="tl-seg" style="left:38%; width:3%; background:var(--s2)"></div>
+          <div class="tl-seg" style="left:80%; width:3%; background:var(--s2)"></div>
+        </div>
+      </div>
+      <!-- SPEAKER_03 和声2 -->
+      <div class="tl-row">
+        <div class="tl-label"><span class="spk-tag spk-03">S03</span> 和声2</div>
+        <div class="tl-track">
+          <div class="tl-seg" style="left:50%; width:2%; background:var(--s3)"></div>
+          <div class="tl-seg" style="left:78%; width:3%; background:var(--s3)"></div>
+        </div>
+      </div>
+      <!-- SPEAKER_04 主唱B(重复段) -->
+      <div class="tl-row">
+        <div class="tl-label"><span class="spk-tag spk-04">S04</span> 主唱B</div>
+        <div class="tl-track">
+          <div class="tl-seg" style="left:32%; width:3%; background:var(--s4)"></div>
+          <div class="tl-seg" style="left:88%; width:2%; background:var(--s4)"></div>
+        </div>
+      </div>
+      <!-- SPEAKER_05 独白 -->
+      <div class="tl-row">
+        <div class="tl-label"><span class="spk-tag spk-05">S05</span> 独白</div>
+        <div class="tl-track">
+          <div class="tl-seg" style="left:90%; width:8%; background:var(--s5)" title="194-209s 独白收尾"></div>
+        </div>
+      </div>
+      <!-- SPEAKER_06 气口 -->
+      <div class="tl-row">
+        <div class="tl-label"><span class="spk-tag spk-06">S06</span> 气口</div>
+        <div class="tl-track">
+          <div class="tl-seg" style="left:6%; width:0.5%; background:var(--s6)"></div>
+          <div class="tl-seg" style="left:13%; width:0.5%; background:var(--s6)"></div>
+          <div class="tl-seg" style="left:20%; width:0.5%; background:var(--s6)"></div>
+          <div class="tl-seg" style="left:44%; width:0.5%; background:var(--s6)"></div>
+        </div>
+      </div>
+      <!-- SPEAKER_07 气口2 -->
+      <div class="tl-row">
+        <div class="tl-label"><span class="spk-tag spk-07">S07</span> 气口2</div>
+        <div class="tl-track">
+          <div class="tl-seg" style="left:55%; width:0.5%; background:var(--s7)"></div>
+          <div class="tl-seg" style="left:72%; width:0.5%; background:var(--s7)"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tl-legend">
+      <div class="item"><span class="dot" style="background:var(--s0)"></span>SPEAKER_00 王心凌(主唱 60%)</div>
+      <div class="item"><span class="dot" style="background:var(--s1)"></span>SPEAKER_01 和声1</div>
+      <div class="item"><span class="dot" style="background:var(--s2)"></span>SPEAKER_02 主唱A(重复段)</div>
+      <div class="item"><span class="dot" style="background:var(--s3)"></span>SPEAKER_03 和声2</div>
+      <div class="item"><span class="dot" style="background:var(--s4)"></span>SPEAKER_04 主唱B(重复段)</div>
+      <div class="item"><span class="dot" style="background:var(--s5)"></span>SPEAKER_05 独白</div>
+      <div class="item"><span class="dot" style="background:var(--s6)"></span>SPEAKER_06 气口</div>
+      <div class="item"><span class="dot" style="background:var(--s7)"></span>SPEAKER_07 气口2</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 4. Risk + Open Question ============ -->
+<section>
+  <h2><span class="num">04</span>已发现的问题 & 开放问题</h2>
+  <div class="grid-2">
+    <div class="callout danger">
+      <h4>RISK-1E352E · campplus 把单主唱+和声聚成 8 个 speaker</h4>
+      <p><strong>现象</strong>:实际 1 人演唱的歌曲,被聚成 8 类(S00~S07)。S00 主唱占 60%,其余 7 类是和声/重复段/气口。</p>
+      <p><strong>影响</strong>:真实多人会议(2-3 人对话)如果同 speaker 音色/节奏相似,会被误切。</p>
+      <p><strong>候选解决</strong>:</p>
+      <ul>
+        <li>聚类后处理:上下文合并 + 短段(<0.5s)归并到相邻段</li>
+        <li>用能量/时长辅助:气口(短+低能量)直接合并</li>
+        <li>引入 speaker embedding 时序平滑(同一说话人相邻段均值)</li>
+      </ul>
+    </div>
+    <div class="callout">
+      <h4>QUE-DFB5A0 · 真实多人会议怎么校准说话人?</h4>
+      <p><strong>当前</strong>:campplus 阈值 <code>0.704</code>,但歌曲有重复段需上下文合并。</p>
+      <p><strong>待验证</strong>:</p>
+      <ul>
+        <li>2-3 人 60s 真实对话样本,聚类准确率?</li>
+        <li>会议 V 已知 N 人(会议邀请),能否用 N 作为 KMeans K 强约束?</li>
+        <li>同一 speaker 跨多段聚类合并的最佳策略?</li>
+      </ul>
+      <p class="muted">下一步:录一段 2-3 人 60s 对话做真实验证。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 5. 真实歌词样本 ============ -->
+<section>
+  <h2><span class="num">05</span>真实转写样本(节选 8 句 · 46 句中)</h2>
+  <div class="panel" style="padding:0">
+    <table class="lyrics">
+      <thead>
+        <tr><th style="width:90px">时间</th><th style="width:100px">Speaker</th><th>歌词 / 内容</th><th style="width:120px">结构</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="t">00:00-00:06</td><td class="spk"><span class="spk-tag spk-00">S00</span></td><td>(数拍 1 2 3 4 ...)</td><td>开头数拍</td></tr>
+        <tr><td class="t">00:08-00:18</td><td class="spk"><span class="spk-tag spk-00">S00</span></td><td>明天我要嫁给你啦　明天我要嫁给你啦</td><td>主歌抒情</td></tr>
+        <tr><td class="t">00:30-00:44</td><td class="spk"><span class="spk-tag spk-00">S00</span></td><td>如果不是遇见你　我不会相信　爱情能这么动人</td><td>主歌抒情</td></tr>
+        <tr><td class="t">00:46-00:58</td><td class="spk"><span class="spk-tag spk-00">S00</span></td><td>明天我要嫁给你啦　明天我要嫁给你啦</td><td><strong style="color:var(--warn)">副歌反复 ⭐</strong></td></tr>
+        <tr><td class="t">00:58-01:02</td><td class="spk"><span class="spk-tag spk-01">S01</span></td><td>(和声:啊~~~)</td><td>和声段</td></tr>
+        <tr><td class="t">01:15-01:26</td><td class="spk"><span class="spk-tag spk-00">S00</span></td><td>明天我要嫁给你啦　把我最真的心意</td><td><strong style="color:var(--warn)">副歌反复 ⭐</strong></td></tr>
+        <tr><td class="t">01:55-02:05</td><td class="spk"><span class="spk-tag spk-00">S00</span></td><td>明天我要嫁给你啦　如果你愿意请答应我</td><td>副歌收束</td></tr>
+        <tr><td class="t">03:14-03:29</td><td class="spk"><span class="spk-tag spk-05">S05</span></td><td>(独白:其实这首歌想唱给一个人听...)</td><td>独白收尾</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="muted" style="font-size:11px;margin-top:8px">⏵ 完整 46 句见 <code>data/meetings/PHASE2_AUDIO_REAL.json</code> · ASR 子 session 原文</p>
+</section>
+
+<!-- ============ 6. 子 session 交付矩阵 ============ -->
+<section>
+  <h2><span class="num">06</span>6 sub-sessions 交付矩阵(本次会议)</h2>
+  <div class="panel" style="padding:0">
+    <table class="lyrics">
+      <thead>
+        <tr><th>doc_kind</th><th>session_id</th><th>输出</th><th>状态</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="mono">req</td><td class="mono">meeting:PHASE2_AUDIO_REAL:req</td><td><a href="../req.md" style="color:var(--accent)">req.md</a> · 2 REQ + 1 GOAL</td><td>✅ done</td></tr>
+        <tr><td class="mono">arch</td><td class="mono">meeting:PHASE2_AUDIO_REAL:arch</td><td><a href="../arch.md" style="color:var(--accent)">arch.md</a> · mermaid 流程图</td><td>✅ done</td></tr>
+        <tr><td class="mono">tasks</td><td class="mono">meeting:PHASE2_AUDIO_REAL:tasks</td><td><a href="../tasks.md" style="color:var(--accent)">tasks.md</a> · T-001~T-003</td><td>✅ done</td></tr>
+        <tr><td class="mono">api</td><td class="mono">meeting:PHASE2_AUDIO_REAL:api</td><td><a href="../api.md" style="color:var(--accent)">api.md</a> · SenseVoice + campplus</td><td>✅ done</td></tr>
+        <tr><td class="mono">risk</td><td class="mono">meeting:PHASE2_AUDIO_REAL:risk</td><td><em>未生成</em></td><td>⏳ pending</td></tr>
+        <tr style="background:rgba(77,208,225,0.05)">
+          <td class="mono"><strong>demo</strong></td>
+          <td class="mono"><strong>meeting:PHASE2_AUDIO_REAL:demo</strong></td>
+          <td><strong style="color:var(--accent)">demo/demo.html ← 本文件</strong></td>
+          <td>✅ v1</td>
+      </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  VPBuddy v1.17 · 6 sub-sessions pattern · LLM 直接写文件 · YAGNI
+</footer>
+
+</body>
+</html>
