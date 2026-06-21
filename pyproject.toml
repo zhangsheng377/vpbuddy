@@ -1,0 +1,143 @@
+# VPBuddy — 现代 Python 包声明 (2026-06-21 ADR-0009)
+#
+# 之前只用 requirements.txt;现在补 pyproject.toml 作为包元数据 + hermes 依赖声明。
+# 部署仍可用 `pip install -r requirements.txt` 走老路;新部署用 `pip install .` 走 pyproject。
+#
+# 关键变更:
+#   - 新增 `hermes-agent>=0.16.0,<1.0` 依赖 (ADR-0009)
+#   - 新增 `[project.scripts]` 让 `vpbuddy` 命令可调用
+#   - 新增 optional `[gpu]` extra 装 GPU 模型
+#   - 新增 `[dev]` extra 装测试/lint
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vpbuddy"
+version = "0.2.0"
+description = "人机协同会议操作系统级 AI 助手 — 运行在 Hermes Agent 之上"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "张胜东", email = "zhangsheng377@users.noreply.github.com"},
+]
+keywords = ["vp", "meeting", "ai-assistant", "asr", "diarization", "hermes-agent"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+
+# ===== 核心依赖 (ADR-0009 关键:hermes-agent 是 runtime) =====
+dependencies = [
+    # Hermes Agent runtime (ADR-0009 — VPBuddy = Hermes skill,不可绕过)
+    "hermes-agent>=0.16.0,<1.0",
+
+    # 数据模型
+    "pydantic>=2.0,<3",
+
+    # 知识库
+    "sqlite-vec>=0.1.0",
+    "sentence-transformers>=2.2,<4",
+    "numpy>=1.24,<2.8",
+
+    # 工具
+    "requests>=2.31",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+# GPU 模型 (Whisper + pyannote + funasr + faster-whisper) — ADR-0004
+gpu = [
+    "funasr>=1.1.0,<1.2",
+    "modelscope>=1.10",
+    "torch>=2.0,<3",
+    "torchaudio>=2.0,<3",
+    "pyannote-audio>=3.3,<4",
+    "pyannote-core>=6.0,<7",
+    "huggingface-hub>=1.20,<2",
+    "faster-whisper>=1.0,<2",
+    "ctranslate2>=3.0",
+    "pydub>=0.25",
+    "soundfile>=0.12",
+    "librosa>=0.10",
+]
+
+# 音频采集 (VP 设备 loopback) — ADR-0004
+audio = [
+    "pyaudio>=0.2.13",
+    "sounddevice>=0.4.6",
+]
+
+# 测试
+dev = [
+    "pytest>=7.4,<9",
+    "pytest-asyncio>=0.21",
+    "pytest-cov>=4.1",
+    "black>=23.0",
+    "ruff>=0.1",
+    "mypy>=1.7",
+]
+
+# 全部 (开发用)
+all = [
+    "vpbuddy[gpu,audio,dev]",
+]
+
+# ===== 命令入口 (ADR-0009 — `vpbuddy` CLI = Hermes skill 触发) =====
+[project.scripts]
+vpbuddy = "vpbuddy.cli:main"
+vpbuddy-setup-gpu = "vpbuddy.scripts.setup_gpu:main"
+vpbuddy-transcribe = "vpbuddy.scripts.gpu_transcribe:main"
+
+# ===== 入口点: Hermes skill 注册 (ADR-0009) =====
+[project.entry-points."hermes.skills"]
+vpbuddy = "vpbuddy.skill:VPBuddySkill"
+
+# ===== 包发现 =====
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["vpbuddy*"]
+
+[tool.setuptools.package-data]
+vpbuddy = ["py.typed", "*.md", "prompts/*.md"]
+
+# ===== pytest 配置 =====
+[tool.pytest.ini_options]
+minversion = "7.4"
+testpaths = ["src/tests"]
+addopts = "-ra -q --strict-markers"
+markers = [
+    "gpu: 需要 GPU 的测试",
+    "integration: 集成测试",
+    "slow: 慢测试",
+]
+
+# ===== ruff =====
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B"]
+ignore = ["E501"]  # line-too-long
+
+# ===== mypy =====
+[tool.mypy]
+python_version = "3.11"
+strict = false
+ignore_missing_imports = true
+warn_unused_ignores = true
+
+# ===== black =====
+[tool.black]
+line-length = 100
+target-version = ["py311"]

@@ -50,3 +50,7 @@
 | [0003](./0003-MVP-Step1-YAGNI-review.md) | MVP Step 1 YAGNI Review | Accepted | 2026-06-20 |
 | [0004](./0004-MVP-Step2-ASR设计.md) | MVP Step 2 — Whisper + pyannote 链路 | Accepted | 2026-06-20 |
 | [0005](./0005-ModelScope-替代HF_TOKEN.md) | ModelScope 镜像替代 HF_TOKEN(国内无账号) | Accepted | 2026-06-21 |
+| [0006](./0006-MVP-Step3-子session架构.md) | MVP Step 3 — 6 个常驻子 session 循环架构 | Accepted | 2026-06-21 |
+| [0007](./0007-多平台适配器架构.md) | 多平台 MeetingAdapter 抽象(防锁定) | Accepted | 2026-06-21 |
+| [0008](./0008-ADR-0001-决策1-Superseded.md) | ADR-0001 决策 1 (飞书第一平台) Superseded | Superseded | 2026-06-21 |
+| [0009](./0009-部署架构-Hermes-runtime.md) | 部署架构 — 以 Hermes Agent 作为生产 runtime | Accepted | 2026-06-21 |

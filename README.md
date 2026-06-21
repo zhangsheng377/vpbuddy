@@ -2,6 +2,8 @@
 
 > **人机协同会议操作系统级 AI 助手** —— 面向软件开发公司 VP / 售前负责人 / 项目负责人。
 
+> **运行在 Hermes Agent 之上** (2026-06-21 ADR-0009 钉死): VPBuddy = 装在 `~/.hermes/skills/vpbuddy/` 的 skill 集合,**不**独立运行。**部署 = `pip install hermes-agent` + `pip install vpbuddy` + `hermes skills install vpbuddy`**。详见 [ADR-0009](docs/decisions/0009-部署架构-Hermes-runtime.md) + [Hermes 官方文档](https://hermes-agent.nousresearch.com/docs)。
+
 VPBuddy 不是传统意义上的 AI 助手,而是运行在会议中的协同系统:
 
 - 人类负责决策与主导
@@ -12,15 +14,16 @@ VPBuddy 直接接 VP 桌面客户端的麦克风/系统音频(ADR-0004 自接音
 - 会议理解与结构化建模
 - 需求分析与追问
 - 解释材料生成
-- Sub-agent 并行推理
+- Sub-agent 并行推理 (Hermes `delegate_task` 5 Agent 真并行)
 - 交互 Demo 与交付物生成
-- 企业 / 个人 / 行业知识库调用
+- 企业 / 个人 / 行业知识库调用 (Hermes memory 持久化,跨会议连续)
 - 软件交付资产实时生成
 
 核心定义:
 
 > **会议 = 人机协同过程**  
 > **VPBuddy = 会议中的 AI 协同执行系统**
+> **VPBuddy = Hermes Agent 之上的人机协同会议应用层**
 
 ---
 
