@@ -72,3 +72,4 @@ _site/
 *.sqlite3
 data/
 *.parquet
+docs/PHASE2_TEST/
