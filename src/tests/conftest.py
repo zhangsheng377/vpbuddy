@@ -1,10 +1,30 @@
-"""GPU 端 torchaudio 2.11 缺 AudioMetaData 时的 monkey-patch.
+"""GPU pytest conftest — 4 个关键 monkey-patch + 离线默认
 
-pyannote.audio 3.3.2 在 import 时引用 `torchaudio.AudioMetaData` 作为 type annotation,
-torchaudio 2.9+ 才有这个类。我们装的是 2.11 但因为某种原因没暴露(可能 wheel 不全)。
+(1) torchaudio.AudioMetaData / list_audio_backends 缺失注入(pyannote 3.3.2 兼容)
+(2) torch.load weights_only=False 默认(pyannote 老 checkpoint 兼容)
+(3) torch.serialization.add_safe_globals(白名单 pyannote 类)
+(4) huggingface_hub.hf_hub_download: use_auth_token → token(HF 1.20+ 兼容)
 
-运行时不需要 AudioMetaData,只是 type checker。注入一个 dummy class 让 import 通过。
+(5) 【2026-06-22 新增】默认设 HF_HUB_OFFLINE=1 + TRANSFORMERS_OFFLINE=1 —
+    sentence-transformers 加载模型时,huggingface_hub 即使有本地 cache 也会
+    向 HF endpoint HEAD 请求验证最新版,可能解析到 facebookresearch 的 AS
+    (AS32934 = Meta,IP 段 69.63.186.0/24 + 2a03:2880::/32 复用于多家),
+    触发"卡 53 分钟"假死。强制离线 + 本地 cache 后,模型直接走 cache 不联网。
+    详见 docs/部署/踩坑记录.md §19。
+
+(6) 【2026-06-22 新增】默认设 RUN_GPU_INTEGRATION=1 —
+    test_engine.py 3 个集成测试默认 skip("需要 GPU"),GPU 端必须显式启用。
 """
+from __future__ import annotations
+import os
+
+# === 关键 (5): 默认离线,模型全走 cache ===
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
+# === 关键 (6): GPU 端默认跑集成测试 ===
+os.environ.setdefault("RUN_GPU_INTEGRATION", "1")
+
 import torchaudio
 
 if not hasattr(torchaudio, "AudioMetaData"):
