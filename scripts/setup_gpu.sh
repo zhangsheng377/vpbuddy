@@ -82,12 +82,15 @@ pip install --quiet \
     "torchaudio>=2.5,<3" \
     "pyannote-audio>=3.3,<4" \
     "pyannote-core>=6.0,<7" \
-    "funasr>=1.1.9,<2" \
+    "funasr>=1.1.9,<1.2" \
     "modelscope>=1.20,<2" \
     "faster-whisper>=1.0,<2" \
     "huggingface_hub>=1.20,<2" \
     "sqlite-vec" \
-    "numpy>=2.0,<3"
+    "numpy>=2.0,<3" \
+    "pydub" \
+    "onnx" \
+    "onnxconverter_common"
 
 # === Step 5: 下载模型 ===
 echo_step "Step 5/6: 下载模型(国内镜像 ~25MB/s,约 3GB)..."

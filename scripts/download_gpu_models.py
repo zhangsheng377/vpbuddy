@@ -4,24 +4,28 @@
 设计原则:
 - 模型**不进 git 仓**(3GB+),只在脚本里记录"从哪下 + 怎么改"。
 - 优先 ModelScope 镜像(国内 25MB/s,免翻墙),fallback HuggingFace。
+- **重要**:funasr 1.1.18 用短名(`paraformer-zh`/`fsmn-vad`/`ct-punc`/`cam++`)
+  不能用完整 ModelScope repo id(`iic/SenseVoiceSmall`)。详见 docs/部署/踩坑记录.md §10。
 - 模型按用途分类:
 
   ASR(自动语音识别):
-    - iic/SenseVoiceSmall           893MB  中英粤日韩 多语种,带 emotion+event
-    - iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch
-                                      944MB  中文长音频,带时间戳
+    - paraformer-zh (ModelScope: iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch)
+                                     944MB  中文长音频,带时间戳
+    - sensevoice-small (ModelScope: iic/SenseVoiceSmall)     893MB  多语种,带 emotion+event
 
   Speaker(说话人):
-    - iic/speech_campplus_sv_zh-cn_16k-common    33MB   说话人 embedding
-    - iic/speech_fsmn_vad_zh-cn-16k-common-pytorch  40MB  语音活动检测
+    - cam++ (ModelScope: iic/speech_campplus_sv_zh-cn_16k-common)   33MB  说话人 embedding
+
+  VAD:
+    - fsmn-vad (ModelScope: iic/speech_fsmn_vad_zh-cn-16k-common-pytorch)  40MB
+
+  Sentence(标点):
+    - ct-punc (ModelScope: iic/punc_ct-transformer_zh-cn-common-vocab272727-pytorch)  1.2GB
 
   Pyannote(说话人分离):
     - pyannote/segmentation-3.0                  60MB   切片分割
     - pyannote/speaker-diarization-3.1          5KB yaml pipeline 配置
     - pyannote/wespeaker-voxceleb-resnet34-LM   100MB  embedding
-
-  Sentence(标点 + 句切):
-    - iic/punc_ct-transformer_zh-cn-common-vocab272727-pytorch  1.2GB
 
 - 全部下载到 ~/.cache/vpbuddy_models/ 本地仓库,然后手工构建 HF 缓存布局
   (因为 pyannote 3.3.2 + HF 1.20.1 不兼容,需 hack — 见 docs/部署/踩坑记录.md)
@@ -40,17 +44,24 @@ HF_CACHE_DIR = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingf
 
 # (model_id, type, target_relative_path, description)
 # type: 'ms' = ModelScope, 'hf' = HuggingFace, 'hf_link' = HF 但本地已有 .bin
+#
+# funasr 1.1.18 短名 → ModelScope 完整 id 对照:
+#   paraformer-zh   → iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch
+#   sensevoice-small → iic/SenseVoiceSmall
+#   fsmn-vad        → iic/speech_fsmn_vad_zh-cn-16k-common-pytorch
+#   ct-punc         → iic/punc_ct-transformer_zh-cn-common-vocab272727-pytorch
+#   cam++           → iic/speech_campplus_sv_zh-cn_16k-common
 MODELSPECS = [
     # === ASR ===
-    ("iic/SenseVoiceSmall", "ms", "asr/SenseVoiceSmall", "SenseVoice 多语种 ASR"),
     ("iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
-     "ms", "asr/paraformer-zh", "Paraformer 中文长音频 ASR"),
+     "ms", "asr/paraformer-zh", "Paraformer 中文长音频 ASR (短名 paraformer-zh)"),
+    ("iic/SenseVoiceSmall", "ms", "asr/SenseVoiceSmall", "SenseVoice 多语种 ASR (短名 sensevoice-small)"),
     # === Speaker + VAD ===
-    ("iic/speech_campplus_sv_zh-cn_16k-common", "ms", "speaker/campplus", "CampPlus 说话人 embedding"),
-    ("iic/speech_fsmn_vad_zh-cn-16k-common-pytorch", "ms", "vad/fsmn", "VAD 语音活动检测"),
+    ("iic/speech_campplus_sv_zh-cn_16k-common", "ms", "speaker/campplus", "CampPlus 说话人 embedding (短名 cam++)"),
+    ("iic/speech_fsmn_vad_zh-cn-16k-common-pytorch", "ms", "vad/fsmn", "VAD 语音活动检测 (短名 fsmn-vad)"),
     # === Punctuation ===
     ("iic/punc_ct-transformer_zh-cn-common-vocab272727-pytorch",
-     "ms", "punc/ct-transformer", "中文标点恢复"),
+     "ms", "punc/ct-transformer", "中文标点 (短名 ct-punc)"),
     # === Pyannote (用本地已下载版本) ===
     # 这些是 pyannote 用的,必须按 HF cache 布局放才能用 pyannote 3.x API
     # 见 docs/部署/踩坑记录.md "pyannote + HF 兼容性"
