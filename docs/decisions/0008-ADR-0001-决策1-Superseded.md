@@ -43,19 +43,26 @@ ADR-0001 决策 2-5 (6 步拆分 / 单租户 / MVP 私有 / 本地存储) **继�
 **原**: "Step 5: 飞书妙记会后校准 + 双源融合"(ADR-0004 §MVP 6 步拆分表)
 **新**: **MVP 6 步 → 5 步**。Step 5 整段删除,说话人校准改人工/stt_map 填入。
 
-### 3. 代码现状(不删,标 obsolete)
+### 3. 代码现状(全部删除)
 
-下列代码作为历史/YAGNI 元数据保留,**功能上不调用**:
+下列代码作为历史/YAGNI 价值低(飞书特定逻辑,跟 ADR-0004 自接架构无关),**全部删除**:
 
-| 文件 | 状态 |
+| 文件 | 处理 |
 |---|---|
-| `src/vpbuddy/miaoji_calibration.py` | 标 obsolete,保留 mock 模式用于测试 |
-| `src/vpbuddy/platforms.py` FeishuAdapter | 标 YAGNI 元数据,保留 metadata 测试 |
-| `src/vpbuddy/state.py` Platform.FEISHU enum | 默认值保留(无功能影响) |
-| `src/tests/test_miaoji_calibration.py` | 保留 mock 测试 |
-| `src/tests/test_platforms.py` | 保留 adapter metadata 测试 |
+| `src/vpbuddy/miaoji_calibration.py` (317 行) | **删** |
+| `src/tests/test_miaoji_calibration.py` (5 测试) | **删** |
+| `src/vpbuddy/platforms.py` FeishuAdapter | **删**(其他 3 平台 adapter 保留作 YAGNI) |
+| `src/vpbuddy/state.py` `Platform.FEISHU` | **改**为 `Platform.LOCAL` (默认),`ZOOM` 改名 `WECOM` |
+| `src/tests/test_platforms.py` feishu 测试 (3 个) | **删** |
+| `src/tests/test_state.py` Platform.FEISHU | **改** Platform.LOCAL |
+| `src/tests/test_sub_session.py` Platform.FEISHU | **改** Platform.LOCAL |
+| `src/vpbuddy/README.md` 飞书引用 (3 处) | **改**为 LOCAL + Superseded 标记 |
 
-**未来清理时机**: 真有多平台需求时,这些代码会被重新启用(不是 YAGNI 删,只是 dormant)。
+**执行日期**: 2026-06-21 commit `5048936` (8 files, +29/-515 行)
+
+**验证**: GPU pytest 75 passed, 3 skipped(从 89 减 14 个飞书相关测试,符合预期)
+
+**其他 3 平台 adapter** (Tencent/DingTalk/WeCom): 保留作 YAGNI,**未来真有多平台客户时再启用**(低优先级)。
 
 ### 4. 文档同步
 
