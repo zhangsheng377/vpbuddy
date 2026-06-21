@@ -2,364 +2,225 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>VPBuddy Demo v1 · PHASE3_MEETING_REAL</title>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<title>VPBuddy · PHASE3_MEETING_REAL · 真会议端到端 demo · v2</title>
 <style>
-  :root{
-    --bg:#0e1116; --panel:#161b22; --border:#2a3038;
-    --text:#e6edf3; --muted:#8b949e;
-    --accent:#58a6ff; --green:#3fb950; --orange:#d29922; --red:#f85149;
-    --feishu:#3370ff; --dingtalk:#1677ff; --wecom:#00c853;
+  :root {
+    --bg: #0a0e1a; --panel: #131826; --border: #2a3142;
+    --text: #e6e9ef; --muted: #8b95a3; --accent: #60a5fa;
+    --ok: #22c55e; --warn: #eab308; --danger: #ef4444;
+    --s0: #ef4444; --s1: #f59e0b; --s2: #10b981;
   }
-  *{box-sizing:border-box;margin:0;padding:0;}
-  body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;font-size:14px;line-height:1.55;}
-  header{padding:14px 24px;border-bottom:1px solid var(--border);background:#0b0e13;display:flex;align-items:center;justify-content:space-between;}
-  header .title{font-weight:600;font-size:15px;}
-  header .meta{color:var(--muted);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}
-  .badge{display:inline-block;padding:2px 8px;border-radius:10px;background:#1f6feb33;color:var(--accent);font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;margin-left:8px;}
-  main{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:14px;max-width:1600px;margin:0 auto;}
-  section{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:14px;}
-  section h2{font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px;display:flex;align-items:center;gap:8px;}
-  section h2 .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);}
-  section.live h2 .dot{background:var(--red);animation:pulse 1.4s infinite;}
-  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.3;}}
-
-  /* ===== 会议实况 ===== */
-  .meeting-stats{display:flex;gap:14px;margin-bottom:10px;font-size:12px;color:var(--muted);flex-wrap:wrap;}
-  .meeting-stats span strong{color:var(--text);font-weight:500;}
-  .transcript{height:240px;overflow-y:auto;background:#0b0e13;border:1px solid var(--border);border-radius:6px;padding:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;}
-  .transcript .msg{margin-bottom:6px;display:flex;gap:8px;align-items:flex-start;opacity:0;animation:fadein 0.4s forwards;}
-  @keyframes fadein{to{opacity:1;}}
-  .transcript .who{font-weight:600;min-width:64px;flex-shrink:0;}
-  .transcript .who.s0{color:#ff7b72;}
-  .transcript .who.s1{color:#79c0ff;}
-  .transcript .who.s2{color:#d2a8ff;}
-  .transcript .ts{color:var(--muted);font-size:11px;}
-  .transcript .text{flex:1;color:var(--text);}
-
-  /* ===== 协同编辑 ===== */
-  .collab-doc{background:#0b0e13;border:1px solid var(--border);border-radius:6px;padding:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;min-height:240px;position:relative;}
-  .collab-doc .line{padding:2px 4px;border-radius:3px;position:relative;}
-  .collab-doc .line .cursor{display:inline-block;width:2px;height:16px;background:#ff7b72;margin-left:1px;animation:blink 1s infinite;vertical-align:middle;}
-  .collab-doc .line .cursor.c1{background:#79c0ff;}
-  .collab-doc .line .cursor.c2{background:#d2a8ff;}
-  @keyframes blink{0%,49%{opacity:1;}50%,100%{opacity:0;}}
-  .collab-doc .who-tag{position:absolute;right:6px;font-size:10px;color:var(--muted);background:#161b22;padding:1px 6px;border-radius:8px;}
-  .collab-bar{display:flex;gap:8px;margin-top:10px;font-size:11px;color:var(--muted);flex-wrap:wrap;}
-  .collab-bar .pill{background:#0b0e13;border:1px solid var(--border);padding:3px 8px;border-radius:10px;}
-  .collab-bar .pill .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--green);margin-right:5px;}
-  .crdt-merge{margin-top:10px;padding:8px;background:#0b0e13;border:1px dashed #2a3038;border-radius:6px;font-size:11.5px;color:var(--muted);}
-
-  /* ===== 通知 ===== */
-  .notify-stack{position:relative;min-height:240px;background:#0b0e13;border:1px solid var(--border);border-radius:6px;padding:8px;overflow:hidden;}
-  .toast{position:absolute;left:8px;right:8px;padding:10px 12px;border-radius:6px;font-size:12.5px;border-left:4px solid;opacity:0;transform:translateX(-20px);transition:all 0.3s;background:#161b22;}
-  .toast.show{opacity:1;transform:translateX(0);}
-  .toast .head{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;font-weight:600;}
-  .toast .body{color:var(--muted);}
-  .toast.feishu{border-color:var(--feishu);}
-  .toast.feishu .head{color:var(--feishu);}
-  .toast.dingtalk{border-color:var(--dingtalk);}
-  .toast.dingtalk .head{color:var(--dingtalk);}
-  .toast.wecom{border-color:var(--wecom);}
-  .toast.wecom .head{color:var(--wecom);}
-  .toast .time{font-size:11px;color:var(--muted);font-weight:400;}
-
-  /* ===== RBAC ===== */
-  .rbac-table{width:100%;border-collapse:collapse;font-size:12.5px;}
-  .rbac-table th,.rbac-table td{padding:8px 10px;border:1px solid var(--border);text-align:center;}
-  .rbac-table th{background:#0b0e13;color:var(--muted);font-weight:500;}
-  .rbac-table td.role{background:#0b0e13;font-weight:600;text-align:left;}
-  .rbac-table .yes{color:var(--green);}
-  .rbac-table .no{color:var(--red);}
-  .sso-row{margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;}
-  .sso-pill{background:#0b0e13;border:1px solid var(--border);padding:6px 12px;border-radius:14px;font-size:11.5px;}
-  .sso-pill.primary{border-color:var(--accent);color:var(--accent);}
-
-  /* ===== 导出 ===== */
-  .export-demo{background:#0b0e13;border:1px solid var(--border);border-radius:6px;padding:12px;min-height:240px;display:flex;flex-direction:column;gap:10px;}
-  .export-row{display:flex;gap:8px;align-items:center;font-size:12.5px;}
-  .btn{background:var(--accent);color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;}
-  .btn:disabled{background:#2a3038;cursor:not-allowed;}
-  .btn.ghost{background:transparent;border:1px solid var(--border);color:var(--text);}
-  .progress{height:6px;background:#0b0e13;border:1px solid var(--border);border-radius:3px;overflow:hidden;}
-  .progress .bar{height:100%;background:var(--green);width:0%;transition:width 0.3s;}
-  .file-card{background:#161b22;border:1px solid var(--border);border-radius:6px;padding:10px;display:flex;justify-content:space-between;align-items:center;margin-top:auto;}
-  .file-card .name{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;}
-  .file-card .meta{font-size:11px;color:var(--muted);}
-
-  /* ===== 架构图 ===== */
-  .arch-panel{grid-column:1 / -1;}
-  .mermaid{background:#0b0e13;padding:16px;border-radius:6px;overflow-x:auto;}
-
-  .legend{font-size:11px;color:var(--muted);margin-top:8px;text-align:right;}
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: var(--bg); color: var(--text); line-height: 1.55; }
+  header { padding: 28px 40px 20px; border-bottom: 1px solid var(--border);
+           background: linear-gradient(180deg, #1a2029, var(--bg)); }
+  header h1 { margin:0 0 6px; font-size: 26px; font-weight: 600; }
+  header .meta { color: var(--muted); font-size: 13px; font-family: ui-monospace, "SF Mono", monospace; }
+  .badge { display: inline-block; padding: 2px 8px; margin-right: 6px; border-radius: 4px;
+           font-size: 11px; font-weight: 600; background: var(--panel); border: 1px solid var(--border); }
+  .badge.v { color: var(--accent); border-color: var(--accent); }
+  .badge.ok { color: var(--ok); border-color: var(--ok); }
+  main { max-width: 1280px; margin: 0 auto; padding: 24px 40px 60px; }
+  section { margin-bottom: 40px; }
+  h2 { font-size: 18px; font-weight: 600; margin: 0 0 16px; padding-bottom: 8px;
+       border-bottom: 1px solid var(--border); color: var(--text); }
+  h2 .num { color: var(--accent); margin-right: 8px; font-family: ui-monospace, monospace; }
+  .panel { background: var(--panel); border: 1px solid var(--border);
+           border-radius: 8px; padding: 20px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+          padding: 16px; text-align: center; }
+  .stat .v { font-size: 28px; font-weight: 700; color: var(--accent);
+             font-family: ui-monospace, "SF Mono", monospace; }
+  .stat .l { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .stat.warn .v { color: var(--warn); }
+  .stat.danger .v { color: var(--danger); }
+  .stat.ok .v { color: var(--ok); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 8px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; }
+  .spk-tag { display: inline-block; padding: 1px 6px; border-radius: 3px;
+             font-size: 10px; font-weight: 600; color: #000; }
+  .spk-00 { background: var(--s0); }
+  .spk-01 { background: var(--s1); }
+  .spk-02 { background: var(--s2); color: #fff; }
+  .priority-tag { display: inline-block; padding: 1px 6px; border-radius: 3px;
+                  font-size: 10px; font-weight: 600; text-transform: uppercase; }
+  .p-high { background: var(--danger); color: #000; }
+  .p-medium { background: var(--warn); color: #000; }
+  .p-low { background: var(--muted); color: #000; }
+  .callout { border-left: 4px solid var(--warn); background: rgba(234, 179, 8, 0.06);
+             padding: 14px 18px; border-radius: 4px; margin-top: 12px; }
+  .callout.danger { border-color: var(--danger); background: rgba(239, 68, 68, 0.06); }
+  .callout.info { border-color: var(--accent); background: rgba(96, 165, 250, 0.06); }
+  .callout h4 { margin: 0 0 6px; font-size: 14px; color: var(--warn); }
+  .callout.danger h4 { color: var(--danger); }
+  .callout.info h4 { color: var(--accent); }
+  code { background: #11151a; padding: 1px 5px; border-radius: 3px;
+         font-family: ui-monospace, "SF Mono", monospace; font-size: 12px;
+         color: var(--accent); }
+  .muted { color: var(--muted); }
+  footer { text-align: center; padding: 20px; color: var(--muted); font-size: 11px;
+           border-top: 1px solid var(--border); margin-top: 40px; }
 </style>
 </head>
 <body>
 
 <header>
-  <div>
-    <span class="title">VPBuddy · Demo</span>
-    <span class="badge">v1</span>
-    <span class="badge">PHASE3_MEETING_REAL</span>
+  <h1>VPBuddy · PHASE3_MEETING_REAL — 真会议端到端 demo</h1>
+  <div class="meta">
+    v2 · 最后更新 2026-06-21T15:30+08:00 · session_id: <code>meeting:PHASE3_MEETING_REAL:demo</code> · 来源: 150s 3 人 TTS 真音频 → GPU 转写
   </div>
-  <div class="meta">last update: 2026-06-21T14:48+08:00 · session: meeting:PHASE3_MEETING_REAL:demo</div>
+  <div style="margin-top:10px">
+    <span class="badge v">v2</span>
+    <span class="badge ok">RTF 0.009 (110× 实时)</span>
+    <span class="badge ok">3 说话人精准分出</span>
+    <span class="badge">53 timestamped 句子</span>
+    <span class="badge" style="color:var(--warn);border-color:var(--warn)">VPBUDDY_DIRECT 模式 ✅</span>
+  </div>
 </header>
 
 <main>
 
-  <!-- ===== 会议实况 ===== -->
-  <section class="live">
-    <h2><span class="dot"></span>会议实况 · 飞书妙记转写</h2>
-    <div class="meeting-stats">
-      <span>会议 <strong>PHASE3_MEETING_REAL</strong></span>
-      <span>说话人 <strong>3</strong></span>
-      <span>识别引擎 <strong>SenseVoice+cam++</strong></span>
-      <span>RTF <strong>0.007</strong></span>
+<!-- ============ 1. 说话人统计 ============ -->
+<section>
+  <h2><span class="num">01</span>说话人分布(150s 真会议)</h2>
+  <div class="grid-4">
+    <div class="stat">
+      <div class="v">3</div>
+      <div class="l">真实说话人</div>
     </div>
-    <div class="transcript" id="transcript"></div>
-    <div class="legend">自动播放 · 每次刷新会重播</div>
-  </section>
-
-  <!-- ===== 协同编辑 ===== -->
-  <section>
-    <h2><span class="dot"></span>协同编辑 · yjs CRDT</h2>
-    <div class="collab-doc" id="collabDoc"></div>
-    <div class="collab-bar">
-      <span class="pill"><span class="dot"></span>3 人在线</span>
-      <span class="pill">快照策略 50 ops / 5 min</span>
-      <span class="pill">PG JSON 持久化</span>
+    <div class="stat ok">
+      <div class="v">47%</div>
+      <div class="l">周华健(产品总监)占比</div>
     </div>
-    <div class="crdt-merge" id="crdtMerge">⏳ 等待协同事件…</div>
-  </section>
+    <div class="stat">
+      <div class="v">31%</div>
+      <div class="l">张胜东(VP)占比</div>
+    </div>
+    <div class="stat">
+      <div class="v">22%</div>
+      <div class="l">李丹(设计师)占比</div>
+    </div>
+  </div>
+  <div class="panel" style="margin-top:16px">
+    <p style="margin-top:0"><strong>说话人映射</strong>(已校准到真名):</p>
+    <ul>
+      <li><span class="spk-tag spk-00">S00</span> <strong>张胜东</strong> — VP — 讲 MVP 目标 + 决策</li>
+      <li><span class="spk-tag spk-01">S01</span> <strong>周华健</strong> — 产品总监 — 讲技术选型(yjs/PG JSON)+ 风险</li>
+      <li><span class="spk-tag spk-02">S02</span> <strong>李丹</strong> — 设计师 — 讲三平台推送 + XLSX 导出</li>
+    </ul>
+    <p class="muted" style="font-size:12px;margin-bottom:0">
+      上次 PHASE2_AUDIO_REAL(歌曲测试)聚出 8 个 speaker,这次会议 3 说话人<strong>精准分出</strong>(campplus 校准成功)。
+    </p>
+  </div>
+</section>
 
-  <!-- ===== 通知 ===== -->
-  <section>
-    <h2><span class="dot"></span>跨平台通知 · Event Bus</h2>
-    <div class="notify-stack" id="notifyStack"></div>
-    <div class="legend">飞书 WS · 钉钉 Stream · 企微回调 · 指数退避重试</div>
-  </section>
+<!-- ============ 2. 累积摘要 ============ -->
+<section>
+  <h2><span class="num">02</span>会议累积摘要(3 真名 speaker · 7 REQ · 3 GOAL · 5 FEAT · 6 RISK · 3 QUE)</h2>
+  <div class="grid-2">
+    <div class="panel">
+      <h3 style="margin-top:0;color:var(--accent)">需求(7 条)</h3>
+      <table>
+        <thead><tr><th style="width:60px">优先级</th><th>ID</th><th>内容</th><th style="width:90px">来源</th></tr></thead>
+        <tbody>
+          <tr><td><span class="priority-tag p-Priority.HIGH">Priority.HIGH</span></td><td><code>REQ-780B14</code></td><td>实时协同编辑: 基于 CRDT 算法(yjs),支持 10 人并发</td><td>周华健</td></tr><tr><td><span class="priority-tag p-Priority.HIGH">Priority.HIGH</span></td><td><code>REQ-565948</code></td><td>RBAC 权限管理: 角色 + 资源 + 操作 三元组</td><td>周华健</td></tr><tr><td><span class="priority-tag p-Priority.HIGH">Priority.HIGH</span></td><td><code>REQ-0D5DB7</code></td><td>跨平台消息推送: 飞书 WebSocket + 钉钉 Stream + 企微回调</td><td>周华健</td></tr><tr><td><span class="priority-tag p-Priority.MEDIUM">Priority.MEDIUM</span></td><td><code>REQ-1AD367</code></td><td>协同编辑历史回溯 (P2, MVP 先做实时)</td><td>李丹</td></tr><tr><td><span class="priority-tag p-Priority.MEDIUM">Priority.MEDIUM</span></td><td><code>REQ-302783</code></td><td>API 限流 100 QPS 每租户 (Redis token bucket)</td><td>张胜东</td></tr><tr><td><span class="priority-tag p-Priority.LOW">Priority.LOW</span></td><td><code>REQ-B82FAC</code></td><td>审计日志保留 90 天 (P2 可配置)</td><td>张胜东</td></tr><tr><td><span class="priority-tag p-Priority.MEDIUM">Priority.MEDIUM</span></td><td><code>REQ-B12E21</code></td><td>Excel 导出报表: xlsx + 字段映射配置 (MVP 内做)</td><td>李丹</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="panel">
+      <h3 style="margin-top:0;color:var(--accent)">目标 + 功能(3 + 5)</h3>
+      <h4 style="color:var(--muted);font-size:13px;margin:0 0 8px">目标(Goals)</h4>
+      <ul>
+        <li><code>GOAL-FCC7F7</code> — Q3 末上线 MVP,目标 50 家种子客户。首月日活 1000,周留存 60%。</li><li><code>GOAL-5FB2BA</code> — 私有化部署支持(单租户),所有组件可镜像化。</li><li><code>GOAL-CEDF6C</code> — 集成飞书妙记做会议转写 → 即本次端到端测试的目标。</li>
+      </ul>
+      <h4 style="color:var(--muted);font-size:13px;margin:16px 0 8px">功能(Features)</h4>
+      <ul>
+        <li><code>FEAT-1763F9</code> — SSO: OIDC + SAML 2.0,推荐 Azure AD (国内出海企业首选)</li><li><code>FEAT-2F8528</code> — 协同编辑: CRDT (yjs@13.6) + WebSocket,快照策略 50 ops 或 5 分钟</li><li><code>FEAT-BBD14D</code> — 存储后端: PostgreSQL JSON (用现有 PG 集群,不引入新组件)</li><li><code>FEAT-BAB8DB</code> — Excel 导出: openpyxl + 字段映射,S3 临时链接 24h 有效</li><li><code>FEAT-C93459</code> — 通知: Event Bus + 三平台 Adapter 抽象,重试策略指数退避</li>
+      </ul>
+    </div>
+  </div>
+</section>
 
-  <!-- ===== RBAC ===== -->
-  <section>
-    <h2><span class="dot"></span>权限管理 · RBAC + SSO</h2>
-    <table class="rbac-table">
+<!-- ============ 3. 风险评估 ============ -->
+<section>
+  <h2><span class="num">03</span>风险评估(6 条)</h2>
+  <div class="panel" style="padding:0">
+    <table>
       <thead>
-        <tr><th>角色 \ 资源</th><th>会议记录</th><th>协同编辑</th><th>导出报表</th><th>审计日志</th></tr>
+        <tr><th style="width:80px">严重度</th><th style="width:100px">ID</th><th>风险</th><th style="width:90px">来源</th></tr>
       </thead>
       <tbody>
-        <tr><td class="role">Admin</td><td class="yes">CRUD</td><td class="yes">CRUD</td><td class="yes">CRUD</td><td class="yes">R</td></tr>
-        <tr><td class="role">Editor</td><td class="yes">CRU</td><td class="yes">CRU</td><td class="yes">CR</td><td class="no">—</td></tr>
-        <tr><td class="role">Reviewer</td><td class="yes">R</td><td class="yes">R</td><td class="yes">R</td><td class="no">—</td></tr>
-        <tr><td class="role">Viewer</td><td class="yes">R</td><td class="yes">R</td><td class="no">—</td><td class="no">—</td></tr>
+        <tr><td><span class="priority-tag p-Priority.MEDIUM">Priority.MEDIUM</span></td><td><code>RISK-07A255</code></td><td>飞书 WebSocket 偶发断连: 30s 心跳 + 重试队列,具体策略待定</td><td>—</td></tr><tr><td><span class="priority-tag p-Priority.MEDIUM">Priority.MEDIUM</span></td><td><code>RISK-33E783</code></td><td>OAuth 第三方限流: Auth Service 内置本地缓存 + 429 退避</td><td>—</td></tr><tr><td><span class="priority-tag p-Priority.MEDIUM">Priority.MEDIUM</span></td><td><code>RISK-2F0662</code></td><td>微信开放平台审核 7-15 天: 提前申请 + 账号密码 fallback</td><td>—</td></tr><tr><td><span class="priority-tag p-Priority.MEDIUM">Priority.MEDIUM</span></td><td><code>RISK-D4D687</code></td><td>CRDT 冲突合并边界情况: yjs 已有保证,边界场景需 case-by-case 测试</td><td>—</td></tr><tr><td><span class="priority-tag p-Priority.MEDIUM">Priority.MEDIUM</span></td><td><code>RISK-9EDDD6</code></td><td>私有化部署模型管理复杂: 单租户镜像化,后续 ADR 细化</td><td>—</td></tr><tr><td><span class="priority-tag p-Priority.MEDIUM">Priority.MEDIUM</span></td><td><code>RISK-F14066</code></td><td>campplus 说话人聚类在歌曲/独唱上聚出多类(本测试歌曲聚出 8 类),真实会议需校准</td><td>—</td></tr>
       </tbody>
     </table>
-    <div class="sso-row">
-      <span class="sso-pill primary">SSO: OIDC + SAML 2.0</span>
-      <span class="sso-pill">推荐: Azure AD</span>
-      <span class="sso-pill">备选: Okta</span>
-      <span class="sso-pill">兜底: 飞书 / 钉钉</span>
-    </div>
-  </section>
+  </div>
+</section>
 
-  <!-- ===== Excel 导出 ===== -->
-  <section>
-    <h2><span class="dot"></span>报表导出 · xlsx</h2>
-    <div class="export-demo">
-      <div class="export-row">
-        <span style="color:var(--muted);font-size:12px;">数据源:</span>
-        <select class="btn ghost" style="background:#0b0e13;">
-          <option>会议记录</option>
-          <option>协同审计</option>
-          <option>通知日志</option>
-        </select>
-        <span style="color:var(--muted);font-size:12px;">字段映射:</span>
-        <span style="font-family:ui-monospace,monospace;font-size:11.5px;">start_at · speakers · duration · tags</span>
-      </div>
-      <div class="export-row">
-        <button class="btn" id="exportBtn">开始导出</button>
-        <span style="color:var(--muted);font-size:11px;" id="exportStatus">点击生成 xlsx,S3 临时链接 24h 有效</span>
-      </div>
-      <div class="progress"><div class="bar" id="exportBar"></div></div>
-      <div id="exportResult"></div>
+<!-- ============ 4. 开放问题 ============ -->
+<section>
+  <h2><span class="num">04</span>开放问题 + 待决策(3 条)</h2>
+  <div class="grid-2">
+    <div class="callout info">
+      <h4>QUE-661567</h4>
+      <p>SSO IdP 选型: 倾向 Azure AD,Okta 备选,Auth0 也行(贵),飞书钉钉补充</p>
+      <p class="muted" style="font-size:12px;margin-bottom:0">来源: —</p>
+    </div><div class="callout info">
+      <h4>QUE-62A0A8</h4>
+      <p>协同编辑后端存储: PostgreSQL JSON 已定(本次评审通过)</p>
+      <p class="muted" style="font-size:12px;margin-bottom:0">来源: —</p>
+    </div><div class="callout info">
+      <h4>QUE-5EE081</h4>
+      <p>飞书 WS 断连重试策略: 指数退避参数?jitter?死信阈值?</p>
+      <p class="muted" style="font-size:12px;margin-bottom:0">来源: —</p>
     </div>
-  </section>
+  </div>
+</section>
 
-  <!-- ===== 架构图 ===== -->
-  <section class="arch-panel">
-    <h2><span class="dot"></span>系统架构</h2>
-    <div class="mermaid">
-flowchart LR
-  subgraph Client[客户端]
-    Web[Web / Mobile<br/>SSO + RBAC]
-  end
-  subgraph Gateway[API 网关]
-    GW[API Gateway<br/>限流 100 QPS/租户]
-  end
-  subgraph Core[核心服务]
-    Auth[Auth Service<br/>OIDC + SAML]
-    Collab[Collab Service<br/>yjs@13.6]
-    Meet[Meeting Service<br/>飞书妙记]
-    Notify[Notification Hub<br/>Event Bus]
-  end
-  subgraph Adapter[通知适配器]
-    FS[飞书 WS]
-    DT[钉钉 Stream]
-    WC[企微回调]
-  end
-  subgraph Data[数据层]
-    PG[(PostgreSQL<br/>JSON 持久化)]
-    Redis[(Redis<br/>Token Bucket)]
-    S3[(S3<br/>xlsx 临时链接)]
-  end
-  Web -->|HTTPS| GW
-  GW --> Auth
-  GW --> Collab
-  GW --> Meet
-  GW --> Notify
-  Notify --> FS
-  Notify --> DT
-  Notify --> WC
-  Collab --> PG
-  Meet --> PG
-  Notify --> Redis
-  Meet --> S3
-  Auth --> PG
+<!-- ============ 5. 第 4 次端到端报告 ============ -->
+<section>
+  <h2><span class="num">05</span>第 4 次端到端 · VPBUDDY_DIRECT 模式</h2>
+  <div class="grid-4">
+    <div class="stat ok">
+      <div class="v">150s</div>
+      <div class="l">真会议音频长度</div>
     </div>
-    <div class="legend">MVP 范围 · 7 REQ · 5 FEAT · 6 RISK</div>
-  </section>
+    <div class="stat ok">
+      <div class="v">1.4s</div>
+      <div class="l">GPU 处理时间</div>
+    </div>
+    <div class="stat">
+      <div class="v">53</div>
+      <div class="l">timestamped 句子</div>
+    </div>
+    <div class="stat ok">
+      <div class="v">6</div>
+      <div class="l">本轮重新生成 docs</div>
+    </div>
+  </div>
+  <div class="callout info" style="margin-top:16px">
+    <h4>第 4 次端到端亮点</h4>
+    <ul>
+      <li><strong>VPBUDDY_DIRECT=1</strong> 新模式:controller 渲染 prompt 给主 session,主 session 用 <code>write_file</code> 工具直接写盘</li>
+      <li>解决了"hermes sub-session 没 file 写工具"的老问题</li>
+      <li>commit <code>1087313</code> 推 GitHub(13 文件 / 2652 行)</li>
+      <li>3 说话人真名映射生效(张胜东 / 周华健 / 李丹)</li>
+    </ul>
+  </div>
+  <div class="callout" style="margin-top:12px">
+    <h4>老实交代</h4>
+    <p>前 3 次端到端跑的时候,controller 调 <code>hermes chat -q</code> 触发的是新 hermes session(没 write_file 工具),它们只回"无变化"就退出,文件根本没被新写。本版改用 <strong>VPBUDDY_DIRECT</strong> 模式后,主 session 看到 prompt 后用 <code>write_file</code> 工具直接写盘,才真的更新文件。</p>
+  </div>
+</section>
 
 </main>
 
-<script>
-// ===== 1. 会议转写自动播放 =====
-const transcriptEl = document.getElementById('transcript');
-const dialogues = [
-  {s:0, name:'张胜东', text:'MVP Q3 末上线,目标 50 家种子客户。首月日活 1000,周留存 60%。'},
-  {s:1, name:'周华健', text:'协同编辑用 yjs CRDT,后端存 PG JSON,不引入新组件。'},
-  {s:0, name:'张胜东', text:'50 人并发够吗?实时协同这个是头号需求,不能崩。'},
-  {s:1, name:'周华健', text:'yjs@13.6 测过 10 人没问题,生产建议 50 ops 或 5 分钟做一次快照。'},
-  {s:2, name:'李丹',  text:'种子客户那边,飞书钉钉企微三家都得有,不少客户只用企微。'},
-  {s:1, name:'周华健', text:'Event Bus + Adapter 抽象,重试指数退避,死信阈值定 5 次。'},
-  {s:0, name:'张胜东', text:'飞书 WebSocket 偶发断连这个,30s 心跳够不够?'},
-  {s:1, name:'周华健', text:'够,断连进重试队列,jitter 5-30s,死信落库待人工处理。'},
-  {s:2, name:'李丹',  text:'Excel 导出也要,客服报表他们要发给老板看的。'},
-  {s:0, name:'张胜东', text:'好,xlsx MVP 内做,S3 24h 链接,字段映射要可配。'},
-  {s:1, name:'周华健', text:'SSO 我推荐 Azure AD,OIDC + SAML 都支持,出海企业友好。'},
-  {s:0, name:'张胜东', text:'私有化部署这块,单租户能完整镜像化吗?'},
-  {s:1, name:'周华健', text:'能。PG/Redis/所有 worker 全部容器化,后续写 ADR 细化。'},
-  {s:0, name:'张胜东', text:'行,这一轮就这些。RBAC 三元组风险评估完,飞书妙记端到端跑通再说。'},
-];
-function pad(n){return String(n).padStart(2,'0');}
-function nowTs(){
-  const d = new Date(Date.now() - (dialogues.length*7*1000));
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
-let di = 0;
-function pushDialogue(){
-  if(di >= dialogues.length){di = 0; transcriptEl.innerHTML='';}
-  const d = dialogues[di++];
-  const div = document.createElement('div');
-  div.className = 'msg';
-  div.innerHTML = `<span class="who s${d.s}">${d.name}</span><span class="text">${d.text}</span>`;
-  transcriptEl.appendChild(div);
-  transcriptEl.scrollTop = transcriptEl.scrollHeight;
-}
-pushDialogue();
-setInterval(pushDialogue, 3200);
-
-// ===== 2. 协同编辑 CRDT 演示 =====
-const collabEl = document.getElementById('collabDoc');
-const crdtEl = document.getElementById('crdtMerge');
-const lines = [
-  {txt:'# Q3 OKR 评审', who:null},
-  {txt:'- MVP 上线时间:Q3 末', who:0},
-  {txt:'- 种子客户:50 家', who:0},
-  {txt:'- 协同编辑:yjs CRDT ✓', who:1},
-  {txt:'- 存储:PG JSON ✓', who:1},
-  {txt:'- 通知:飞书+钉钉+企微', who:2},
-  {txt:'  - 飞书 WS: 30s 心跳', who:1},
-  {txt:'  - 钉钉 Stream: 已对接', who:1},
-  {txt:'  - 企微回调: 审核中 (7-15d)', who:1},
-  {txt:'- 导出:xlsx MVP 内做', who:2},
-];
-let editStep = 0;
-function renderCollab(){
-  const cur = editStep % 3;
-  const html = lines.map((l,i)=>{
-    const cursor = (i === lines.length-1 && editStep < 8) ? `<span class="cursor c${cur}"></span>` : '';
-    const tag = l.who !== null ? `<span class="who-tag" style="color:${['#ff7b72','#79c0ff','#d2a8ff'][l.who]}">${['张胜东','周华健','李丹'][l.who]}</span>` : '';
-    return `<div class="line">${l.txt}${cursor}${tag}</div>`;
-  }).join('');
-  collabEl.innerHTML = html;
-  if(editStep === 3) crdtEl.innerHTML = '🔀 <strong style="color:#79c0ff;">周华健</strong> 与 <strong style="color:#ff7b72;">张胜东</strong> 同时编辑第 4 行 → yjs 自动合并,无冲突。';
-  if(editStep === 6) crdtEl.innerHTML = '💾 触发快照 (50 ops / 5 min) → 写入 <code>meeting_docs.snapshot</code> (PG JSON)';
-  if(editStep === 9) crdtEl.innerHTML = '✅ 协同会话关闭,10 次 op diff 合并完成,历史可回溯 (P2)';
-}
-renderCollab();
-setInterval(()=>{ editStep++; renderCollab(); }, 3000);
-
-// ===== 3. 通知 toast =====
-const notifyEl = document.getElementById('notifyStack');
-const notifications = [
-  {type:'feishu', icon:'飞书', head:'【飞书】会议纪要已生成', body:'PHASE3_MEETING_REAL · 3 位发言人 · 47 分钟', time:'刚刚'},
-  {type:'dingtalk', icon:'钉钉', head:'【钉钉】MVP 任务已同步', body:'Q3 末上线 · 5 个子任务 · @周华健 @李丹', time:'刚刚'},
-  {type:'wecom', icon:'企微', head:'【企微】报表导出完成', body:'会议记录.xlsx · S3 链接 24h 有效', time:'刚刚'},
-  {type:'feishu', icon:'飞书', head:'【飞书】SSO 登录提醒', body:'张胜东 通过 Azure AD 登录 (OIDC)', time:'刚刚'},
-];
-let ni = 0;
-function pushNotify(){
-  const n = notifications[ni % notifications.length];
-  const div = document.createElement('div');
-  div.className = `toast ${n.type}`;
-  div.style.top = `${(ni % 4) * 58 + 8}px`;
-  div.innerHTML = `<div class="head">${n.head}<span class="time">${n.time}</span></div><div class="body">${n.body}</div>`;
-  notifyEl.appendChild(div);
-  requestAnimationFrame(()=> div.classList.add('show'));
-  setTimeout(()=>{ div.classList.remove('show'); setTimeout(()=> div.remove(), 400); }, 4500);
-  ni++;
-}
-pushNotify();
-setInterval(pushNotify, 5500);
-
-// ===== 4. Excel 导出 =====
-const exportBtn = document.getElementById('exportBtn');
-const exportBar = document.getElementById('exportBar');
-const exportStatus = document.getElementById('exportStatus');
-const exportResult = document.getElementById('exportResult');
-exportBtn.addEventListener('click', ()=>{
-  exportBtn.disabled = true;
-  exportBar.style.width = '0%';
-  exportResult.innerHTML = '';
-  let p = 0;
-  exportStatus.textContent = '正在生成 xlsx ...';
-  const steps = [
-    {p:20, t:'查询会议数据 (PG)'},
-    {p:50, t:'应用字段映射 (openpyxl)'},
-    {p:80, t:'上传 S3,生成临时链接'},
-    {p:100, t:'完成'},
-  ];
-  let si = 0;
-  const iv = setInterval(()=>{
-    if(si >= steps.length){
-      clearInterval(iv);
-      exportBtn.disabled = false;
-      exportStatus.textContent = '导出完成';
-      exportResult.innerHTML = `<div class="file-card"><div><div class="name">📄 会议记录_2026Q3.xlsx</div><div class="meta">2.3 MB · S3 链接 24h · sha256:8f3a…c2e1</div></div><button class="btn ghost" onclick="this.textContent='已下载'">下载</button></div>`;
-      return;
-    }
-    const s = steps[si++];
-    exportBar.style.width = s.p + '%';
-    exportStatus.textContent = s.t;
-  }, 700);
-});
-
-// ===== 5. Mermaid =====
-mermaid.initialize({startOnLoad:true, theme:'dark', themeVariables:{
-  primaryColor:'#161b22', primaryTextColor:'#e6edf3', primaryBorderColor:'#58a6ff',
-  lineColor:'#8b949e', secondaryColor:'#0b0e13', tertiaryColor:'#161b22',
-  fontFamily:'ui-monospace,SFMono-Regular,Menlo,monospace'
-}});
-</script>
+<footer>
+  VPBuddy v2 · VPBUDDY_DIRECT 模式 · 端到端真会议测试 · YAGNI
+</footer>
 
 </body>
 </html>
