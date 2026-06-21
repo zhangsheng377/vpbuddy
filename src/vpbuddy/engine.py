@@ -120,7 +120,7 @@ class TranscriptionEngine:
                 confidence=seg.confidence,
                 language=seg.language,
                 speaker_id=speaker_id,
-                speaker_name=None,  # Step 5 飞书妙记校准
+                speaker_name=None,  # 后续人工/stt_map 填入(ADR-0008 Superseded: 不再依赖飞书妙记)
                 source="whisper+pyannote",
             ))
 

@@ -1,21 +1,21 @@
 # ADR-0004: MVP Step 2 — Whisper + pyannote 链路
 
-- **状态**: Accepted
-- **日期**: 2026-06-20
+- **状态**: ⚠️ **部分 Superseded** — Step 5(飞书妙记会后校准)在 2026-06-21 由 [ADR-0008](./0008-ADR-0001-决策1-Superseded.md) 标记 Superseded。Step 1-4 描述继续有效。
+- **日期**: 2026-06-20 (Step 5 在 2026-06-21 Superseded)
 - **作者**: 张胜东 (起草: Hermes)
-- **关联**: [ADR-0001 MVP 选型](./0001-MVP-选型.md) · [ADR-0003 Step 1 YAGNI](./0003-MVP-Step1-YAGNI-review.md) · [架构 v1.16 §4.1](../design/总体架构.md)
+- **关联**: [ADR-0001 MVP 选型](./0001-MVP-选型.md) · [ADR-0003 Step 1 YAGNI](./0003-MVP-Step1-YAGNI-review.md) · [架构 v1.16 §4.1](../design/总体架构.md) · [ADR-0008 决策 1 Superseded](./0008-ADR-0001-决策1-Superseded.md)
 
 ---
 
 ## 背景
 
-VPBuddy MVP 6 步拆分:
+VPBuddy MVP 6 步拆分(2026-06-21 修订: Step 5 飞书妙记校准 由 ADR-0008 Superseded,真实路径是 5 步):
 1. ✅ Step 1: MeetingState + Storage(16 tests passed)
 2. 🎯 **Step 2: Whisper + pyannote 自接音频**(本文档)
 3. ⏳ Step 3: 后台交付物生成
-4. ⏳ Step 4: 4 窗口 UI
-5. ⏳ Step 5: 飞书妙记会后校准
-6. ⏳ Step 6: 多平台扩展
+4. ⏳ Step 4: VP steer + 4 窗口 UI
+5. ~~⏳ Step 5: 飞书妙记会后校准~~ ⚠️ **Superseded by ADR-0008**(2026-06-21)— 不需要飞书 input,说话人识别由 pyannote 3.1 本地完成
+6. ⏳ Step 6: 多平台扩展(可选,极低优先级)
 
 **Step 2 的核心问题**:
 - 飞书/腾讯/钉钉的"实时字幕"是**客户端 UI**,**没有开放流式 API 给开发者**(2026-06-20 调研确认)

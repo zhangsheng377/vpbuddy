@@ -4,7 +4,7 @@
 - 不引入 pydantic BaseModel(已经验证 Pydantic 在 Step 1 用,但 transcript 是纯数据输出,用 dataclass 更轻)
 - 不写 BaseProvider 抽象(WhisperProvider 直接是具体类)
 - 不写 streaming/chunking 接口(整文件同步,Step 2.5 再加)
-- speaker_name 默认 None(需人工/Step 5 飞书妙记校准填入)
+- speaker_name 默认 None(后续人工/stt_map 填入;2026-06-21 ADR-0008 Superseded 后,不再依赖飞书妙记)
 """
 from __future__ import annotations
 from dataclasses import dataclass, field, asdict
@@ -47,7 +47,7 @@ class DiarizedSegment:
     language: str = "zh"
     # === 说话人(Step 2 核心新增)===
     speaker_id: str = "SPEAKER_UNKNOWN"  # pyannote 输出 SPEAKER_00/01/...
-    speaker_name: Optional[str] = None   # Step 5 飞书妙记校准后填入
+    speaker_name: Optional[str] = None   # 后续人工/stt_map 填入(ADR-0008 Superseded: 不再依赖飞书妙记)
     source: str = "whisper+pyannote"     # 来源标记(双轨时会区分)
 
     def duration(self) -> float:
