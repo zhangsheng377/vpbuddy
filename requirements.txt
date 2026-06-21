@@ -1,0 +1,17 @@
+# VPBuddy 依赖
+# 本机(开发/UI/KB):装这份够
+# GPU 服务器(192.168.10.63): 装这份 + requirements-gpu.txt
+
+# ===== 本机必装 =====
+pydantic>=2.0,<3
+sqlite-vec>=0.1.0
+sentence-transformers>=2.2,<4
+numpy>=1.24,<2.8
+
+# 测试
+pytest>=7.4,<9
+pytest-asyncio>=0.21
+
+# 工具
+requests>=2.31
+python-dotenv>=1.0
