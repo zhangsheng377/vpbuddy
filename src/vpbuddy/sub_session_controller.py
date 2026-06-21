@@ -250,29 +250,31 @@ def main_loop():
         time.sleep(POLL_INTERVAL)
 
 
-def main():
+def main(argv: Optional[List[str]] = None) -> int:
+    """Controller CLI 主入口 — `python -m vpbuddy.sub_session_controller`"""
     parser = argparse.ArgumentParser(description="VPBuddy sub-session controller")
     parser.add_argument("--once", action="store_true", help="只跑一轮就退出")
     parser.add_argument("--meeting", help="只跑指定会议 ID")
     parser.add_argument("--dry-run", action="store_true", help="只渲染 prompt,不真触发 hermes")
     parser.add_argument("--list-meetings", action="store_true", help="列出活跃会议并退出")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.list_meetings:
         meetings = list_active_meetings()
         print(f"Active meetings ({len(meetings)}):")
         for m in meetings:
             print(f"  - {m}")
-        return
+        return 0
 
     if args.once:
         meetings = [args.meeting] if args.meeting else None
         run_one_round(meeting_ids=meetings, dry_run=args.dry_run)
-        return
+        return 0
 
-    # 默认主循环
+    # 默认主循环(7×24)
     main_loop()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

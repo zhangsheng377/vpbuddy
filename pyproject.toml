@@ -89,11 +89,14 @@ all = [
     "vpbuddy[gpu,audio,dev]",
 ]
 
-# ===== 命令入口 (ADR-0009 — `vpbuddy` CLI = Hermes skill 触发) =====
+# ===== 命令入口 (ADR-0009 — VPBuddy CLI 入口,跟 Hermes TUI 分开) =====
 [project.scripts]
+# VPBuddy 自己的 CLI(给 VP/用户/管理员/开发者用)
 vpbuddy = "vpbuddy.cli:main"
-vpbuddy-setup-gpu = "vpbuddy.scripts.setup_gpu:main"
-vpbuddy-transcribe = "vpbuddy.scripts.gpu_transcribe:main"
+# 子命令: vpbuddy ui / vpbuddy controller / vpbuddy transcribe / vpbuddy setup-gpu / vpbuddy list / vpbuddy version
+
+# Hermes CLI 不在 VPBuddy pyproject 里 — 它随 hermes-agent 包装
+# Hermes TUI (`hermes` 命令) 是 Hermes 自己的 dev tool,VPBuddy 用户**不要**用 TUI 作为 UI
 
 # ===== 入口点: Hermes skill 注册 (ADR-0009) =====
 [project.entry-points."hermes.skills"]

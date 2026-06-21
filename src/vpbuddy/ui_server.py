@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import sys
+from typing import List, Optional
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -248,11 +249,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(f"500: {msg}".encode("utf-8"))
 
 
-def main():
+def main(argv: Optional[List[str]] = None) -> int:
+    """UI server 主入口 — `python -m vpbuddy.ui_server` 或 `vpbuddy ui`"""
     parser = argparse.ArgumentParser(description="VPBuddy UI server")
     parser.add_argument("--port", type=int, default=8765, help="端口(默认 8765)")
     parser.add_argument("--host", default="0.0.0.0", help="绑定地址(默认 0.0.0.0)")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # KB embedding 模型首次加载慢,启动时预热
     if KB_PATH.exists():
@@ -277,7 +279,8 @@ def main():
     except KeyboardInterrupt:
         print("\n👋 退出", flush=True)
         server.shutdown()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

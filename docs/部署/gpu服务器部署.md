@@ -41,11 +41,26 @@ hermes skills install vpbuddy
 # 3. (可选) 装 GPU 模型 — 仅当用本地 Whisper/pyannote 时
 vpbuddy setup-gpu
 
-# 4. 启动
-hermes  # 进入 TUI,说"开一个会议"即可触发 vpbuddy skill
+# 4. 启动 VPBuddy UI (用户实际用的入口)
+vpbuddy ui  # 起 http server 在 :8765
+# 浏览器打开 http://localhost:8765
 ```
 
 预计耗时: **5-10 分钟**(主要在 pip 装包 + 配 LLM key;GPU 模型下载另算)。
+
+### 多种启动方式(2026-06-21 ADR-0009 修正 — Hermes 是 runtime 不是 UI)
+
+**VPBuddy = Python 软件包**,**Hermes = LLM runtime**。两者关系:
+
+| 入口 | 命令 | 谁用 | 何时用 |
+|---|---|---|---|
+| **VPBuddy UI** (默认) | `vpbuddy ui` | VP / 会议参与者 | 开会时投屏,主界面 |
+| **VPBuddy controller** | `vpbuddy controller` | 后台 7×24 跑 | 后台轮询,生成 6 文档 |
+| **Hermes TUI** (开发) | `hermes` | 开发/调试 | 跑 prompt/单次对话/查 session |
+| **Hermes CLI** (脚本) | `hermes chat "..."` | 脚本/自动化 | 一次性问 LLM |
+| **Hermes gateway** (后台) | `hermes gateway` | cron/Feishu/微信 daemon | 7×24 接收消息 |
+
+**不要在生产里直接用 `hermes` TUI 当 VPBuddy 用户界面** — TUI 是 Hermes 自己的 dev tool,VPBuddy 用户的 UI 永远是 `vpbuddy ui`(浏览器 :8765)。
 
 ---
 

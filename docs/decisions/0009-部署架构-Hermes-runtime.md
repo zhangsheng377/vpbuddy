@@ -60,11 +60,11 @@
 | 部署到新服务器 | 装 Python 3.11 + requirements.txt + GPU 模型 | `pip install hermes-agent` + `pip install vpbuddy` + 装 GPU 模型 + `hermes skills install vpbuddy` |
 | 一次会议 = ? | 进程级 meeting_id | **Hermes session_id**(`meeting:{mid}`) |
 | 5 Agent 并行 | `controller.py` 手编 `asyncio.gather` | `delegate_task(tasks=[...5], toolsets=[...])`(Hermes 真并行 ThreadPoolExecutor) |
-| 工具调用 | 自封装 subprocess/HTTP | **Hermes native tools** (terminal/file/web/browser) + MCP |
+| 工具调用 | 自封装 subprocess/HTTP | **Hermes native tools** (terminal/file/web/browser) + MCP(通过 `hermes chat` subprocess 间接调用) |
 | 知识库 | `knowledge_base.py` 自封装 sqlite-vec | 复用 Hermes memory + sqlite-vec(知识库作为 vpbuddy skill 暴露 schema) |
 | Cron / 7×24 任务 | 没接 | 复用 Hermes cron 调度(可选扩展) |
-| 跨 session 历史 | 手写 JSON 文件 | 复用 Hermes `session_search` 全文检索回放 |
-| LLM API key | 散落多处 | 集中到 `~/.hermes/.env`,VPBuddy 通过 Hermes 间接调用 |
+| 跨 session 历史 | 手写 JSON 文件 | 改用 `hermes chat` subprocess + 外部 session_id 跟踪(详见 §具体落地) |
+| LLM API key | 散落多处 | 集中到 `~/.hermes/.env`,VPBuddy 通过 `hermes chat` subprocess 间接调用 |
 
 ### 部署包结构(目标)
 
@@ -83,6 +83,24 @@
 └── ~/vpbuddy/                              # VPBuddy 源码(开发模式)或 wheel
 ```
 
+### 集成方式(2026-06-21 修正 — subprocess 优先,非 in-process import)
+
+**当前 controller.py 实际做的事** (L188-208):
+```python
+# subprocess.run 调 hermes CLI,非 in-process import
+cmd = ["hermes", "chat", "-q", prompt, "-Q"]  # 单次对话
+proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+```
+
+| 集成方式 | 描述 | 何时用 | 状态 |
+|---|---|---|---|
+| **subprocess 调 `hermes chat`** | VPBuddy 进程 → `subprocess.run("hermes chat ...")` 阻塞等返回 | 6 文档生成(controller.py) | ✅ **当前使用** |
+| **subprocess 调 `hermes chat` + 主 session 直写** | VPBuddyDIRECT=1 → controller 渲染 prompt 让主 session 写 | 6 文档生成(快速模式) | ✅ **当前使用** |
+| **in-process `from hermes_agent import AIAgent`** | VPBuddy 进程内 import Hermes,共享内存 | 真 5 Agent 并行(替代 subprocess) | ⏳ **未来** (Step B,见后) |
+| **Hermes daemon + HTTP/gRPC** | Hermes 起 daemon server,VPBuddy 调 SDK | 多 VPBuddy 实例共享 Hermes | ⏳ 远期 |
+
+**Step B 决策** (下个 PR): 把 `subprocess.run("hermes chat")` 替换为 `from hermes_agent import AIAgent` + `delegate_task` 真并行 — 消除 5 分钟 × N 串行延迟。
+
 ### 安装命令(目标 — 5 分钟部署)
 
 ```bash
@@ -97,9 +115,15 @@ hermes skills install vpbuddy
 # 3. (可选) 装 GPU 模型
 vpbuddy setup-gpu
 
-# 4. 启动
-hermes  # 进入 TUI,说"开一个会议"即可触发 vpbuddy skill
+# 4. 启动 VPBuddy UI(VP/用户实际用的入口)
+vpbuddy ui
+# 浏览器打开 http://localhost:8765
+
+# 5. (后台) 启动 controller 跑 6 文档生成
+vpbuddy controller  # 7×24 跑,每 30s 轮询
 ```
+
+**重要**: `hermes` TUI 是开发/调试工具,**不是** VPBuddy 用户界面。VP/用户永远从 `vpbuddy ui` 入口进。
 
 ## 后果
 

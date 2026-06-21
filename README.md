@@ -4,6 +4,18 @@
 
 > **运行在 Hermes Agent 之上** (2026-06-21 ADR-0009 钉死): VPBuddy = 装在 `~/.hermes/skills/vpbuddy/` 的 skill 集合,**不**独立运行。**部署 = `pip install hermes-agent` + `pip install vpbuddy` + `hermes skills install vpbuddy`**。详见 [ADR-0009](docs/decisions/0009-部署架构-Hermes-runtime.md) + [Hermes 官方文档](https://hermes-agent.nousresearch.com/docs)。
 
+## 启动方式(2026-06-21 修正)
+
+| 命令 | 谁用 | 何时用 |
+|---|---|---|
+| **`vpbuddy ui`** | VP / 会议参与者 | **开会时的主入口** — 浏览器打开 :8765 |
+| **`vpbuddy controller`** | 后台进程 | 7×24 跑,每 30s 轮询生成 6 文档 |
+| `vpbuddy transcribe` | 脚本 | 单次音频转写 |
+| `vpbuddy setup-gpu` | 部署时 | 装 GPU 模型(本地一次性) |
+| `hermes` (TUI) | 开发/调试 | 跑 prompt/查 session,**不是** VPBuddy UI |
+
+**VPBuddy 用户永远从 `vpbuddy ui` 入口进**;`hermes` TUI 是 Hermes 自己的 dev tool,不混用。
+
 VPBuddy 不是传统意义上的 AI 助手,而是运行在会议中的协同系统:
 
 - 人类负责决策与主导
