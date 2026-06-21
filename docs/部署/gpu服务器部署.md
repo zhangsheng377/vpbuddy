@@ -45,7 +45,7 @@ python scripts/gpu_transcribe.py /path/to/meeting.wav -o transcript.json
 PYTHONPATH=src python -c "
 from vpbuddy.state import MeetingState, Platform
 from vpbuddy.storage import create_storage
-state = MeetingState(meeting_id='MY_MEETING', platform=Platform.FEISHU)
+state = MeetingState(meeting_id='MY_MEETING', platform=Platform.LOCAL)  # ADR-0008: 默认 VP 桌面客户端麦克风
 # ... 用 transcript 提取 requirement/goal/risk
 storage = create_storage()
 storage.save(state)

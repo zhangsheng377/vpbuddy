@@ -148,7 +148,7 @@ VPBuddy MVP 6 步拆分(2026-06-21 修订: Step 5 飞书妙记校准 由 ADR-000
 
 **理由**:
 - 跨会议 speaker ID 复用是"产品特性"不是"MVP 必需"
-- 飞书妙记会后校准(Step 5)才能拿到真实昵称,pyannote 的 SPEAKER_00 是匿名 ID
+- ~~飞书妙记会后校准(Step 5)才能拿到真实昵称~~ → ⚠️ **Superseded by ADR-0008 (2026-06-21)**;说话人昵称由人工/stt_map 填入,pyannote 的 SPEAKER_00 是匿名 ID
 - YAGNI
 
 ### Y6:不用 ONNX 推理(faster-whisper 默认 CTranslate2)
@@ -300,7 +300,7 @@ samples/
 | 无 retry/fallback | crash 需手动重启 | 上生产时 |
 | 无 speaker embedding 缓存 | 每次重新 diarize | 跨会议复用 ID 时 |
 | Linux PulseAudio loopback 未实现 | 实时采集暂无 | Step 2.5(在 VP 笔记本上) |
-| 飞书/腾讯原生 ASR 未对接 | 第二轨 Step 5 再做 | Step 5 |
+| ~~飞书/腾讯原生 ASR 未对接~~ → ⚠️ **Superseded by ADR-0008 (2026-06-21)**;飞书/腾讯已不作为数据源 | 不再需要 | — |
 | 小鱼易连 API 未对接 | 第三轨需企业合同 | 不做(已知付费墙) |
 
 每条都有**明确的修复触发条件**,不是 YAGNI 偷懒。

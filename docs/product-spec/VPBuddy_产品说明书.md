@@ -21,9 +21,13 @@
 
 # VPBuddy 产品说明书
 
+> **v1.13** (2026-06-21 修订 — **重大修订 by ADR-0008**): 数据源改为 **VP 桌面客户端麦克风/系统音频 loopback**(ADR-0004 自接 Whisper + pyannote),**删除飞书妙记作为数据源**;飞书 SDK / miaoji_calibration.py / FeishuAdapter / Platform.FEISHU 全部删除 (commit `5048936`);说话人校准改人工/stt_map 填入。详见 [ADR-0008](decisions/0008-ADR-0001-决策1-Superseded.md)。
+
+> **历史版本**:v1.0-v1.12 见 `VPBuddy_产品说明书_v1.*_2026-06-20.md`(都已过时,仅留作历史)
+
 ## 一、产品定位
 
-VPBuddy 是面向软件开发公司 VP / 售前负责人 / 项目负责人的 人机协同会议操作系统级 AI 助手,**运行在 Hermes Agent 之上**(v1.6 新增底层说明)。一个会议 = Hermes 一个 session,系列会议 = 同一 session 持续。**v1.10 新增**: 两个为 VP 服务的主动推送能力——**疑问窗口**(AI 主动问 VP 没听清/有矛盾/需要确认的地方)和**预准备内容**(AI 主动准备客户可能要问的弹药,VP 决定用不用)。**v1.12 新增**: **双轨 ASR**——**第一方案默认 Whisper 自接 + pyannote**(VP 设备 loopback + 服务端 faster-whisper);**第二方案 Zoom RTMS**(英文);**第三方案小鱼易连企业版 API**(需 VPBuddy 签企业合作);**飞书妙记降为"会后校准源"**(跟 pyannote 融合提准确率)
+VPBuddy 是面向软件开发公司 VP / 售前负责人 / 项目负责人的 人机协同会议操作系统级 AI 助手,**运行在 Hermes Agent 之上**(v1.6 新增底层说明)。一个会议 = Hermes 一个 session,系列会议 = 同一 session 持续。**v1.10 新增**: 两个为 VP 服务的主动推送能力——**疑问窗口**(AI 主动问 VP 没听清/有矛盾/需要确认的地方)和**预准备内容**(AI 主动准备客户可能要问的弹药,VP 决定用不用)。**v1.13 重大修订(2026-06-21 ADR-0008)**: **删除飞书妙记**(降为会后校准源也取消),数据源改为 **VP 桌面客户端麦克风/系统音频 loopback**(ADR-0004 自接 Whisper + pyannote),说话人校准改人工/stt_map 填入;飞书 SDK / miaoji_calibration.py / FeishuAdapter / Platform.FEISHU 全部删除。
 
 它不是传统意义上的AI助手，而是运行在会议中的协同系统：
 
@@ -31,7 +35,7 @@ VPBuddy 是面向软件开发公司 VP / 售前负责人 / 项目负责人的 �
 
 - VPBuddy负责理解、结构化、生成与演化
 
-在腾讯会议 / 飞书 / 钉钉 / Zoom 中,VPBuddy 后台并行做两件事:① 累积结构化信息(客户需求/业务目标/风险点),② 持续生成候选交付物(Demo/页面/数据模型/任务清单等)。VP 任何时候调取,都已有可投屏的候选交付物(由 hermes skill 持续生成):
+VPBuddy 直接接 VP 桌面客户端的麦克风/系统音频 loopback(ADR-0004 自接音频流 + Whisper + pyannote),后台并行做两件事:① 累积结构化信息(客户需求/业务目标/风险点),② 持续生成候选交付物(Demo/页面/数据模型/任务清单等)。VP 任何时候调取,都已有可投屏的候选交付物(由 hermes skill 持续生成):
 
 - 会议理解与结构化累积
 
@@ -41,7 +45,7 @@ VPBuddy 是面向软件开发公司 VP / 售前负责人 / 项目负责人的 �
 
 - Sub-agent并行推理(后台,hermes delegate_task)
 
-- 交互Demo与交付物持续生成(后台并行,VP 调取即用;**可选生产模式**:VP 显式启用后,会议结束自动转生产:导出代码 + 推 GitHub + 部署测试);**v1.10 新增**: 疑问窗口(AI 主动问 VP)+ 预准备内容(AI 主动为 VP 准备弹药);**v1.12 新增**: 双轨 ASR(Whisper 自接 + pyannote 默认 + 飞书 REST 会后校准)
+- 交互Demo与交付物持续生成(后台并行,VP 调取即用;**可选生产模式**:VP 显式启用后,会议结束自动转生产:导出代码 + 推 GitHub + 部署测试);**v1.10 新增**: 疑问窗口(AI 主动问 VP)+ 预准备内容(AI 主动为 VP 准备弹药);**v1.13 重大修订(ADR-0008)**: 删除飞书 SDK / 妙记集成,数据源 = VP 桌面客户端麦克风/系统音频 loopback
 
 - 企业/个人/行业知识库调用(hermes memory 持久化,跨会议连续)
 
@@ -79,7 +83,7 @@ VPBuddy由五大系统组成：
 
 ## 四、会议接入层
 
-功能:会议入口与系统初始化;**v1.12 双轨 ASR**:**第一方案默认**(MVP 推荐)= 自接音频流 + Whisper + pyannote;**第二方案** Zoom RTMS(英文);**第三方案** 小鱼易连企业版 API(需 VPBuddy 签企业合作);**飞书妙记降为会后校准源**(跟 pyannote 融合提准确率)。**VP 设备硬约束**:必须用桌面客户端 + 授权麦克风/系统音频
+功能:会议入口与系统初始化;**v1.13 重大修订(ADR-0008)**: 数据源 = VP 桌面客户端麦克风/系统音频 loopback + Whisper + pyannote(本地模型);**飞书 SDK / 妙记 API 全部删除**。**VP 设备硬约束**:必须用桌面客户端 + 授权麦克风/系统音频
 
 输入：会议链接、平台、项目名称、知识库选择
 
@@ -93,11 +97,11 @@ VPBuddy由五大系统组成：
 
 - 加载知识库
 
-- 创建会议工作台 + 启动后台 3 轨(累积/生成/疑问+预准备);**v1.12** + 飞书妙记会后 Webhook → 跨源融合补全 speaker_name
+- 创建会议工作台 + 启动后台 3 轨(累积/生成/疑问+预准备);**v1.13 修订(ADR-0008)**: 飞书妙记会后校准删除,说话人识别由 pyannote 3.1 本地完成,人工/stt_map 填昵称
 
 ## 五、会议理解与Agent系统
 
-会议持续累积结构化为(后台,无延迟约束;**来源:v1.12 双轨 ASR —— 实时段来自 Whisper + pyannote(80-90% 说话人识别),会后段来自飞书妙记 REST(95%+ 平台原生说话人昵称),VPBuddy 内部跨源融合**):
+会议持续累积结构化为(后台,无延迟约束;**来源:v1.13 (ADR-0008) Whisper + pyannote 本地模型**,说话人由人工/stt_map 填入):
 
 - 客户需求
 
@@ -297,5 +301,5 @@ VP 任何时候投屏/外发(无『完成』前提)
 - v1.8: 回退 session 生命周期(YAGNI)
 - v1.9: VPBuddy 连投屏按钮都不提供
 - v1.10: 疑问窗口 + 预准备内容
-- v1.11: 重大简化 — 默认用平台原生 ASR/转写
-- **v1.12 (2026-06-20): 双轨 ASR** — 第一方案默认 Whisper 自接 + pyannote(VP 设备 loopback + 服务端 faster-whisper);第二方案 Zoom RTMS(英文);第三方案 小鱼易连企业版 API(需 VPBuddy 签企业合作);飞书妙记降为"会后校准源";VPBuddy 内部跨源融合补全 speaker_name;**新增 VP 设备硬约束**(必须桌面客户端);详细调研见 `docs/research/asr-speaker-diarization-survey.md`
+- v1.11: ~~重大简化 — 默认用平台原生 ASR/转写~~ → **Superseded by ADR-0008 (2026-06-21)**
+- **v1.13 (2026-06-21 重大修订 by ADR-0008): 删除飞书 SDK / 妙记 API** — 数据源改为 VP 桌面客户端麦克风/系统音频 loopback(ADR-0004 自接 Whisper + pyannote);说话人校准改人工/stt_map 填入;飞书 SDK / miaoji_calibration.py / FeishuAdapter / Platform.FEISHU 全部删除 (commit `5048936`);详细决策见 `docs/decisions/0008-ADR-0001-决策1-Superseded.md`;**VP 设备硬约束保留**:必须桌面客户端 + 麦克风授权

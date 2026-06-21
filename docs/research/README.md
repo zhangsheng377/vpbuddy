@@ -4,7 +4,7 @@
 
 ## 推荐分类
 
-- `竞品分析/` —— 飞书妙记、通义听悟、Otter、Fireflies、Notion AI 等同类产品对比
+- `竞品分析/` —— ~~飞书妙记、通义听悟、Otter、Fireflies、Notion AI~~ → **Superseded by ADR-0008 (2026-06-21)**;飞书妙记不参与产品对比
 - `技术调研/` —— 会议 ASR、Sub-agent 编排、知识库 RAG、实时交付物生成等关键技术的现状
 - `行业参考/` —— 软件交付流程、SOP、会议协同等业务侧参考资料
 

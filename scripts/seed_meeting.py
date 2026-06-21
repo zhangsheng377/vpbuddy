@@ -17,7 +17,7 @@ from vpbuddy.storage import MeetingStorage
 mid = "PHASE2_TEST"
 state = MeetingState(
     meeting_id=mid,
-    platform=Platform.FEISHU,
+    platform=Platform.LOCAL,  # 2026-06-21 ADR-0008: 默认 VP 桌面客户端麦克风
     speaker_map={"SPK_00": "周华健(产品总监)", "SPK_01": "张胜东(VP)"},
 )
 

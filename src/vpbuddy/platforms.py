@@ -1,14 +1,14 @@
-"""多平台适配器 — Step 6
+"""多平台适配器 — Step 6 (2026-06-21 ADR-0008: 飞书删除, 3 平台 metadata)
 
-设计原则(ADR-0007 — YAGNI):
-- 4 平台共享同一接口 PlatformAdapter
-- 飞书/腾讯/钉钉/企微 各一个 adapter
+设计原则(原 ADR-0007 — YAGNI, ADR-0008 后 3 平台):
+- 3 平台共享同一接口 PlatformAdapter(腾讯/钉钉/企微)
+- **飞书 = 删除**(2026-06-21 ADR-0008: VPBuddy 数据源 = VP 桌面客户端麦克风 loopback,不是会议平台)
 - 第一版只实现 metadata(平台能力 + 配置),transcript 留 TODO
 - 主 session 调用 adapter.list_capabilities() 知道该平台支持什么
 
 典型用法:
     from vpbuddy.platforms import get_adapter
-    adapter = get_adapter("feishu")
+    adapter = get_adapter("tencent")
     caps = adapter.list_capabilities()
     for cap in caps:
         print(f"{cap.name}: {cap.description}")
@@ -65,7 +65,7 @@ class PlatformAdapter(ABC):
         """
         raise NotImplementedError(
             f"{self.meta.platform} fetch_transcript 暂未实现, "
-            f"需先在飞书/腾讯会议/钉钉/企微 后台开通转写 API"
+            f"需先在腾讯会议/钉钉/企微 后台开通转写 API (飞书已 ADR-0008 删除)"
         )
 
     def list_recent_meetings(self, limit: int = 10) -> List[dict]:
@@ -73,25 +73,7 @@ class PlatformAdapter(ABC):
         raise NotImplementedError(f"{self.meta.platform} list_recent_meetings 暂未实现")
 
 
-# === 4 平台具体实现 ===
-
-    def meta(self) -> PlatformMeta:
-        return PlatformMeta(
-            platform="feishu",
-            display_name="飞书 (Lark)",
-            vendor="字节跳动 (ByteDance)",
-            api_base="https://open.feishu.cn/open-apis",
-            auth_method="app_credentials",
-            docs_url="https://open.feishu.cn/document/server-docs/minutes-v1/minute/get",
-            free_tier="妙记 300 分钟/用户/月 + API 1 万次/租户/月",
-            capabilities=[
-                Capability("minutes.fetch", "拉取妙记 metadata (会议标题/时间/参与人)", implemented=True),
-                Capability("minutes.transcript", "拉取妙记完整逐字稿(段级时间戳+说话人)", implemented=False),
-                Capability("minutes.summary", "拉取妙记 AI 总结(章节纪要+待办)", implemented=False),
-                # 注意: 不实现 chat.send — VPBuddy 输出是文件,不发消息
-            ],
-        )
-
+# === 3 平台具体实现 (2026-06-21 ADR-0008 删飞书) ===
 
 class TencentAdapter(PlatformAdapter):
     """腾讯会议适配器

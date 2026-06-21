@@ -279,7 +279,7 @@ def search_knowledge(query: str, k: int = 5, type_filter: str = None) -> list:
 - 输出:`/tmp/vpbuddy_docs/DEMO01/demo/demo.html`,18.5KB / 398 行
 - LLM 实际做到:
   - ✅ 列出 3 个场景(SSO/微信扫码/Excel 导出),每个都标 REQ ID
-  - ✅ 5 个 IdP 选项(Okta/Azure AD/Auth0/钉钉/飞书)**可点选**
+  - ✅ 5 个 IdP 选项(Okta/Azure AD/Auth0/钉钉/企微)**可点选**(飞书 ADR-0008 后从 IdP 候选删除)
   - ✅ 5 步 SSO 流程可视化
   - ✅ 开放问题"SSO 走哪个 IdP?"在 demo 顶部显眼位置显示
   - ✅ 风险"OAuth 限流"在 SSO 步骤旁标注
