@@ -28,7 +28,7 @@ src/
 ```python
 class MeetingState(BaseModel):
     meeting_id: str             # 自动生成
-    platform: Platform          # feishu / tencent / dingtalk / zoom
+    platform: Platform          # local (默认) / tencent / dingtalk / wecom (YAGNI)
     project_name: Optional[str]
     started_at: str            # ISO 8601 UTC
 
@@ -122,12 +122,12 @@ Step 1 的**关键验证**是"会议开始 → 会议结束 → 下次会议开�
 
 ## 下一步(Step 2)
 
-Step 2 = **自接音频流 + Whisper + pyannote**:
+Step 2 = **自接音频流 + Whisper + pyannote** (ADR-0004):
 1. VP 设备 loopback(AVAudioEngine / WASAPI / PulseAudio)
 2. 服务端 `faster-whisper` 流式转写
 3. `pyannote-audio 3.1` 说话人聚类
 4. 转写段 → 自动调用 `state.add_requirement(...)` 累积
-5. 飞书 REST API 会后校准(双源融合)
+5. ~~飞书 REST API 会后校准~~ → ⚠️ **Superseded by ADR-0008 (2026-06-21)**;说话人校准改人工/stt_map 填入
 
 详见 `docs/research/asr-speaker-diarization-survey.md` v2。
 

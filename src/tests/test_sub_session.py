@@ -51,7 +51,7 @@ def populated_meeting():
     """创建一个有累积的测试会议"""
     sid = "TEST12345ABCD"
     storage = MeetingStorage(data_dir=TEST_DATA)
-    state = MeetingState(meeting_id=sid, platform=Platform.FEISHU)
+    state = MeetingState(meeting_id=sid, platform=Platform.LOCAL)
     state.add_requirement("客户要 SSO 登录", Priority.HIGH)
     state.add_requirement("支持微信扫码", Priority.MEDIUM)
     state.add_risk("OAuth 服务可能限流")

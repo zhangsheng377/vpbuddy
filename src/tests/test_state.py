@@ -32,9 +32,9 @@ class TestMeetingStateCRUD:
     """状态对象 CRUD"""
 
     def test_create_state(self):
-        state = MeetingState(platform=Platform.FEISHU,
+        state = MeetingState(platform=Platform.LOCAL,
                             project_name="XX公司-ESG需求沟通会")
-        assert state.platform == Platform.FEISHU
+        assert state.platform == Platform.LOCAL
         assert state.project_name == "XX公司-ESG需求沟通会"
         assert state.requirements == []
         assert state.goals == []
@@ -212,7 +212,7 @@ class TestEndToEnd:
         # 1. VP 加入会议
         state = MeetingState(
             meeting_id="ESG-2026-001",
-            platform=Platform.FEISHU,
+            platform=Platform.LOCAL,
             project_name="XX公司-ESG碳管理系统需求沟通会"
         )
 
@@ -249,7 +249,7 @@ class TestEndToEnd:
         loaded = tmp_storage.load("ESG-2026-001")
 
         # 8. 验证
-        assert loaded.platform == Platform.FEISHU
+        assert loaded.platform == Platform.LOCAL
         assert loaded.project_name == "XX公司-ESG碳管理系统需求沟通会"
         assert len(loaded.requirements) == 2
         assert loaded.requirements[0].status == ItemStatus.CONFIRMED

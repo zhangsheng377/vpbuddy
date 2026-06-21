@@ -1,7 +1,7 @@
-"""platforms 多平台适配器测试
+"""platforms 多平台适配器测试 (2026-06-21 ADR-0008: 删 FeishuAdapter)
 
 覆盖:
-- 4 平台都能 get_adapter
+- 3 平台都能 get_adapter (tencent / dingtalk / wecom)
 - meta 字段完整
 - capabilities 列出
 - 抽象方法默认 raise NotImplementedError
@@ -18,7 +18,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from vpbuddy.platforms import (
     SUPPORTED_PLATFORMS,
     Capability,
-    FeishuAdapter,
     TencentAdapter,
     DingTalkAdapter,
     WeComAdapter,
@@ -29,7 +28,6 @@ from vpbuddy.platforms import (
 
 
 @pytest.mark.parametrize("platform,expected_class", [
-    ("feishu", FeishuAdapter),
     ("tencent", TencentAdapter),
     ("dingtalk", DingTalkAdapter),
     ("wecom", WeComAdapter),
@@ -44,14 +42,14 @@ def test_get_adapter_returns_correct_type(platform, expected_class):
 def test_get_adapter_unsupported():
     """不支持的平台应该抛 ValueError"""
     with pytest.raises(ValueError) as exc:
-        get_adapter("zoom")  # 之前 state.py 有,但 platforms 没
+        get_adapter("feishu")  # 2026-06-21 ADR-0008 删除
     assert "Unsupported platform" in str(exc.value)
 
 
 def test_list_supported():
-    """list_supported 应该返回 4 平台"""
+    """list_supported 应该返回 3 平台 (2026-06-21 ADR-0008 删飞书)"""
     platforms = list_supported()
-    assert set(platforms) == {"feishu", "tencent", "dingtalk", "wecom"}
+    assert set(platforms) == {"tencent", "dingtalk", "wecom"}
 
 
 def test_supported_platforms_constant():
@@ -59,20 +57,8 @@ def test_supported_platforms_constant():
     assert set(SUPPORTED_PLATFORMS) == set(list_supported())
 
 
-def test_feishu_meta_complete():
-    """飞书 meta 应该包含完整字段"""
-    adapter = get_adapter("feishu")
-    meta = adapter.meta
-    assert meta.platform == "feishu"
-    assert "飞书" in meta.display_name
-    assert meta.api_base.startswith("https://")
-    assert meta.docs_url.startswith("https://")
-    assert meta.free_tier
-    assert len(meta.capabilities) > 0
-
-
 def test_all_adapters_have_capabilities():
-    """4 平台都应该有 ≥ 1 能力"""
+    """3 平台都应该有 ≥ 1 能力"""
     for platform in SUPPORTED_PLATFORMS:
         adapter = get_adapter(platform)
         assert len(adapter.list_capabilities()) >= 1, f"{platform} 无能力"
@@ -101,15 +87,7 @@ def test_list_recent_meetings_raises_by_default():
             adapter.list_recent_meetings()
 
 
-def test_feishu_capabilities_have_minutes():
-    """飞书应该有 minutes 相关能力"""
-    adapter = get_adapter("feishu")
-    caps = adapter.list_capabilities()
-    cap_names = [c.name for c in caps]
-    assert "minutes.fetch" in cap_names
-
-
 def test_each_platform_has_unique_api_base():
-    """4 平台 API 端点应该不同"""
+    """3 平台 API 端点应该不同"""
     bases = [get_adapter(p).meta.api_base for p in SUPPORTED_PLATFORMS]
-    assert len(set(bases)) == 4, "API 端点不应该重复"
+    assert len(set(bases)) == 3, "API 端点不应该重复"

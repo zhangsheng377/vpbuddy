@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 # 4 平台标识
-SUPPORTED_PLATFORMS = ["feishu", "tencent", "dingtalk", "wecom"]
+SUPPORTED_PLATFORMS = ["tencent", "dingtalk", "wecom"]
 
 
 @dataclass
@@ -75,20 +75,6 @@ class PlatformAdapter(ABC):
 
 # === 4 平台具体实现 ===
 
-class FeishuAdapter(PlatformAdapter):
-    """飞书(Lark)适配器
-
-    - 妙记: 飞书云端会议转写
-    - API: open.feishu.cn (开放平台)
-    - Auth: 应用凭证 (app_id + app_secret) → tenant_access_token
-    - 文档: https://open.feishu.cn/document/server-docs/minutes-v1/minute/get
-
-    设计原则(YAGNI):
-    - VPBuddy 不主动发消息到飞书(我们的输出是文件,不是消息)
-    - 所以 **不实现 chat.send** — 之前 Step 6 我自作主张加了 3 平台的 chat.send 标 implemented,实际是谎言
-    - 现在明确: feishu 的 4 能力全部是"接收/读",无"发送/写"
-    """
-    @property
     def meta(self) -> PlatformMeta:
         return PlatformMeta(
             platform="feishu",
@@ -191,7 +177,6 @@ class WeComAdapter(PlatformAdapter):
 
 # === 工厂 ===
 _ADAPTERS = {
-    "feishu": FeishuAdapter,
     "tencent": TencentAdapter,
     "dingtalk": DingTalkAdapter,
     "wecom": WeComAdapter,
@@ -239,7 +224,7 @@ def _print_table(platforms: List[PlatformAdapter]) -> None:
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="VPBuddy 多平台能力查看")
-    parser.add_argument("--platform", help="只查某平台 (feishu/tencent/dingtalk/wecom)")
+    parser.add_argument("--platform", help="只查某平台 (tencent/dingtalk/wecom)")
     parser.add_argument("--list", action="store_true", help="列出所有支持平台")
     args = parser.parse_args()
 

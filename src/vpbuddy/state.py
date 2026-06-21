@@ -20,11 +20,16 @@ from pydantic import BaseModel, Field
 
 
 class Platform(str, Enum):
-    """第一平台(ADR-0001):飞书;其他可选"""
-    FEISHU = "feishu"
-    TENCENT = "tencent"
-    DINGTALK = "dingtalk"
-    ZOOM = "zoom"
+    """数据源平台(2026-06-21 ADR-0008: 默认 = VP 桌面客户端麦克风/系统音频 loopback,不是会议平台)
+
+    真实架构见 ADR-0004 (VP 设备 loopback → PCM → Whisper + pyannote 自接)。
+    其他会议平台保留作 YAGNI 历史(未来真有客户再用,目前默认 LOCAL)。
+    """
+    LOCAL = "local"          # 默认: VP 桌面客户端麦克风/系统音频 loopback (ADR-0004)
+    TENCENT = "tencent"      # YAGNI 历史
+    DINGTALK = "dingtalk"    # YAGNI 历史
+    WECOM = "wecom"          # YAGNI 历史 (原 ZOOM 改名)
+    # FEISHU 在 2026-06-21 ADR-0008 中删除 — 不再是真实路径
 
 
 class Priority(str, Enum):
@@ -114,7 +119,7 @@ class MeetingState(BaseModel):
     """
     # === 基础信息 ===
     meeting_id: str = Field(default_factory=lambda: uuid4().hex[:12].upper())
-    platform: Platform = Platform.FEISHU
+    platform: Platform = Platform.LOCAL  # 默认 LOCAL (VP 桌面客户端麦克风/系统音频, ADR-0004)
     project_name: Optional[str] = None
     started_at: str = Field(default_factory=_now)
 
