@@ -20,10 +20,10 @@
 | 系统 | Linux (Ubuntu/CentOS/Arch) / macOS | macOS 不支持 CUDA(无本地模型) |
 | 网络 | 出海 OR 国内镜像 | LLM API + 模型下载 |
 
-**关键不变量** (ADR-0009 §0.3):
-- VPBuddy **不**直接调 LLM API → 必须经 Hermes
-- VPBuddy **不**自己管 session → 必须用 Hermes session
-- VPBuddy **不**自己实现 5 Agent 并行 → 必须用 Hermes `delegate_task`
+**关键不变量** (ADR-0009 §0.3,2026-06-22 in-process AIAgent 实现):
+- VPBuddy **不**直接调 LLM API → 必须经 in-process `run_agent.AIAgent`
+- VPBuddy **不**自己管 session → 必须用 AIAgent `session_id`
+- VPBuddy **不**自己实现并发调度 → 必须用 `ThreadPoolExecutor(max_workers=3)` 调 6 个 AIAgent
 
 ---
 
@@ -77,8 +77,8 @@ PYTHONPATH=src python -c "from vpbuddy.state import MeetingState, Platform; ..."
 ```
 
 **为什么不推荐**:
-- 无法使用 5 Agent 真并行(`controller.py` 手编循环)
-- 没有 Hermes session 历史
+- 无法使用 6 子 session 真并行(`controller.py` 手编循环)
+- 没有 AIAgent session 历史
 - 没有 cron 7×24 任务
 - 没有 skill 自动生成/复用
 - 没有跨会议连续(VP 第二天开会记不得昨天)
@@ -137,7 +137,7 @@ python -c "from vpbuddy.whisper_provider import WhisperProvider; w = WhisperProv
 | Q | A |
 |---|---|
 | 装 VPBuddy 必须装 Hermes 吗? | **是**(ADR-0009 决策),不可绕过 |
-| 不想用 delegate_task,能用旧 controller.py 吗? | 能跑,但不推荐(丢失 5 Agent 并行 + 跨 session 能力) |
+| 不想用 AIAgent in-process,能用旧 controller.py 吗? | 能跑,但不推荐(丢失 session 持久化 + 真并发能力) |
 | Hermes 升级会破坏 VPBuddy 吗? | 风险存在,需看 [Hermes changelog](https://hermes-agent.nousresearch.com/docs);pyproject 锁 `hermes-agent<1.0` 防大版本变更 |
 | 能否跳过 GPU,用云 ASR(阿里云/腾讯云)? | 能,VPBuddy 抽象出 ASR provider interface,后续可接云 ASR(见 ADR-0004 替代方案) |
 | 跨会议连续怎么工作的? | 同 `session_id` 跨多次对话,Hermes 原生支持 |

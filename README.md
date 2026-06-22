@@ -26,7 +26,7 @@ VPBuddy 直接接 VP 桌面客户端的麦克风/系统音频(ADR-0004 自接音
 - 会议理解与结构化建模
 - 需求分析与追问
 - 解释材料生成
-- Sub-agent 并行推理 (Hermes `delegate_task` 5 Agent 真并行)
+- Sub-agent 并行推理 (in-process `from run_agent import AIAgent(session_id=...)` 6 子 session 真共享 session,`ThreadPoolExecutor(3)` 真并发)
 - 交互 Demo 与交付物生成
 - 企业 / 个人 / 行业知识库调用 (Hermes memory 持久化,跨会议连续)
 - 软件交付资产实时生成

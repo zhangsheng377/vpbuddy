@@ -202,15 +202,24 @@ class KnowledgeBase:
             self._conn.close()
 
 
-# === 便利函数(单例) ===
-_default_kb: Optional[KnowledgeBase] = None
+# === 便利函数(单例,但 sqlite3 connection 不能跨线程,每线程一份) ===
+import threading as _threading
+_default_kb = None
+_default_kb_lock = _threading.Lock()
 
 
 def get_kb() -> KnowledgeBase:
+    """获取当前线程的 KB 实例(每个线程独立连接,避免 SQLite thread error)
+
+    第一次调用慢(sentence-transformers 冷加载 40s),后续命中缓存。
+    """
     global _default_kb
-    if _default_kb is None:
-        _default_kb = KnowledgeBase()
-    return _default_kb
+    tid = _threading.get_ident()
+    with _default_kb_lock:
+        if _default_kb is None or getattr(_default_kb, "_thread_id", None) != tid:
+            _default_kb = KnowledgeBase()
+            _default_kb._thread_id = tid  # type: ignore[attr-defined]
+        return _default_kb
 
 
 if __name__ == "__main__":

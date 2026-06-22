@@ -55,16 +55,16 @@
 
 ### 具体落地
 
-| 项 | 现状 | ADR-0009 之后 |
-|---|---|---|
-| 部署到新服务器 | 装 Python 3.11 + requirements.txt + GPU 模型 | `pip install hermes-agent` + `pip install vpbuddy` + 装 GPU 模型 + `hermes skills install vpbuddy` |
-| 一次会议 = ? | 进程级 meeting_id | **Hermes session_id**(`meeting:{mid}`) |
-| 5 Agent 并行 | `controller.py` 手编 `asyncio.gather` | `delegate_task(tasks=[...5], toolsets=[...])`(Hermes 真并行 ThreadPoolExecutor) |
-| 工具调用 | 自封装 subprocess/HTTP | **Hermes native tools** (terminal/file/web/browser) + MCP(通过 `hermes chat` subprocess 间接调用) |
-| 知识库 | `knowledge_base.py` 自封装 sqlite-vec | 复用 Hermes memory + sqlite-vec(知识库作为 vpbuddy skill 暴露 schema) |
-| Cron / 7×24 任务 | 没接 | 复用 Hermes cron 调度(可选扩展) |
-| 跨 session 历史 | 手写 JSON 文件 | 改用 `hermes chat` subprocess + 外部 session_id 跟踪(详见 §具体落地) |
-| LLM API key | 散落多处 | 集中到 `~/.hermes/.env`,VPBuddy 通过 `hermes chat` subprocess 间接调用 |
+|| 项 | 现状 | ADR-0009 之后 |
+||---|---|---|
+|| 部署到新服务器 | 装 Python 3.11 + requirements.txt + GPU 模型 | `bash install-gpu-server.sh`(自动装 hermes-agent + vpbuddy + 模型)。详见 [INSTALL.md §角色 A](../部署/INSTALL.md) |
+|| 一次会议 = ? | 进程级 meeting_id | **AIAgent session_id** = `meeting:{meeting_id}`(每 doc_kind 一个子 session:`meeting:{mid}:{kind}`) |
+|| 6 doc_kind 并行 | `controller.py` 手编 `asyncio.gather` / 串行 | **`ThreadPoolExecutor(max_workers=3)` 真并行触发 6 个 in-process AIAgent** |
+|| 子 session 实现 | `subprocess.run("hermes chat ...")` 串行 | **`from run_agent import AIAgent(session_id=..., enabled_toolsets=["terminal","file"])` in-process,同 session_id 跨轮询复用 AIAgent 实例** ⚠️ 注意 import path 是 `run_agent`(editable install + metapath finder),**不是** `hermes_agent`(那名字易混) |
+|| 工具调用 | 自封装 subprocess/HTTP | **Hermes native tools** (terminal/file/web/browser/MCP) — AIAgent `enabled_toolsets=["terminal","file"]` |
+|| 知识库 | `knowledge_base.py` 自封装 sqlite-vec + sentence-transformers | 复用 Hermes memory + sqlite-vec(知识库作为 vpbuddy skill 暴露 schema) |
+|| Cron / 7×24 任务 | 没接 | 复用 Hermes cron 调度(可选扩展) |
+|| LLM API key | 散落多处 | 集中到 `~/.hermes/.env`,VPBuddy 通过 in-process AIAgent 直接调 |
 
 ### 部署包结构(目标)
 
@@ -83,23 +83,51 @@
 └── ~/vpbuddy/                              # VPBuddy 源码(开发模式)或 wheel
 ```
 
-### 集成方式(2026-06-21 修正 — subprocess 优先,非 in-process import)
+### 集成方式(2026-06-22 落地:subprocess fallback + in-process AIAgent 真共享 session)
 
-**当前 controller.py 实际做的事** (L188-208):
+**当前 `controller.py` 真实做的事** (2026-06-22 落地的 in-process AIAgent 路径):
+
 ```python
-# subprocess.run 调 hermes CLI,非 in-process import
-cmd = ["hermes", "chat", "-q", prompt, "-Q"]  # 单次对话
-proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+# src/vpbuddy/sub_session_controller.py
+from run_agent import AIAgent  # ⚠️ 不是 hermes_agent — 见下面说明
+
+_AGENT_CACHE: Dict[str, AIAgent] = {}
+
+def _get_or_create_agent(meeting_id: str, doc_kind: str) -> AIAgent:
+    """同 (meeting_id, doc_kind) 复用同一 AIAgent 实例 → 真 session 持久化"""
+    sid = f"meeting:{meeting_id}:{doc_kind}"
+    if sid not in _AGENT_CACHE:
+        _AGENT_CACHE[sid] = AIAgent(
+            session_id=sid,                              # ← 真 session_id
+            enabled_toolsets=["terminal", "file"],       # ← 工具集
+            platform="subagent",                         # ← telemetry 标签
+            quiet_mode=True,
+            max_iterations=30,
+            model="MiniMax-M3",                          # 必须显式传
+        )
+    return _AGENT_CACHE[sid]
+
+def trigger_sub_session(meeting_id, doc_kind):
+    # ... 渲染 prompt ...
+    agent = _get_or_create_agent(meeting_id, doc_kind)
+    response = agent.chat(prompt)  # ← 真 LLM 调用,共享 session 历史
+    return {"triggered": True, "session_id": sid, ...}
 ```
 
-| 集成方式 | 描述 | 何时用 | 状态 |
-|---|---|---|---|
-| **subprocess 调 `hermes chat`** | VPBuddy 进程 → `subprocess.run("hermes chat ...")` 阻塞等返回 | 6 文档生成(controller.py) | ✅ **当前使用** |
-| **subprocess 调 `hermes chat` + 主 session 直写** | VPBuddyDIRECT=1 → controller 渲染 prompt 让主 session 写 | 6 文档生成(快速模式) | ✅ **当前使用** |
-| **in-process `from hermes_agent import AIAgent`** | VPBuddy 进程内 import Hermes,共享内存 | 真 5 Agent 并行(替代 subprocess) | ⏳ **未来** (Step B,见后) |
-| **Hermes daemon + HTTP/gRPC** | Hermes 起 daemon server,VPBuddy 调 SDK | 多 VPBuddy 实例共享 Hermes | ⏳ 远期 |
+|| 集成方式 | 描述 | 何时用 | 状态 |
+||---|---|---|---|
+|| **in-process `from run_agent import AIAgent`** | VPBuddy 进程内 import Hermes AIAgent,真共享 session 内存 + 历史 | 6 文档生成(controller.py 默认路径) | ✅ **当前使用 (2026-06-22 落地)** |
+|| **`ThreadPoolExecutor(max_workers=3)` 并发** | 6 doc_kind 真并行(3 worker 同时跑) | run_one_round 默认 | ✅ **当前使用 (2026-06-22 落地)** |
+|| **VPBUDDY_DIRECT=1 主 session 写文件** | controller 渲染 prompt,主 session 用 write_file 写 | 6 文档生成(快速模式 / LLM 不调工具时) | ✅ **当前保留** |
+|| **subprocess `hermes chat` (fallback)** | `subprocess.run(["hermes","chat",...])` 阻塞 | hermes-agent 未装时降级 | ⏳ fallback |
+|| **Hermes daemon + HTTP/gRPC** | Hermes 起 daemon server,VPBuddy 调 SDK | 多 VPBuddy 实例共享 Hermes | ⏳ 远期 |
 
-**Step B 决策** (下个 PR): 把 `subprocess.run("hermes chat")` 替换为 `from hermes_agent import AIAgent` + `delegate_task` 真并行 — 消除 5 分钟 × N 串行延迟。
+⚠️ **关键 import path 说明**:`hermes-agent` 是 pip 包名,但 Python 模块路径**不**是 `hermes_agent`!
+- ✅ 正确:`from run_agent import AIAgent`(`run_agent.py` 在 hermes-agent 源码根目录)
+- ❌ 错误:`from hermes_agent import AIAgent`(这模块**不存在**,会 ImportError)
+- 原因:hermes-agent 用 `setup.py` 的 `py-modules = ["run_agent","model_tools",...]` 模式,通过 editable install + metapath finder 把所有散模块挂到一个隐式 namespace。
+
+**Step B 已完成 (2026-06-22)**: `controller.py` 真用 in-process `from run_agent import AIAgent` + `ThreadPoolExecutor(3)` 真并行 — 80 passed (78 unit + 2 new sub_session)。
 
 ### 安装命令(目标 — 5 分钟部署)
 
@@ -157,12 +185,15 @@ vpbuddy controller  # 7×24 跑,每 30s 轮询
 
 ## 实施路线
 
-| 阶段 | 内容 | 状态 |
-|---|---|---|
-| **Step A**(本次) | 写 ADR-0009 + 同步文档 + 补 pyproject.toml + __init__.py 进度表 | 🟢 当前 |
-| **Step B**(下个 PR) | `controller.py` 重构:5 Agent 改用 `delegate_task` + 写 `hermes-integration` 测试 | ⏳ 待办 |
-| **Step C**(再下个) | 部署文档真测:5 分钟命令从 0 到跑通端到端 | ⏳ 待办 |
-| **Step D**(可选) | 把 vpbuddy 打包成 PyPI wheel + Hermes skill 一体化 | ⏳ 远期 |
+|| 阶段 | 内容 | 状态 |
+||---|---|---|
+|| **Step A** | 写 ADR-0009 + 同步文档 + 补 pyproject.toml + __init__.py 进度表 | 🟢 `955137a` |
+|| **Step A2** | 修正 Hermes TUI 误用 + 落地 VPBuddy CLI | 🟢 `5d0f378` |
+|| **Step B** | controller.py 重构:用 in-process `from run_agent import AIAgent` + ThreadPoolExecutor(3) 真并行 + 写 sub_session 测试 + 80 passed | 🟢 **(本次 commit, 2026-06-22 落地)** |
+|| **Step C** | 3 个 install 脚本 (GPU server / client / dev) + INSTALL.md | 🟢 **(本次 commit, 2026-06-22 落地)** |
+|| **Step D** | conftest.py 默认离线 + GPU pytest 41s 跑通(78 passed) | 🟢 `96a4dfd` |
+|| **Step E** | 部署文档真测:5 分钟命令从 0 到跑通端到端 | ⏳ 待办 |
+|| **Step F** (可选) | 把 vpbuddy 打包成 PyPI wheel + Hermes skill 一体化 | ⏳ 远期 |
 
 ## 关联文档
 

@@ -52,6 +52,9 @@ target/
 *.so
 *.dylib
 
+# ===== Hermes Agent(本机 .hermes 不入仓,VS Code .hermes 是配置) =====
+.hermes/
+
 # ===== 密钥 / 凭据 =====
 .env
 .env.local

@@ -25,18 +25,38 @@ os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 # === 关键 (6): GPU 端默认跑集成测试 ===
 os.environ.setdefault("RUN_GPU_INTEGRATION", "1")
 
-import torchaudio
+import sys
+import types
 
-if not hasattr(torchaudio, "AudioMetaData"):
-    class _AudioMetaData:  # noqa: D401
-        """dummy placeholder for torchaudio.AudioMetaData (torchaudio < 2.9 缺失)."""
-        pass
-    torchaudio.AudioMetaData = _AudioMetaData
+try:
+    import torchaudio  # type: ignore
+    _HAS_TORCHAUDIO = True
+except ImportError:
+    _HAS_TORCHAUDIO = False
 
-if not hasattr(torchaudio, "list_audio_backends"):
-    def _list_audio_backends():
-        return ["soundfile"]
-    torchaudio.list_audio_backends = _list_audio_backends
+if _HAS_TORCHAUDIO:
+    if not hasattr(torchaudio, "AudioMetaData"):
+        class _AudioMetaData:  # noqa: D401
+            """dummy placeholder for torchaudio.AudioMetaData (torchaudio < 2.9 缺失)."""
+            pass
+        torchaudio.AudioMetaData = _AudioMetaData
+
+    if not hasattr(torchaudio, "list_audio_backends"):
+        def _list_audio_backends():
+            return ["soundfile"]
+        torchaudio.list_audio_backends = _list_audio_backends
+else:
+    # CPU only / dev box 没有 torchaudio:
+    # - 保留 module 占位(让 `import torchaudio` 不挂)
+    # - sentence-transformers 的 is_torchaudio_available() 会通过 (无 spec 报错)
+    # - 关键修复:给 dummy 真实 __spec__ + __path__,防止 transformers.is_package_available 抛错
+    import importlib.machinery
+    _spec = importlib.machinery.ModuleSpec("torchaudio", loader=None, is_package=True)
+    sys.modules["torchaudio"] = importlib.util.module_from_spec(_spec)  # type: ignore
+    import torchaudio  # type: ignore  # noqa: F811
+    torchaudio.AudioMetaData = type("AudioMetaData", (), {})
+    torchaudio.list_audio_backends = lambda: ["soundfile"]
+    torchaudio.load = lambda *a, **kw: (None, 16000)
 
 # PyTorch 2.6+ 默认 weights_only=True,pyannote 3.3.2 老 checkpoint 不兼容
 import torch as _torch

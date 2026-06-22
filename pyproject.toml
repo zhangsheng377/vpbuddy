@@ -34,6 +34,9 @@ classifiers = [
 ]
 
 # ===== 核心依赖 (ADR-0009 关键:hermes-agent 是 runtime) =====
+# ⚠️ 重要:`hermes-agent` 是 pip 包名,但 Python 模块路径是 `run_agent`(不是 `hermes_agent`)
+# editable install 用 metapath finder 把散模块挂到 namespace
+# 详见 src/vpbuddy/sub_session_controller.py 与 ADR-0009 §集成方式
 dependencies = [
     # Hermes Agent runtime (ADR-0009 — VPBuddy = Hermes skill,不可绕过)
     "hermes-agent>=0.16.0,<1.0",

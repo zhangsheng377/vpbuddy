@@ -3,14 +3,14 @@
 MVP 进度:
 - ✅ Step 1: 会议结构化状态(MeetingState + storage)
 - ✅ Step 2: ASR + 说话人分离(Whisper + pyannote)— ADR-0004
-- ⏳ Step 3: 后台交付物生成(目标: 用 Hermes `delegate_task` 5 Agent 真并行,见 ADR-0009 Step B)
+- ✅ Step 3: 后台交付物生成(in-process `from run_agent import AIAgent(session_id=...)` + `ThreadPoolExecutor(3)` 真并发 — ADR-0009 落地,2026-06-22)
 - ⏳ Step 4: VP steer + 4 窗口 UI
 - ❌ ~~Step 5: 飞书妙记会后校准~~ → **Superseded by ADR-0008 (2026-06-21)**;说话人校准改人工/stt_map
 - ⏳ Step 6: 多平台扩展(极低优先级)
 
 ADR-0004 Step 2 设计:见 docs/decisions/0004-MVP-Step2-ASR设计.md
 ADR-0008 Superseded:见 docs/decisions/0008-ADR-0001-决策1-Superseded.md
-ADR-0009 部署架构:见 docs/decisions/0009-部署架构-Hermes-runtime.md (2026-06-21 — VPBuddy = Hermes skill 集合,目标服务器装 hermes-agent + vpbuddy)
+ADR-0009 部署架构:见 docs/decisions/0009-部署架构-Hermes-runtime.md (2026-06-22 更新 — VPBuddy 用 in-process `from run_agent import AIAgent` 真共享 session + ThreadPoolExecutor(3) 真并发)
 """
 __version__ = "0.2.0"  # Step 2 完成
 
