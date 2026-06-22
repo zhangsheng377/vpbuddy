@@ -83,17 +83,27 @@ vpbuddy controller --start
 
 > 张胜东在 2026-06-22 发现 GPU 服务器的 `~/.hermes/.env` 含本机真实 API key,立即清理 + 修补 install 脚本。
 
-**三条铁律**:
+**铁律先复习**(ADR-0009 + ADR-0001):
+- **VPBuddy 必须运行在 Hermes Agent 之上**(不自研 LLM 框架)
+- 一次会议 = 一个 Hermes session,6 doc_kind = 6 子 session
+- 真并发 = `ThreadPoolExecutor(3)` + in-process `from run_agent import AIAgent`
+- LLM API key 由 `~/.hermes/.env` 通过 env var 注入,VPBuddy 不自己调 LLM HTTP
+
+**信息隔离三条铁律**(ADR-0010):
 1. `config.yaml` / `.env` 都用占位符,真实 key 由用户手动 `vim` 填
 2. install 脚本从不包含真实 API key(可以安全推到 GitHub)
 3. install 脚本不覆盖用户已存在的 `~/.hermes/config.yaml` 或 `.env`
 
 ```bash
-# 1. install 只创建占位符
+# 1. install 只创建占位符(GPU 服务器 install-gpu-server.sh 一步装 hermes-agent + vpbuddy)
 bash scripts/install-gpu-server.sh
 # 输出:MINIMAX_CN_API_KEY=*** 2. 用户手动填
 vim ~/.hermes/.env
 chmod 600 ~/.hermes/.env
+
+# 3. 验证:hermes-agent + vpbuddy 真共享 session
+conda activate vpbuddy-gpu
+python3 -c "from run_agent import AIAgent; print('✅ VPBuddy ↔ Hermes 真连接')"
 ```
 
 ### 命令速查

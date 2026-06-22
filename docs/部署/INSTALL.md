@@ -22,7 +22,30 @@
 
 > **2026-06-22**:张胜东发现 GPU 服务器的 `~/.hermes/.env` 包含本机的真实 API key (来自之前的 `scp` 同步),**立刻清理并修补 install 脚本**。
 
-### 三条铁律
+### 先复习架构铁律(ADR-0009)
+
+VPBuddy **必须**运行在 Hermes Agent 之上(ADR-0009 §0.3 不变量):
+
+```
+GPU 服务器
+├── pip install hermes-agent 0.16.0           ← ADR-0009 选项 C:以 Hermes 为 runtime
+├── pip install -e ".[gpu,audio]"            ← VPBuddy 装在 vpbuddy-gpu conda env
+│
+├── ~/.hermes/                                ← Hermes runtime
+│   ├── config.yaml                          ← Hermes config(provider/base_url)
+│   ├── .env                                 ← LLM API keys(MINIMAX_CN_API_KEY 等)
+│   ├── skills/vpbuddy/                      ← VPBuddy 作为 Hermes skill
+│   └── sessions/                            ← 一次会议 = 一个 session
+│
+└── vpbuddy controller                        ← in-process 调 AIAgent
+    └── from run_agent import AIAgent(session_id=f"meeting:{mid}:{kind}")
+                                       ↑
+                                    Hermes Agent
+```
+
+LLM API key = `~/.hermes/.env` → env var → Hermes Agent → VPBuddy 不直接调 LLM HTTP
+
+### 三条铁律(信息隔离)
 
 ```
 1. config.yaml / .env 都用占位符,真实 key 由用户手动 vim 填

@@ -9,22 +9,33 @@
 
 ## Context
 
-VPBuddy 部署链路(`ADR-0009`)包含两个角色:
+VPBuddy 部署链路(`ADR-0009`)**铁律:VPBuddy 必须运行在 Hermes Agent 之上**(ADR-0009 §0.3 不变量 + ADR-0001 §6 决策 1)。
+
+- 一次会议 = 一个 Hermes session (`meeting:{mid}`)  
+- 6 种子文档 = 6 个子 session (`meeting:{mid}:{kind}`)  
+- 真并发 = `ThreadPoolExecutor(3)` + in-process `from run_agent import AIAgent` (ADR-0009 §决策 选项 C)  
+- LLM API key = 由 `~/.hermes/.env` 通过 env var 注入,**VPBuddy 不自己调 LLM HTTP**
+
+`ADR-0009` 定义两个角色:
 
 | 角色 | 机器 | 跑什么 | 谁配 API key |
 |---|---|---|---|
-| **A** GPU 服务器 | 192.168.10.63 (zsd) | vpbuddy controller + 6 文档生成 + KB | 张胜东(我们) |
-| **B** VP 桌面客户端 | VP 自带 Mac/笔记本 | vpbuddy ui + 音频采集 + LLM 调 | VP(每个 VP 自己) |
+| **A** GPU 服务器 | 192.168.10.63 (zsd) | vpbuddy controller + 6 文档生成 + KB(GPU 加速 ASR + 说话人分离) | 张胜东(我们) |
+| **B** VP 桌面客户端 | VP 自带 Mac/笔记本 | vpbuddy ui + 音频采集 + Hermes 进程内 LLM | VP(每个 VP 自己) |
 
 **问题**:之前的开发模式是"开发机 `~/.hermes/` 全量 scp 到 GPU 服务器"。这导致:
 
 1. **真实 API key 跨机传输** — 任何中间节点(NAS、日志、备份)都可能截获
-2. **开发机的 MEMORY/USER 偏好泄露** — VP 客户端不应该看到"李丹=张胜东"这类私人信息
+2. **开发机的 MEMORY/USER 偏好泄露** — VP 客户端不应该看到"张腾予/李丹"这类私人信息
 3. **VP 客户端之间不隔离** — A VP 看到 B VP 的 settings
 4. **install 脚本含真实 key 风险** — 一旦脚本被推到 GitHub 就是 commit history 泄露
 
 具体泄露事件:
 - 2026-06-22 22:34,张胜东发现:`192.168.10.63:~/.hermes/.env` 包含本机 `MINIMAX_CN_API_KEY`/`OPENROUTER_API_KEY`/`XIAOMI_API_KEY`/`FEISHU_APP_SECRET`/`HASS_TOKEN`/`WEIXIN_TOKEN`,全部来自我之前的 scp 同步。
+
+### 关键澄清(2026-06-22 22:48 由张胜东纠错)
+
+Hermes 在 GPU 端**已经装好**(pip install hermes-agent 0.16.0,/home/zsd/hermes-agent-src),`from run_agent import AIAgent` 真 import 成功,VPBuddy controller 已经在 in-process 调 AIAgent(只 subprocess fallback 到 `hermes chat`)。我(hermes)之前的描述"GPU 服务器根本没装 hermes-agent"是**错误**的——`pip list | grep hermes-agent` 显示 0.16.0 已在 vpbuddy-gpu conda env 里。问题从来不是"要不要装 hermes",而是"`~/.hermes/.env` 的真 key 怎么管理"。
 
 ## Decision
 
