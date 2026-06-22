@@ -228,42 +228,34 @@ class TestAgentCache:
     def test_get_or_create_agent_reuses_instance(self):
         """同 (meeting_id, doc_kind) 两次调用 → 同一 AIAgent 实例"""
         from vpbuddy.sub_session_controller import (
-            _AGENT_CACHE, _get_or_create_agent, _agent_session_id,
+            _AGENT_CACHE, _AGENT_AVAILABLE, _get_or_create_agent, _agent_session_id,
         )
-        # 清掉之前的 cache(测试隔离)
-        _AGENT_CACHE.clear()
-
-        if not _get_or_create_agent.__module__:
-            pytest.skip("AIAgent not available")
-
-        sid = _agent_session_id("CACHE_TEST_001", "req")
-        # 假装有 AIAgent(否则 import 会失败)
-        try:
-            a1 = _get_or_create_agent("CACHE_TEST_001", "req")
-            a2 = _get_or_create_agent("CACHE_TEST_001", "req")
-        except RuntimeError:
+        if not _AGENT_AVAILABLE:
             pytest.skip("AIAgent not available (no hermes-agent)")
 
+        _AGENT_CACHE.clear()  # 测试隔离
+        sid = _agent_session_id("CACHE_TEST_001", "req")
+
+        a1 = _get_or_create_agent("CACHE_TEST_001", "req")
+        a2 = _get_or_create_agent("CACHE_TEST_001", "req")
         assert a1 is a2, "Expected same AIAgent instance for same (mid, kind)"
         assert sid in _AGENT_CACHE
 
     def test_different_doc_kinds_different_agents(self):
         """不同 doc_kind → 不同 AIAgent 实例"""
-        from vpbuddy.sub_session_controller import _AGENT_CACHE, _get_or_create_agent
+        from vpbuddy.sub_session_controller import _AGENT_CACHE, _AGENT_AVAILABLE, _get_or_create_agent
 
-        _AGENT_CACHE.clear()
-
-        try:
-            a_req = _get_or_create_agent("CACHE_TEST_002", "req")
-            a_arch = _get_or_create_agent("CACHE_TEST_002", "arch")
-        except RuntimeError:
+        if not _AGENT_AVAILABLE:
             pytest.skip("AIAgent not available")
 
+        _AGENT_CACHE.clear()
+        a_req = _get_or_create_agent("CACHE_TEST_002", "req")
+        a_arch = _get_or_create_agent("CACHE_TEST_002", "arch")
         assert a_req is not a_arch
         assert len(_AGENT_CACHE) == 2
 
     def test_session_id_format(self):
-        """session_id 格式 = meeting:{mid}:{kind}"""
+        """session_id 格式 = meeting:{mid}:{kind}(不依赖 AIAgent)"""
         from vpbuddy.sub_session_controller import _agent_session_id
         assert _agent_session_id("MTG123", "req") == "meeting:MTG123:req"
         assert _agent_session_id("PHASE2_TEST", "demo") == "meeting:PHASE2_TEST:demo"
