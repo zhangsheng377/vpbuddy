@@ -211,9 +211,23 @@
     <h2 style="font-size:14px;font-weight:500;margin-bottom:16px;">跨会议 RAG 检索</h2>
     <div class="kb-search">
       <input type="text" id="kb-query" placeholder="输入查询(如:SSO 走哪个 IdP / 碳排放 排放因子)" />
+      <select id="kb-topk" style="background:var(--bg-panel);color:var(--text-primary);border:1px solid var(--border);border-radius:6px;padding:8px;">
+        <option value="5">Top 5</option>
+        <option value="10">Top 10</option>
+        <option value="20">Top 20</option>
+      </select>
+      <select id="kb-kind" style="background:var(--bg-panel);color:var(--text-primary);border:1px solid var(--border);border-radius:6px;padding:8px;">
+        <option value="">所有 doc_kind</option>
+        <option value="req">req (需求)</option>
+        <option value="arch">arch (架构)</option>
+        <option value="tasks">tasks (任务)</option>
+        <option value="api">api (API)</option>
+        <option value="risk">risk (风险)</option>
+        <option value="demo">demo (演示)</option>
+      </select>
       <button onclick="searchKB()">检索</button>
     </div>
-    <div id="kb-results"></div>
+    <div id="kb-results" style="max-width:1000px;"></div>
   </div>
 
   <!-- Tab 4: Settings -->
@@ -281,24 +295,57 @@ async function loadTimeline() {
 async function searchKB() {
   const q = document.getElementById('kb-query').value.trim();
   if (!q) return;
+  const topK = parseInt(document.getElementById('kb-topk').value);
+  const kindFilter = document.getElementById('kb-kind').value;
   const results = document.getElementById('kb-results');
   results.innerHTML = '<div class="empty">检索中...</div>';
-  const r = await fetch('/api/kb/search?q=' + encodeURIComponent(q));
+
+  // 拿更多结果再 filter(避免 filter 后不足 topK)
+  const fetchK = kindFilter ? topK * 4 : topK;
+  const r = await fetch('/api/kb/search?q=' + encodeURIComponent(q) + '&top_k=' + fetchK);
   const data = await r.json();
-  if (data.results.length === 0) {
+  let resultsArr = data.results || [];
+  if (kindFilter) {
+    resultsArr = resultsArr.filter(x => x.doc_kind === kindFilter);
+  }
+  resultsArr = resultsArr.slice(0, topK);
+
+  if (resultsArr.length === 0) {
     results.innerHTML = '<div class="empty">无结果</div>';
     return;
   }
-  results.innerHTML = data.results.map(x => `
-    <div class="kb-result">
+
+  results.innerHTML = resultsArr.map((x, i) => {
+    const distPct = Math.max(0, Math.min(100, (1 - x.distance) * 100)).toFixed(1);
+    const distColor = x.distance < 0.5 ? 'var(--success)' : x.distance < 1.0 ? 'var(--warning)' : 'var(--danger)';
+    // 高亮查询关键词
+    const highlighted = highlightQuery(x.snippet, q);
+    // 跳源文档链接
+    const docUrl = `/docs/${x.meeting_id}/${x.doc_kind}.md`;
+    return `
+    <div class="kb-result" style="cursor:pointer;" onclick="window.open('${docUrl}', '_blank')">
       <div class="kb-result-head">
-        <span class="badge">${x.meeting_id}/${x.doc_kind}</span>
-        <span class="kb-result-dist">dist=${x.distance.toFixed(3)}</span>
+        <span class="badge">${i+1}. ${x.meeting_id}/${x.doc_kind}</span>
+        <span class="kb-result-dist" style="color:${distColor};">相似度 ${distPct}% (dist=${x.distance.toFixed(3)})</span>
+        <span style="margin-left:auto;font-size:10px;color:var(--text-subtle);">点击查看源文档 →</span>
       </div>
-      <div class="kb-result-text">${escapeHtml(x.snippet)}</div>
+      <div class="kb-result-text">${highlighted}</div>
     </div>
-  `).join('');
+  `;
+  }).join('');
 }
+
+// 高亮查询词(忽略大小写 + 转义 HTML)
+function highlightQuery(text, query) {
+  const escaped = escapeHtml(text);
+  if (!query.trim()) return escaped;
+  // 拆 query 成关键词(空格分隔,长度 > 1)
+  const keywords = query.split(/\s+/).filter(k => k.length >= 1).map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  if (keywords.length === 0) return escaped;
+  const re = new RegExp('(' + keywords.join('|') + ')', 'gi');
+  return escaped.replace(re, '<mark style="background:rgba(245,158,11,0.3);color:var(--text-primary);padding:0 2px;border-radius:2px;">$1</mark>');
+}
+
 document.getElementById('kb-query').addEventListener('keypress', e => {
   if (e.key === 'Enter') searchKB();
 });
