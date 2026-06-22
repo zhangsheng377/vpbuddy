@@ -346,6 +346,20 @@ def trigger_sub_session(meeting_id: str, doc_kind: str, dry_run: bool = False) -
         result = _trigger_via_subprocess(prompt, meeting_id, doc_kind)
     logger.info(f"[{meeting_id}/{doc_kind}] trigger done in {_t.time()-t0:.1f}s, triggered={result.get('triggered')}")
 
+    # 6.5 验证 doc 真写盘(2026-06-22 修:agent.chat() 返回文字不代表调了 write_file)
+    # agent 经常只在文字响应里输出文档,必须强制验证 doc_path 存在
+    if result.get("triggered") and not doc_path.exists():
+        size_hint = result.get("agent_response", "")[:200]
+        logger.warning(
+            f"[{meeting_id}/{doc_kind}] agent returned text but {doc_path} not written, "
+            f"agent_response_tail={size_hint!r}"
+        )
+        result["triggered"] = False
+        result["error"] = f"agent did not write {doc_path} (response: {size_hint!r})"
+        return result
+    if result.get("triggered") and doc_path.exists():
+        result["doc_size"] = doc_path.stat().st_size
+
     # 7. 写完文档后,自动存进知识库(2026-06-22 增强:kb_status + 3 次 retry)
     if result.get("triggered") and doc_path.exists():
         content = doc_path.read_text(encoding="utf-8")

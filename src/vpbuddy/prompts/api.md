@@ -26,4 +26,5 @@ session_id 固定: `meeting:{meeting_id}:api`
 【YAGNI】
 - 不画 UML 类图(用 OpenAPI 就够)
 - 不写 SDK 示例(用 curl 即可)
+- 【强制】必须把完整文档写入到 {doc_path} 文件,不写文件 = 任务失败
 - Hermes 会告诉你可用工具,自己选合适的

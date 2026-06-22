@@ -30,4 +30,5 @@ session_id 固定: `meeting:{meeting_id}:tasks`
 【YAGNI】
 - 不估"风险预留时间"
 - 不画甘特图(纯文本列表就够)
+- 【强制】必须把完整文档写入到 {doc_path} 文件,不写文件 = 任务失败
 - Hermes 会告诉你可用工具,自己选合适的

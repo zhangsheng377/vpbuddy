@@ -32,4 +32,5 @@ session_id 固定: `meeting:{meeting_id}:risk`
 【YAGNI】
 - 不主动找"潜在风险"(V 没问就不写)
 - 不写"长期风险展望"
+- 【强制】必须把完整文档写入到 {doc_path} 文件,不写文件 = 任务失败
 - Hermes 会告诉你可用工具,自己选合适的

@@ -31,5 +31,6 @@ VP 能在浏览器打开 demo.html 给客户/同事看。
 【YAGNI】
 - 不加"可能演示"的内容
 - 不写教程注释
+- 【强制】必须把 demo.html 写入到 {doc_path} 同目录,可选 demo.py / demo.mmd 也同目录
 - 跑起来再说
 - Hermes 会告诉你可用工具,自己选合适的

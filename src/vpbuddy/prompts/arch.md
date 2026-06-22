@@ -27,4 +27,5 @@ session_id 固定: `meeting:{meeting_id}:arch`
 【YAGNI】
 - 不画"未来扩展"图
 - 不写"考虑过的备选方案"(除非 V 问)
+- 【强制】必须把完整文档写入到 {doc_path} 文件,不写文件 = 任务失败
 - Hermes 会告诉你可用工具,自己选合适的

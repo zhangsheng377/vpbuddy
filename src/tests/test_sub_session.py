@@ -409,3 +409,80 @@ class TestKbStatus:
         data = get_kb_status(meeting_id="MTG_A")
         assert data["summary"]["total"] == 1
         assert data["items"][0]["meeting_id"] == "MTG_A"
+
+
+class TestTriggerWritesFile:
+    """验证 trigger_sub_session 真的把 doc 写盘了(2026-06-22 修:之前 trigger=True 假阳性)
+
+    Bug 历史:PHASE3_TTS_TEST 测试发现 agent.chat() 返回文字响应但没调 write_file 工具,
+    trigger API 仍返 triggered=True,KB 也没进。
+    Fix:trigger_sub_session 调 agent 后强制验证 doc_path.exists(),不存在则改 triggered=False。
+    """
+
+    def test_trigger_false_when_agent_did_not_write(self, populated_meeting, monkeypatch):
+        """agent 返文字但没写文件 → trigger 必须返 False"""
+        from vpbuddy import sub_session_controller as ctrl
+        # 1. 删可能存在的旧文件
+        doc_path = get_doc_path(populated_meeting, "req")
+        if doc_path.exists():
+            doc_path.unlink()
+        # 2. Mock _trigger_via_aiagent 让它返 triggered=True 但不写文件
+        def fake_aiagent(prompt, meeting_id, doc_kind):
+            return {
+                "triggered": True,
+                "session_id": f"meeting:{meeting_id}:{doc_kind}",
+                "agent_response": "I wrote a great doc but did not call write_file",
+                "agent_path": "in-process",
+                "error": None,
+            }
+        monkeypatch.setattr(ctrl, "_trigger_via_aiagent", fake_aiagent)
+        monkeypatch.setattr(ctrl, "_AGENT_AVAILABLE", True)
+        # 3. 调 trigger
+        r = trigger_sub_session(populated_meeting, "req", dry_run=False)
+        # 4. 验证:triggered=False + error 信息
+        assert r["triggered"] is False, f"应返 False 因为文件没写,实得: {r}"
+        assert "did not write" in r["error"]
+        assert str(doc_path) in r["error"]
+        assert not doc_path.exists(), "验证文件确实没写盘"
+
+    def test_trigger_true_when_agent_wrote_file(self, populated_meeting, monkeypatch):
+        """agent 返文字 + 真写了文件 → trigger 返 True + doc_size"""
+        from vpbuddy import sub_session_controller as ctrl
+        doc_path = get_doc_path(populated_meeting, "api")
+        # 1. 预先创建文件(模拟 AIAgent 写过了)
+        doc_path.parent.mkdir(parents=True, exist_ok=True)
+        doc_path.write_text("# API\n\n## POST /v1/test\n", encoding="utf-8")
+        # 2. Mock agent 返 triggered=True
+        def fake_aiagent(prompt, meeting_id, doc_kind):
+            return {
+                "triggered": True,
+                "session_id": f"meeting:{meeting_id}:{doc_kind}",
+                "agent_response": "I called write_file",
+                "agent_path": "in-process",
+                "error": None,
+            }
+        monkeypatch.setattr(ctrl, "_trigger_via_aiagent", fake_aiagent)
+        monkeypatch.setattr(ctrl, "_AGENT_AVAILABLE", True)
+        try:
+            r = trigger_sub_session(populated_meeting, "api", dry_run=False)
+            # 3. 验证:triggered=True + doc_size 字段
+            assert r["triggered"] is True
+            assert r.get("doc_size") == doc_path.stat().st_size
+        finally:
+            doc_path.unlink(missing_ok=True)
+
+    def test_dry_run_skips_write_check(self, populated_meeting):
+        """dry_run 不走写盘验证(只渲染 prompt)"""
+        # dry_run 路径会 return 早,不调 _trigger_via_aiagent
+        r = trigger_sub_session(populated_meeting, "demo", dry_run=True)
+        assert r.get("dry_run") is True
+        assert r["triggered"] is False  # dry_run 永远 False
+
+    def test_vpbuddy_direct_skips_write_check(self, populated_meeting, monkeypatch):
+        """VPBUDDY_DIRECT=1 模式不走写盘验证(主 session 写文件)"""
+        monkeypatch.setenv("VPBUDDY_DIRECT", "1")
+        r = trigger_sub_session(populated_meeting, "risk", dry_run=False)
+        assert r["triggered"] is True
+        assert r["agent_path"] == "direct"
+        assert "doc_path" in r
+
