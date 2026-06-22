@@ -140,6 +140,7 @@ def get_status() -> dict:
                     total_docs += 1
 
     kb_docs = 0
+    kb_failed = 0
     if KB_PATH.exists():
         try:
             import sqlite3
@@ -149,6 +150,12 @@ def get_status() -> dict:
             conn.close()
         except Exception:
             pass
+    # 2026-06-22 加 failed 计数 (sub_session_controller 的 _KB_STATUS)
+    try:
+        from .sub_session_controller import get_kb_status
+        kb_failed = get_kb_status().get("summary", {}).get("failed", 0)
+    except Exception:
+        pass
 
     return {
         "controller": controller,
@@ -156,6 +163,7 @@ def get_status() -> dict:
             "active_meetings": len(meetings),
             "total_docs": total_docs,
             "kb_docs": kb_docs,
+            "kb_failed": kb_failed,
         },
         "paths": {
             "data_dir": str(DATA_DIR),
@@ -209,6 +217,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"query": "", "results": []})
             results = search_kb(q, top_k=top_k)
             return self._json({"query": q, "results": results, "count": len(results)})
+
+        # API: kb status (2026-06-22 — 跨会议 KB 写入状态)
+        if path == "/api/kb/status":
+            from .sub_session_controller import get_kb_status
+            meeting_id = params.get("meeting_id", [None])[0]
+            return self._json(get_kb_status(meeting_id=meeting_id))
 
         # API: status
         if path == "/api/status":

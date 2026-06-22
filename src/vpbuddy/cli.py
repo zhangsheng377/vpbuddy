@@ -66,6 +66,33 @@ def cmd_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_kb_status(args: argparse.Namespace) -> int:
+    """打印 KB 写入状态(2026-06-22 新增)
+
+    给运维 / VP 看哪些会议文档已经进 KB、哪些还在队列、哪些失败。
+    """
+    from .sub_session_controller import get_kb_status
+    data = get_kb_status(meeting_id=args.meeting)
+    summary = data["summary"]
+    items = data["items"]
+
+    print(f"KB 状态摘要:")
+    print(f"  total:    {summary.get('total', 0)}")
+    print(f"  stored:   {summary.get('stored', 0)}")
+    print(f"  queued:   {summary.get('queued', 0)}")
+    print(f"  retrying: {summary.get('retrying', 0)}")
+    print(f"  failed:   {summary.get('failed', 0)}")
+    if items:
+        print(f"\n详情:")
+        for it in items:
+            err = f" [{it['error'][:50]}]" if it.get("error") else ""
+            print(f"  - {it['meeting_id']}/{it['doc_kind']}: {it['status']} (attempts={it.get('attempts', 0)}){err}")
+    # failed > 0 时 exit 2 (给 cron / 监控用)
+    if summary.get("failed", 0) > 0:
+        return 2
+    return 0
+
+
 def cmd_version(args: argparse.Namespace) -> int:
     """打印版本"""
     from . import __version__
@@ -108,6 +135,11 @@ def build_parser() -> argparse.ArgumentParser:
     # list
     p_list = sub.add_parser("list", help="列出活跃会议")
     p_list.set_defaults(func=cmd_list)
+
+    # kb-status (2026-06-22)
+    p_kbs = sub.add_parser("kb-status", help="查 KB 写入状态(stored/failed/queued)")
+    p_kbs.add_argument("--meeting", help="只看某个会议")
+    p_kbs.set_defaults(func=cmd_kb_status)
 
     # version
     p_ver = sub.add_parser("version", help="打印版本")

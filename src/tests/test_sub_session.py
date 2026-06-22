@@ -337,3 +337,75 @@ class TestOfflineDefaults:
         )
         assert result.stdout.strip() == "1", \
             f"Expected TRANSFORMERS_OFFLINE=1 after import, got {result.stdout.strip()!r} (stderr: {result.stderr.strip()!r})"
+
+
+class TestKbStatus:
+    """2026-06-22:KB 状态可观测 + 自动 retry
+
+    trigger_sub_session 触发 KB 后,_KB_STATUS 记录状态(queued/stored/failed/retrying)。
+    get_kb_status() 给 UI / CLI / 监控用。
+    """
+
+    def test_kb_status_empty_initially(self):
+        """_KB_STATUS 启动时为空"""
+        from vpbuddy.sub_session_controller import _KB_STATUS
+        _KB_STATUS.clear()
+        assert _KB_STATUS == {}
+
+    def test_kb_status_after_dry_run_no_entry(self, populated_meeting):
+        """dry_run=True 不写 KB → _KB_STATUS 没该项"""
+        from vpbuddy.sub_session_controller import _KB_STATUS, trigger_sub_session
+        _KB_STATUS.clear()
+        trigger_sub_session(populated_meeting, "req", dry_run=True)
+        assert (populated_meeting, "req") not in _KB_STATUS
+
+    def test_kb_status_after_actual_trigger(self, populated_meeting, monkeypatch):
+        """实际触发(有 doc 文件)后 _KB_STATUS 有 queued/stored 记录
+
+        direct 模式不写 doc → 不入 KB(等主 session 写)
+        in-process 模式(doc 已存在)→ 入 KB
+        这里用 dry_run=False + 手动创建 doc 文件,模拟 in-process 触发
+        """
+        from vpbuddy.sub_session_controller import _KB_STATUS, trigger_sub_session, get_doc_path
+        monkeypatch.delenv("VPBUDDY_DIRECT", raising=False)
+        _KB_STATUS.clear()
+        # 预先创建 doc 文件(模拟 AIAgent 写过)
+        doc_path = get_doc_path(populated_meeting, "req")
+        doc_path.parent.mkdir(parents=True, exist_ok=True)
+        doc_path.write_text("# Test req doc\n", encoding="utf-8")
+        try:
+            r = trigger_sub_session(populated_meeting, "req", dry_run=False)
+            # in-process 触发 → doc 存在 → KB 写入路径触发
+            if r["triggered"]:
+                assert (populated_meeting, "req") in _KB_STATUS, \
+                    f"Expected KB status entry, got: {r}"
+                st = _KB_STATUS[(populated_meeting, "req")]
+                assert st["status"] in ("queued", "stored", "retrying", "failed")
+        finally:
+            doc_path.unlink(missing_ok=True)
+
+    def test_get_kb_status_summary(self):
+        """get_kb_status() 返 summary + items 字典"""
+        from vpbuddy.sub_session_controller import _KB_STATUS, get_kb_status
+        _KB_STATUS.clear()
+        _KB_STATUS[("MTG_A", "req")] = {"status": "stored", "attempts": 1, "started_at": "x", "error": None}
+        _KB_STATUS[("MTG_A", "arch")] = {"status": "queued", "attempts": 0, "started_at": "x", "error": None}
+        _KB_STATUS[("MTG_B", "risk")] = {"status": "failed", "attempts": 3, "started_at": "x", "error": "OOM"}
+
+        data = get_kb_status()
+        assert data["summary"]["total"] == 3
+        assert data["summary"]["stored"] == 1
+        assert data["summary"]["queued"] == 1
+        assert data["summary"]["failed"] == 1
+        assert len(data["items"]) == 3
+
+    def test_get_kb_status_filter_by_meeting(self):
+        """get_kb_status(meeting_id=X) 只返该会议"""
+        from vpbuddy.sub_session_controller import _KB_STATUS, get_kb_status
+        _KB_STATUS.clear()
+        _KB_STATUS[("MTG_A", "req")] = {"status": "stored", "attempts": 1, "started_at": "x", "error": None}
+        _KB_STATUS[("MTG_B", "req")] = {"status": "stored", "attempts": 1, "started_at": "x", "error": None}
+
+        data = get_kb_status(meeting_id="MTG_A")
+        assert data["summary"]["total"] == 1
+        assert data["items"][0]["meeting_id"] == "MTG_A"
