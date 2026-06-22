@@ -98,10 +98,18 @@ def _get_or_create_agent(meeting_id: str, doc_kind: str) -> Any:
             max_iterations=30,
             model=os.environ.get("VPBUDDY_LLM_MODEL", "MiniMax-M3"),
             ephemeral_system_prompt=(
-                f"你是 VPBuddy 的 {doc_kind} 子 session。"
-                f"session_id 固定 = {sid}。"
-                "工具集:terminal + file。你需要读 JSON state、写 markdown 到目标路径。"
-                "判断:state 有变化才改文档,否则输出'无变化'退出。"
+                f"你是 VPBuddy 的 {doc_kind} 子 session。\n"
+                f"session_id 固定 = {sid}。\n"
+                f"输出文件路径(必须写到这里):{get_doc_path(meeting_id, doc_kind)}\n"
+                "\n"
+                "【硬性要求 — 不遵守 = 任务失败】\n"
+                "1. 你**必须**调用 file toolset 里的 write_file 工具,把完整文档内容写入到上面的输出文件路径。\n"
+                "2. 不要只在文字响应里输出文档 — 文字响应不算完成任务。\n"
+                "3. 先调用 read_file 读取当前 state JSON 和(若存在)旧文档,再决定如何更新。\n"
+                "4. 如果 state 与旧文档完全一致,仍必须写一个空变更说明文件(标记 '无变化')。\n"
+                "\n"
+                "工作流:\n"
+                "  read_file(state) → 解析 facts → 生成文档内容 → write_file(目标路径, 完整内容) → 退出\n"
             ),
         )
         logger.info(f"创建新 AIAgent: session_id={sid}")
@@ -354,9 +362,25 @@ def trigger_sub_session(meeting_id: str, doc_kind: str, dry_run: bool = False) -
             f"[{meeting_id}/{doc_kind}] agent returned text but {doc_path} not written, "
             f"agent_response_tail={size_hint!r}"
         )
-        result["triggered"] = False
-        result["error"] = f"agent did not write {doc_path} (response: {size_hint!r})"
-        return result
+        # Fallback(2026-06-22):agent 工具调用弱时,自动用代码生成 docs
+        # VPBUDDY_FALLBACK=1(默认)→ 自动用 doc_fallback.generate_and_write 写盘
+        if os.environ.get("VPBUDDY_FALLBACK", "1") != "0":
+            try:
+                from .doc_fallback import generate_and_write
+                written = generate_and_write(meeting_id, doc_kind, state, doc_path)
+                logger.info(f"[{meeting_id}/{doc_kind}] fallback wrote {written} ({written.stat().st_size}B)")
+                result["doc_path"] = str(written)
+                result["doc_size"] = written.stat().st_size
+                result["fallback_used"] = True
+            except Exception as e:
+                logger.error(f"[{meeting_id}/{doc_kind}] fallback also failed: {e}")
+                result["triggered"] = False
+                result["error"] = f"agent did not write {doc_path} AND fallback failed: {type(e).__name__}: {e}"
+                return result
+        else:
+            result["triggered"] = False
+            result["error"] = f"agent did not write {doc_path} (response: {size_hint!r})"
+            return result
     if result.get("triggered") and doc_path.exists():
         result["doc_size"] = doc_path.stat().st_size
 

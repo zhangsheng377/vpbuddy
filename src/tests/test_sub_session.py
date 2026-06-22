@@ -420,7 +420,10 @@ class TestTriggerWritesFile:
     """
 
     def test_trigger_false_when_agent_did_not_write(self, populated_meeting, monkeypatch):
-        """agent 返文字但没写文件 → trigger 必须返 False"""
+        """agent 返文字但没写文件 + VPBUDDY_FALLBACK=0 → trigger 返 False
+
+        默认 (VPBUDDY_FALLBACK=1) 会自动调 fallback 写盘,所以这里设 FALLBACK=0 测严格路径。
+        """
         from vpbuddy import sub_session_controller as ctrl
         # 1. 删可能存在的旧文件
         doc_path = get_doc_path(populated_meeting, "req")
@@ -437,13 +440,40 @@ class TestTriggerWritesFile:
             }
         monkeypatch.setattr(ctrl, "_trigger_via_aiagent", fake_aiagent)
         monkeypatch.setattr(ctrl, "_AGENT_AVAILABLE", True)
+        monkeypatch.setenv("VPBUDDY_FALLBACK", "0")
         # 3. 调 trigger
         r = trigger_sub_session(populated_meeting, "req", dry_run=False)
         # 4. 验证:triggered=False + error 信息
-        assert r["triggered"] is False, f"应返 False 因为文件没写,实得: {r}"
+        assert r["triggered"] is False, f"应返 False 因为 FALLBACK=0 且文件没写,实得: {r}"
         assert "did not write" in r["error"]
         assert str(doc_path) in r["error"]
         assert not doc_path.exists(), "验证文件确实没写盘"
+
+    def test_trigger_uses_fallback_when_agent_did_not_write(self, populated_meeting, monkeypatch):
+        """VPBUDDY_FALLBACK=1 (默认) → agent 不写时自动 fallback 写盘"""
+        from vpbuddy import sub_session_controller as ctrl
+        doc_path = get_doc_path(populated_meeting, "tasks")
+        if doc_path.exists():
+            doc_path.unlink()
+        def fake_aiagent(prompt, meeting_id, doc_kind):
+            return {
+                "triggered": True,
+                "session_id": f"meeting:{meeting_id}:{doc_kind}",
+                "agent_response": "I forgot to call write_file",
+                "agent_path": "in-process",
+                "error": None,
+            }
+        monkeypatch.setattr(ctrl, "_trigger_via_aiagent", fake_aiagent)
+        monkeypatch.setattr(ctrl, "_AGENT_AVAILABLE", True)
+        # FALLBACK=1 是默认,显式确认
+        monkeypatch.setenv("VPBUDDY_FALLBACK", "1")
+        r = trigger_sub_session(populated_meeting, "tasks", dry_run=False)
+        assert r["triggered"] is True
+        assert r.get("fallback_used") is True
+        assert doc_path.exists(), "fallback 必须把文件写盘"
+        assert r.get("doc_size", 0) > 0
+        # 清理
+        doc_path.unlink(missing_ok=True)
 
     def test_trigger_true_when_agent_wrote_file(self, populated_meeting, monkeypatch):
         """agent 返文字 + 真写了文件 → trigger 返 True + doc_size"""
