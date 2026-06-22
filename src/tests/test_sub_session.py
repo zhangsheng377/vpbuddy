@@ -299,3 +299,41 @@ class TestParallelRun:
             parallel=False,
         )
         assert len(results) == 6
+
+
+class TestOfflineDefaults:
+    """2026-06-22 §19/§20 踩坑:KB 模型默认离线,避免 controller 进程卡 53min
+
+    conftest.py 在 pytest 进程设了 HF_HUB_OFFLINE=1,但跑 `python -m vpbuddy.sub_session_controller`
+    时 conftest 不加载。controller.py 顶部 setdefault 这俩 env var,KB add_document 才不联网。
+    """
+
+    def test_hf_hub_offline_set_in_controller_module(self):
+        """sub_session_controller.py 顶部应设 HF_HUB_OFFLINE=1"""
+        import subprocess
+        import sys
+        env = {"PATH": os.environ.get("PATH", ""), "PYTHONPATH": "src"}
+        result = subprocess.run(
+            [sys.executable, "-c",
+             "import os; from vpbuddy import sub_session_controller; "
+             "print(os.environ.get('HF_HUB_OFFLINE', 'NOT_SET'))"],
+            capture_output=True, text=True, env=env,
+            cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        )
+        assert result.stdout.strip() == "1", \
+            f"Expected HF_HUB_OFFLINE=1 after import, got {result.stdout.strip()!r} (stderr: {result.stderr.strip()!r})"
+
+    def test_transformers_offline_set_in_controller_module(self):
+        """sub_session_controller.py 顶部应设 TRANSFORMERS_OFFLINE=1"""
+        import subprocess
+        import sys
+        env = {"PATH": os.environ.get("PATH", ""), "PYTHONPATH": "src"}
+        result = subprocess.run(
+            [sys.executable, "-c",
+             "import os; from vpbuddy import sub_session_controller; "
+             "print(os.environ.get('TRANSFORMERS_OFFLINE', 'NOT_SET'))"],
+            capture_output=True, text=True, env=env,
+            cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        )
+        assert result.stdout.strip() == "1", \
+            f"Expected TRANSFORMERS_OFFLINE=1 after import, got {result.stdout.strip()!r} (stderr: {result.stderr.strip()!r})"

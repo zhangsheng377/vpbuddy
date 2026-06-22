@@ -32,6 +32,12 @@ from .storage import MeetingStorage
 
 logger = logging.getLogger(__name__)
 
+# === 关键 (2026-06-22 §19/§20 踩坑):KB 模型默认走 cache,不联网 ===
+# conftest.py 在 pytest 进程设了这俩 env var,但跑 `python -m vpbuddy.sub_session_controller`
+# 时 conftest 不加载 — KB add_document 会卡 53min(详见 docs/部署/踩坑记录.md §19)
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 # 默认路径(可通过环境变量覆盖)
 DATA_DIR = Path(os.environ.get("VPBUDDY_DATA_DIR", "/home/zsd/vpbuddy/data/meetings"))
 DOCS_DIR = Path(os.environ.get("VPBUDDY_DOCS_DIR", "/home/zsd/vpbuddy/docs"))
