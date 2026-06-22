@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VPBuddy — 本地优先的会议 AI 系统</title>
+<meta name="description" content="VPBuddy:本地优先的会议 AI 系统。音频 loopback → ASR → 6 文档自动生成 → 跨会议 KB 检索。完全运行在 VP 桌面客户端,数据不上传。">
+<style>
+  :root {
+    --bg: #08090a;
+    --bg-panel: #0f1011;
+    --bg-surface: #191a1b;
+    --bg-card: #1f2021;
+    --text-primary: #f7f8f8;
+    --text-secondary: #d0d6e0;
+    --text-muted: #8a8f98;
+    --text-subtle: #62666d;
+    --accent: #7170ff;
+    --accent-bg: #5e6ad2;
+    --accent-glow: rgba(113, 112, 255, 0.3);
+    --success: #10b981;
+    --border: rgba(255,255,255,0.08);
+    --border-subtle: rgba(255,255,255,0.05);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    font-family: -apple-system, "Inter", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--text-primary);
+    font-size: 15px; line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  body { min-height: 100vh; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", "Consolas", monospace;
+    font-size: 13px;
+  }
+  code {
+    background: var(--bg-surface);
+    padding: 2px 6px;
+    border-radius: 3px;
+    color: #f59e0b;
+  }
+  pre {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    overflow-x: auto;
+    color: var(--text-secondary);
+  }
+  pre code { background: none; padding: 0; color: var(--text-secondary); }
+
+  /* Layout */
+  .container { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+
+  /* Header */
+  .topnav {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(8, 9, 10, 0.85);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .topnav-inner {
+    display: flex; align-items: center; gap: 16px;
+    height: 60px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 16px; }
+  .brand-icon {
+    width: 28px; height: 28px;
+    background: linear-gradient(135deg, var(--accent), #828fff);
+    border-radius: 7px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 14px; color: white;
+    box-shadow: 0 4px 12px var(--accent-glow);
+  }
+  .nav-links { display: flex; gap: 4px; margin-left: auto; }
+  .nav-links a {
+    padding: 6px 12px;
+    color: var(--text-secondary);
+    border-radius: 6px;
+    font-size: 13px;
+  }
+  .nav-links a:hover { background: var(--bg-surface); text-decoration: none; }
+  .github-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--bg-surface);
+    color: var(--text-primary) !important;
+    border: 1px solid var(--border);
+    padding: 6px 12px; border-radius: 6px;
+    font-size: 13px; font-weight: 500;
+  }
+  .github-btn:hover { background: var(--bg-card); text-decoration: none; }
+
+  /* Hero */
+  .hero {
+    padding: 100px 0 80px;
+    text-align: center;
+  }
+  .hero-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--bg-surface);
+    color: var(--text-secondary);
+    padding: 5px 12px; border-radius: 20px;
+    font-size: 12px; font-weight: 500;
+    border: 1px solid var(--border);
+    margin-bottom: 24px;
+  }
+  .hero-badge .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--success);
+    box-shadow: 0 0 8px var(--success);
+  }
+  .hero h1 {
+    font-size: 56px; font-weight: 700;
+    line-height: 1.1; letter-spacing: -0.02em;
+    background: linear-gradient(180deg, #ffffff 0%, #a0a8b0 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 20px;
+  }
+  .hero .subtitle {
+    font-size: 20px; color: var(--text-muted);
+    max-width: 700px; margin: 0 auto 40px;
+    line-height: 1.5;
+  }
+  .hero-cta {
+    display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;
+  }
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 10px 20px; border-radius: 8px;
+    font-size: 14px; font-weight: 500;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .btn-primary {
+    background: var(--accent-bg);
+    color: white;
+    box-shadow: 0 4px 12px var(--accent-glow);
+  }
+  .btn-primary:hover { background: var(--accent); text-decoration: none; }
+  .btn-secondary {
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    border-color: var(--border);
+  }
+  .btn-secondary:hover { background: var(--bg-card); text-decoration: none; }
+
+  /* Sections */
+  section { padding: 80px 0; }
+  section h2 {
+    font-size: 32px; font-weight: 600;
+    margin-bottom: 12px;
+    letter-spacing: -0.01em;
+  }
+  section .section-sub {
+    color: var(--text-muted);
+    font-size: 16px;
+    margin-bottom: 48px;
+    max-width: 700px;
+  }
+
+  /* Features */
+  .features {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+  }
+  .feature {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    padding: 24px;
+    transition: all 0.2s;
+  }
+  .feature:hover {
+    border-color: var(--border);
+    transform: translateY(-2px);
+  }
+  .feature-icon {
+    font-size: 24px; margin-bottom: 12px;
+    display: inline-block;
+  }
+  .feature h3 {
+    font-size: 16px; font-weight: 600;
+    margin-bottom: 6px;
+  }
+  .feature p {
+    color: var(--text-muted);
+    font-size: 13px; line-height: 1.5;
+  }
+
+  /* Architecture */
+  .arch-section { background: var(--bg-panel); border-radius: 16px; padding: 40px; border: 1px solid var(--border-subtle); }
+
+  /* Quick start */
+  .quickstart {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+  @media (max-width: 768px) {
+    .quickstart { grid-template-columns: 1fr; }
+    .hero h1 { font-size: 40px; }
+  }
+  .step {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    padding: 24px;
+  }
+  .step-num {
+    display: inline-flex;
+    width: 28px; height: 28px;
+    background: var(--accent-bg);
+    border-radius: 50%;
+    align-items: center; justify-content: center;
+    color: white; font-weight: 600; font-size: 13px;
+    margin-bottom: 12px;
+  }
+  .step h3 { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+  .step pre { font-size: 12px; }
+
+  /* Status */
+  .status-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+  }
+  .status-card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    padding: 16px 20px;
+  }
+  .status-label { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+  .status-value { font-size: 22px; font-weight: 600; color: var(--text-primary); }
+  .status-value .sub { font-size: 12px; color: var(--text-muted); font-weight: 400; margin-left: 4px; }
+  .status-card.green .status-value { color: var(--success); }
+  .status-card.purple .status-value { color: var(--accent); }
+
+  /* Footer */
+  footer {
+    padding: 40px 0 60px;
+    color: var(--text-muted);
+    font-size: 13px;
+    border-top: 1px solid var(--border-subtle);
+    margin-top: 60px;
+  }
+  .footer-grid {
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 12px;
+  }
+  .footer-links { display: flex; gap: 20px; }
+  .footer-links a { color: var(--text-muted); }
+  .footer-links a:hover { color: var(--text-primary); }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="container topnav-inner">
+    <div class="brand">
+      <div class="brand-icon">V</div>
+      <span>VPBuddy</span>
+    </div>
+    <div class="nav-links">
+      <a href="#features">特性</a>
+      <a href="#architecture">架构</a>
+      <a href="#quickstart">快速开始</a>
+      <a href="https://github.com/zhangsheng377/vpbuddy/blob/main/docs/">文档</a>
+    </div>
+    <a href="https://github.com/zhangsheng377/vpbuddy" class="github-btn">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+      GitHub
+    </a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="container">
+    <div class="hero-badge">
+      <span class="dot"></span>
+      MVP 全链路 work · 2026-06-22
+    </div>
+    <h1>本地优先的<br>会议 AI 系统</h1>
+    <p class="subtitle">
+      VPBuddy 捕获系统音频,自动转写、生成 6 种文档、构建跨会议知识库。<br>
+      完全运行在 VP 桌面客户端,数据不上传云端。
+    </p>
+    <div class="hero-cta">
+      <a href="#quickstart" class="btn btn-primary">5 分钟上手 →</a>
+      <a href="https://github.com/zhangsheng377/vpbuddy" class="btn btn-secondary">查看源码</a>
+    </div>
+  </div>
+</header>
+
+<section id="features">
+  <div class="container">
+    <h2>核心能力</h2>
+    <p class="section-sub">从系统音频到跨会议知识库,全自动本地处理。</p>
+    <div class="features">
+      <div class="feature">
+        <span class="feature-icon">🎙️</span>
+        <h3>实时转写</h3>
+        <p>funasr paraformer-zh + fsmn-vad + cam++。中文识别率 > 90%,本地 GPU 加速,RTF < 0.05。</p>
+      </div>
+      <div class="feature">
+        <span class="feature-icon">📋</span>
+        <h3>结构化累积</h3>
+        <p>REQ / GOAL / FEAT / RISK / QUE 5 类事实自动分类,跨会议持续累积演化。</p>
+      </div>
+      <div class="feature">
+        <span class="feature-icon">📄</span>
+        <h3>6 种文档</h3>
+        <p>需求 / 架构 / 任务 / API / 风险 / 演示。LLM + fallback 兜底,保证一定写盘。</p>
+      </div>
+      <div class="feature">
+        <span class="feature-icon">🧠</span>
+        <h3>跨会议 KB</h3>
+        <p>sqlite-vec + sentence-transformers,384 维向量,余弦相似度跨会议检索。</p>
+      </div>
+      <div class="feature">
+        <span class="feature-icon">🔊</span>
+        <h3>音频 loopback</h3>
+        <p>PipeWire / PulseAudio / WASAPI / BlackHole 跨平台支持。无需 SDK 集成会议平台。</p>
+      </div>
+      <div class="feature">
+        <span class="feature-icon">🌐</span>
+        <h3>Web UI</h3>
+        <p>端口 8765,深色主题,4 窗口(主屏/时间线/知识库/设置)。零 JS 框架依赖。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="architecture">
+  <div class="container">
+    <h2>架构</h2>
+    <p class="section-sub">从音频输入到知识检索,完整本地处理链路。</p>
+    <div class="arch-section">
+<pre><code>┌─────────────────────────────────────────────────────┐
+│  VP 桌面客户端 (Ubuntu 24.04 / macOS 14+ / Win11)  │
+├─────────────────────────────────────────────────────┤
+│  Audio loopback (PipeWire / WASAPI / BlackHole)     │
+│        ↓                                            │
+│  ASR (funasr paraformer-zh, GPU 可选)              │
+│        ↓                                            │
+│  MeetingState (5 类事实累积)                       │
+│        ↓                                            │
+│  6 × sub_session (in-process AIAgent)              │
+│  ┌────┬────┬────┬────┬────┬────┐                  │
+│  │req │arch│tasks│api │risk│demo│                  │
+│  └────┴────┴────┴────┴────┴────┘                  │
+│        ↓                                            │
+│  Knowledge Base (sqlite-vec + embedding)            │
+│        ↓                                            │
+│  Web UI (FastAPI + Vanilla JS, port 8765)          │
+└─────────────────────────────────────────────────────┘</code></pre>
+    </div>
+  </div>
+</section>
+
+<section id="quickstart">
+  <div class="container">
+    <h2>5 分钟上手</h2>
+    <p class="section-sub">从零到开会中用起来,只需 3 步。</p>
+    <div class="quickstart">
+      <div class="step">
+        <div class="step-num">1</div>
+        <h3>安装</h3>
+<pre><code>git clone https://github.com/zhangsheng377/vpbuddy.git
+cd vpbuddy
+pip install -e .</code></pre>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <h3>启动 UI</h3>
+<pre><code>vpbuddy ui
+# 浏览器打开 http://localhost:8765</code></pre>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <h3>后台 controller</h3>
+<pre><code>vpbuddy controller --start
+# 7×24 监听,自动生成 6 文档</code></pre>
+      </div>
+      <div class="step">
+        <div class="step-num">🎉</div>
+        <h3>开会!</h3>
+<pre><code># 系统自动:
+# - 捕获会议音频
+# - 转写 + 累积
+# - 生成 6 种文档
+# - 入 KB,跨会议检索</code></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="status">
+  <div class="container">
+    <h2>项目状态</h2>
+    <p class="section-sub">2026-06-22 数据。所有数字来自 GPU CI。</p>
+    <div class="status-grid">
+      <div class="status-card green">
+        <div class="status-label">测试</div>
+        <div class="status-value">116 <span class="sub">passed · 0 failed</span></div>
+      </div>
+      <div class="status-card purple">
+        <div class="status-label">6 文档生成</div>
+        <div class="status-value">work <span class="sub">agent + fallback</span></div>
+      </div>
+      <div class="status-card green">
+        <div class="status-label">端到端</div>
+        <div class="status-value">work <span class="sub">音频 → KB → 检索</span></div>
+      </div>
+      <div class="status-card purple">
+        <div class="status-label">代码</div>
+        <div class="status-value">5.8K <span class="sub">行 Python</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container footer-grid">
+    <div>
+      <strong>VPBuddy</strong> · 本地优先的会议 AI 系统
+    </div>
+    <div class="footer-links">
+      <a href="https://github.com/zhangsheng377/vpbuddy">GitHub</a>
+      <a href="https://github.com/zhangsheng377/vpbuddy/blob/main/docs/">文档</a>
+      <a href="https://github.com/zhangsheng377/vpbuddy/blob/main/docs/部署/INSTALL.md">安装</a>
+      <a href="https://github.com/zhangsheng377/vpbuddy/blob/main/docs/部署/MODEL_SWAP.md">模型 swap</a>
+    </div>
+    <div>MIT License · 2026</div>
+  </div>
+</footer>
+
+</body>
+</html>
