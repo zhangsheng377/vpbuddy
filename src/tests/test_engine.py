@@ -29,8 +29,11 @@ from vpbuddy.transcript import TranscriptResult, DiarizedSegment
 
 @pytest.fixture(scope="module")
 def audio_path_16k() -> Path:
-    """获取 16kHz mono PCM 音频(避免 pyannote 内部重采样错误)"""
-    from tests.test_diarization import get_16k_audio
+    """获取 16kHz mono PCM 音频(避免 pyannote 内部重采样错误)
+
+    test_diarization.py 是 src/tests/ 下的模块,用相对导入避免 'tests' package 不存在的问题
+    """
+    from .test_diarization import get_16k_audio
     return get_16k_audio()
 
 
