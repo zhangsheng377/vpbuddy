@@ -109,9 +109,11 @@ bash scripts/install-client.sh
 | 1 | 装系统包(macOS: brew / Linux: apt) | 30s |
 | 2 | 创建 venv `~/.vpbuddy-venv` | 5s |
 | 3 | `pip install hermes-agent` + `pip install -e ".[audio]"` | 1 min |
-| 4 | 写 `~/.hermes/config.yaml` + `.env` 模板 | 1s |
+| 4 | 装 KB 依赖:`sqlite-vec` + `sentence-transformers` | 30s |
+| 5 | 预下载 KB embedding 模型 (256MB,首次启动要) | 30s-2min |
+| 6 | 写 `~/.hermes/config.yaml` + `.env` 模板 | 1s |
 
-### 验证(4 个命令)
+### 验证(5 个命令)
 
 ```bash
 # 1. 激活 venv
@@ -121,16 +123,27 @@ source ~/.vpbuddy-venv/bin/activate
 vpbuddy version
 # 期望:vpbuddy 0.2.0
 
-# 3. LLM API 通
+# 3. KB 模型就绪(检查 ~/.cache/huggingface/hub)
+ls ~/.cache/huggingface/hub/ | grep paraphrase-multilingual
+# 期望:看到模型目录
+
+# 4. LLM API 通
 hermes chat "你好"
 # 期望:正常返回
 
-# 4. 启动 UI
+# 5. 启动 UI
 vpbuddy ui --port 8765 &
 sleep 2
 open http://localhost:8765  # macOS
 # 浏览器看到 VPBuddy 4 窗口 shell
 ```
+
+### 关键:VP 桌面客户端独立运营(2026-06-22)
+
+> ⚠️ **VPBuddy 真正运行在 VP 自己机器上(被部署端),不在我们 zsd / GPU 服务器上**。
+> 我们 zsd/GPU 是**开发+测试环境**,跑仿真测试,不代表真运行时。
+> 所以 `install-client.sh` 必须装完整 hermes-agent + AIAgent + KB + VPBuddy 客户端。
+> VP 机器不需要连我们的任何服务,自己跑自己。
 
 ### macOS 注意
 

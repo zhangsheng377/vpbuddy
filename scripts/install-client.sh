@@ -2,19 +2,24 @@
 # install-client.sh — VP 桌面客户端一键部署 (2026-06-22 ADR-0009)
 #
 # 目标:VP 在自己 Mac/笔记本上跑 vpbuddy ui + 音频采集
-# 范围:macOS / Linux desktop,无 GPU(用云 LLM API)
+# 范围:macOS / Linux desktop,可有或无 GPU(优先用云 LLM API)
+# 关键:**VP 客户端独立运营,完全在 VP 自己机器上,不是在我们 zsd/GPU 上**
 #
-# 用法:bash install-client.sh
+# 用法:
+#   1. 从 GitHub clone vpbuddy:  git clone https://github.com/zhangsheng377/vpbuddy.git ~/vpbuddy
+#   2. 跑:  cd ~/vpbuddy && bash scripts/install-client.sh
+#   3. 填 API key:  vim ~/.hermes/.env
+#   4. 启动:  source ~/.vpbuddy-venv/bin/activate && vpbuddy ui --port 8765
 #
 # 详见 docs/部署/INSTALL.md §角色 B
 set -euo pipefail
 
 echo "=================================================="
-echo "  VPBuddy 桌面客户端安装 (无 GPU)"
+echo "  VPBuddy 桌面客户端安装 (VP 独立运营)"
 echo "=================================================="
 
 # ===== 1. 系统包 =====
-echo "[1/4] 系统包..."
+echo "[1/6] 系统包..."
 if [[ "$(uname)" == "Darwin" ]]; then
     # macOS — 用 brew
     if ! command -v brew &>/dev/null; then
@@ -27,30 +32,58 @@ else
     sudo apt-get update -qq
     sudo apt-get install -y -qq \
         python3-pip python3-venv python3-dev \
-        portaudio19-dev libasound2-dev ffmpeg
+        portaudio19-dev libasound2-dev ffmpeg \
+        build-essential
 fi
 
 # ===== 2. 创建 venv =====
-echo "[2/4] 创建 venv (.venv)..."
+echo "[2/6] 创建 venv (.vpbuddy-venv)..."
 VENV_DIR="$HOME/.vpbuddy-venv"
 if [[ ! -d "$VENV_DIR" ]]; then
     python3 -m venv "$VENV_DIR"
 fi
 # shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate"
+pip install --quiet --upgrade pip
 
 # 国内 pip 镜像
 pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ 2>/dev/null || true
 
 # ===== 3. 装 hermes-agent + vpbuddy[audio] =====
-echo "[3/4] 装 hermes-agent + vpbuddy[audio]..."
-pip install --quiet --upgrade pip
+echo "[3/6] 装 hermes-agent + vpbuddy[audio]..."
+# hermes-agent 从 pypi 装(VPBuddy 依赖的 AI agent 运行时,2026-06-22 决定)
 pip install --quiet "hermes-agent>=0.16.0,<1.0"
-pip install --quiet -e "/home/zsd/vpbuddy[audio]" 2>/dev/null || \
-pip install --quiet -e ".[audio]"
 
-# ===== 4. Hermes 配置 =====
-echo "[4/4] Hermes 配置..."
+# vpbuddy 装当前目录(用户要先 git clone)
+# 兼容两种情况:(a) 从 github clone 的标准目录 (b) 开发时已 cd 进来
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VPBUDDY_ROOT="$(dirname "$SCRIPT_DIR")"
+echo "  VPBuddy 根目录: $VPBUDDY_ROOT"
+pip install --quiet -e "${VPBUDDY_ROOT}[audio]"
+
+# ===== 4. KB 依赖(2026-06-22 加:sqlite-vec + sentence-transformers) =====
+echo "[4/6] 装 KB 依赖(sqlite-vec + sentence-transformers)..."
+pip install --quiet sqlite-vec sentence-transformers
+
+# ===== 5. 预下载 KB embedding 模型(2026-06-22:首次启动冷加载 40s,提前下好) =====
+echo "[5/6] 预下载 KB embedding 模型(256MB,首次启动需要)..."
+python3 - <<'PYEOF'
+import os
+# 显式下载(不放到 HF cache,显式提示用户)
+from sentence_transformers import SentenceTransformer
+model_name = "paraphrase-multilingual-MiniLM-L12-v2"
+cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
+try:
+    print(f"  正在下载 {model_name} → {cache_dir} ...")
+    m = SentenceTransformer(model_name, cache_folder=cache_dir)
+    print(f"  ✅ 模型已下载,共 {len(m.get_sentence_embedding_dimension())} 维向量")
+except Exception as e:
+    print(f"  ⚠️  模型下载失败 (可能需要翻墙): {e}")
+    print(f"  首次启动会再次尝试。如持续失败,设环境变量 HF_ENDPOINT=https://hf-mirror.com 后重跑")
+PYEOF
+
+# ===== 6. Hermes 配置 =====
+echo "[6/6] Hermes 配置..."
 mkdir -p "$HOME/.hermes"
 if [[ ! -f "$HOME/.hermes/config.yaml" ]]; then
     cat > "$HOME/.hermes/config.yaml" <<'EOF'
@@ -73,6 +106,8 @@ if [[ ! -f "$HOME/.hermes/.env" ]]; then
     cat > "$HOME/.hermes/.env" <<'EOF'
 # 填至少一个 LLM API key:
 MINIMAX_API_KEY=your-key-here
+# KB 用 HuggingFace 模型,国内环境设这个走镜像站(2026-06-22):
+# HF_ENDPOINT=https://hf-mirror.com
 EOF
     echo "  ⚠️  请编辑 $HOME/.hermes/.env 填 API key"
 fi
@@ -80,7 +115,7 @@ fi
 # ===== 收尾 =====
 echo ""
 echo "=================================================="
-echo "  ✅ 客户端安装完成"
+echo "  ✅ VP 桌面客户端安装完成"
 echo "=================================================="
 echo ""
 echo "下一步:"
@@ -88,6 +123,7 @@ echo "  1. 配 API key:  vim $HOME/.hermes/.env"
 echo "  2. 激活 venv:   source $VENV_DIR/bin/activate"
 echo "  3. 验证:        vpbuddy version"
 echo "  4. 启动 UI:     vpbuddy ui --port 8765"
-echo "  5. (可选) 装 sample 音频:    vpbuddy transcribe <audio.wav>"
+echo "  5. 验证 KB:     vpbuddy kb-status  (空状态OK,trigger 后会出现 stored docs)"
+echo "  6. (可选) 装 sample 音频:    vpbuddy transcribe <audio.wav>"
 echo ""
 echo "详见 docs/部署/INSTALL.md §角色 B"
