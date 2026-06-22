@@ -78,6 +78,7 @@ vpbuddy controller --start
 | **踩坑记录** | [docs/部署/踩坑记录.md](docs/部署/踩坑记录.md) |
 | **用户手册** | [docs/用户手册.md](docs/用户手册.md) |
 | **🔒 安全 (ADR-0010)** | [INSTALL.md §🔒](./docs/部署/INSTALL.md#-安全信息隔离-adr-0010) / [ADR-0010](./docs/decisions/0010-信息隔离-deployment-clean-install.md) |
+| **🇨🇳 HF 离线 (ADR-0011)** | [INSTALL.md §🇨🇳](./docs/部署/INSTALL.md#hf-模型离线铁律-adr-0011) / [ADR-0011](./docs/decisions/0011-HF模型离线铁律.md) |
 
 ### 🔒 安全:信息隔离 (ADR-0010)
 

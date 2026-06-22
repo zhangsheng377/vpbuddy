@@ -21,6 +21,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
+# 🔒 HF 模型离线铁律 (2026-06-23 ADR-0011):
+# 国内 huggingface.co 被墙,启动时强制默认走本地 cache。
+# 用户装新模型时临时设 HF_HUB_OFFLINE=0 即可。
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+
 # 默认路径(可通过环境变量覆盖)
 DOCS_DIR = Path(os.environ.get("VPBUDDY_DOCS_DIR", "/home/zsd/vpbuddy/docs"))
 DATA_DIR = Path(os.environ.get("VPBUDDY_DATA_DIR", "/home/zsd/vpbuddy/data/meetings"))

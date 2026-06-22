@@ -135,6 +135,94 @@ rsync -av ~/.hermes_backups/gpu_192.168.10.63_*/memories/   192.168.10.63:~/.her
 
 ---
 
+## 🇨🇳 HF 模型离线铁律 (ADR-0011)
+
+> **2026-06-23**:张胜东启动 `vpbuddy ui` 后,UI 卡 60s timeout 报错 `ConnectTimeoutError: huggingface.co`。**根因**:国内 huggingface.co 被墙,UI 进程独立启动时没设 `HF_HUB_OFFLINE=1`。**修复**:三层防护,任何启动路径都安全。
+
+### 三层防护
+
+```
+┌─────────────────────────────────────────────────────┐
+│  第 1 层 — 代码层 (src/vpbuddy/__init__.py)         │
+│  import os                                            │
+│  os.environ.setdefault("HF_HUB_OFFLINE", "1")        │
+│  os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")  │
+│  os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com") │
+└─────────────────────────────────────────────────────┘
+                       ↓
+┌─────────────────────────────────────────────────────┐
+│  第 2 层 — 启动脚本 (scripts/start-vpbuddy.sh)       │
+│  export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}" │
+│  export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"        │
+│  export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}" │
+└─────────────────────────────────────────────────────┘
+                       ↓
+┌─────────────────────────────────────────────────────┐
+│  第 3 层 — bashrc (机器重启后仍生效)                │
+│  export HF_ENDPOINT=https://hf-mirror.com           │
+│  export HF_HUB_OFFLINE=1                            │
+│  export TRANSFORMERS_OFFLINE=1                      │
+└─────────────────────────────────────────────────────┘
+```
+
+### 启动方式
+
+```bash
+# 推荐:用官方启动脚本 (自动设置 HF env)
+bash scripts/start-vpbuddy.sh all    # controller + UI
+bash scripts/start-vpbuddy.sh ui      # 只 UI
+bash scripts/start-vpbuddy.sh controller  # 只 controller
+
+# 停止
+bash scripts/stop-vpbuddy.sh
+
+# 直接 nohup(需要手动 export)
+export HF_ENDPOINT=https://hf-mirror.com
+export HF_HUB_OFFLINE=1
+nohup vpbuddy ui --port 8765 > ui.log 2>&1 &
+```
+
+### 临时下新模型(覆盖默认离线)
+
+```bash
+# 默认是离线(走本地 cache),要下新模型临时关掉
+HF_HUB_OFFLINE=0 HF_ENDPOINT=https://hf-mirror.com vpbuddy setup-gpu
+```
+
+### 验证命令
+
+```bash
+# 1. 启动后 30 秒内 HTTP 200(以前要 60+ 秒 timeout)
+time bash scripts/start-vpbuddy.sh ui
+curl -s -o /dev/null -w "HTTP %{http_code}\\n" http://localhost:8765/
+
+# 2. KB status API 工作
+curl -s http://localhost:8765/api/kb/status | python3 -m json.tool | head
+
+# 3. HF cache 是否被使用
+ls -la ~/.cache/huggingface/hub/models--sentence-transformers--paraphrase-multilingual-MiniLM-L12-v2/
+
+# 4. 模型已下载则无 HF 网络调用
+HF_HUB_OFFLINE=1 python3 -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')"
+# 应 5s 内返回,无 ConnectTimeoutError
+```
+
+### 故障排查
+
+| 症状 | 原因 | 修复 |
+|---|---|---|
+| UI 卡 60s 后 timeout | 没设 `HF_HUB_OFFLINE=1` | 用 `start-vpbuddy.sh` 启动(自动设) |
+| 模型找不到 | 没下到本地 cache | `HF_HUB_OFFLINE=0 vpbuddy setup-gpu` |
+| gated 模型 403 | hf-mirror 不支持 | 用 ADR-0005 ModelScope 或 HF_TOKEN |
+| KB 启动慢 (>30s) | 第一次冷加载 embedding | 正常,后续启动 5s 内 |
+
+### 关联文档
+
+- [ADR-0011 HF 模型离线铁律](../decisions/0011-HF模型离线铁律.md) — 决策细节
+- [踩坑记录 §21 HF 离线铁律](./踩坑记录.md#21) — 事件复盘
+
+---
+
 ## 角色速查表
 
 | 角色 | 谁 | 跑什么 | 脚本 | 耗时 | GPU |

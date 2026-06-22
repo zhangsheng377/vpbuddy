@@ -204,6 +204,25 @@ else
     echo "[6/6] 跳过模型下载 (--no-models)"
 fi
 
+# ===== 6.5 bashrc 写 HF 离线铁律 (ADR-0011 落地) =====
+echo "[6.5/7] bashrc 写 HF 离线铁律(机器重启后仍生效)..."
+BASHRC="$HOME/.bashrc"
+if ! grep -q "VPBuddy HF 离线铁律" "$BASHRC" 2>/dev/null; then
+    cat >> "$BASHRC" <<'EOF'
+
+# VPBuddy HF 离线铁律 (ADR-0011 2026-06-23)
+# 国内 huggingface.co 被墙,默认走本地 cache + hf-mirror 镜像
+# 临时下新模型:HF_HUB_OFFLINE=0 vpbuddy setup-gpu
+export HF_ENDPOINT=https://hf-mirror.com
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export PYANNOTE_LOCAL_DIR="$HOME/pyannote_models"
+EOF
+    echo "  ✅ ~/.bashrc 已加 HF 离线铁律 (4 行)"
+else
+    echo "  ✅ ~/.bashrc 已含 HF 离线铁律(跳过)"
+fi
+
 # ===== 收尾 =====
 echo ""
 echo "=================================================="
@@ -213,10 +232,12 @@ echo ""
 echo "下一步:"
 echo "  1. 配 LLM API key:  vim $HOME/.hermes/.env"
 echo "  2. 验证:             vpbuddy version"
-echo "  3. 跑测试 (80 passed):"
+echo "  3. 跑测试 (116 passed):"
 echo "       conda activate vpbuddy-gpu"
 echo "       PYTHONPATH=/home/zsd/vpbuddy/src python3 -m pytest /home/zsd/vpbuddy/src/tests/ -v"
-echo "  4. 启动 UI (VP 入口):  vpbuddy ui --port 8765"
-echo "  5. 启动 controller:    vpbuddy controller"
+echo "  4. 启动 VP 入口 (推荐用官方脚本):"
+echo "       bash scripts/start-vpbuddy.sh all      # controller + UI"
+echo "       bash scripts/start-vpbuddy.sh ui        # 只 UI"
+echo "  5. 浏览器访问:  http://localhost:8765"
 echo ""
 echo "详见 docs/部署/INSTALL.md"
