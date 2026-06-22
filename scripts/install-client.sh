@@ -85,31 +85,89 @@ PYEOF
 # ===== 6. Hermes 配置 =====
 echo "[6/6] Hermes 配置..."
 mkdir -p "$HOME/.hermes"
+
+# 🔒 信息隔离铁律 (2026-06-22 ADR-0010):
+# 1. config.yaml / .env 都用占位符,真实 key 由用户手动 vim 填
+# 2. 已存在的文件绝不覆盖 (开发机 / 之前的部署)
+# 3. 任何 install 脚本都不接触真实 API key
+
 if [[ ! -f "$HOME/.hermes/config.yaml" ]]; then
+    echo "  Hermes config 不存在,创建干净模板..."
     cat > "$HOME/.hermes/config.yaml" <<'EOF'
+# Hermes Agent Configuration - CLEAN INSTALL TEMPLATE (2026-06-22)
+# 真实 API key 必须通过环境变量提供
+# 详见 docs/部署/踩坑记录.md §20 信息隔离
+
 model:
   default: MiniMax-M3
   provider: mini_max
 
 providers:
   mini_max:
-    base_url: https://api.minimaxi.com/v1/
+    api_key: ${MINIMAX_CN_API_KEY}
+    base_url: https://api.minimaxi.com/v1
     default_model: MiniMax-M3
-    api_key_env: MINIMAX_API_KEY
+    thinking: true
   openrouter:
-    base_url: https://openrouter.ai/api/v1/
-    default_model: openrouter/free
-    api_key_env: OPENROUTER_API_KEY
+    api_key: ${OPENROUTER_API_KEY}
+    base_url: https://openrouter.ai/api/v1
+    thinking: true
+
+fallback_providers:
+  - provider: openrouter
+    model: openrouter/free
+    base_url: https://openrouter.ai/api/v1
+    api_mode: chat_completions
+
+credential_pool_strategies: {}
+toolsets:
+  - hermes-cli
+max_concurrent_sessions: null
+
+agent:
+  max_turns: 90
+  gateway_timeout: 1800
+  reasoning_effort: xhigh
+  task_completion_guidance: true
+  environment_probe: true
+  image_input_mode: auto
+
+terminal:
+  backend: local
+  modal_mode: auto
+  cwd: .
+  timeout: 180
+
+logging:
+  level: INFO
+  redact_secrets: true
 EOF
+    chmod 600 "$HOME/.hermes/config.yaml"
 fi
+
 if [[ ! -f "$HOME/.hermes/.env" ]]; then
+    echo "  ⚠️  Hermes .env 不存在,创建干净模板(只有占位符)..."
     cat > "$HOME/.hermes/.env" <<'EOF'
-# 填至少一个 LLM API key:
-MINIMAX_API_KEY=your-key-here
-# KB 用 HuggingFace 模型,国内环境设这个走镜像站(2026-06-22):
-# HF_ENDPOINT=https://hf-mirror.com
+# Hermes Agent Environment - CLEAN INSTALL TEMPLATE (2026-06-22)
+# 🔒 你必须手动填你的 LLM API key:
+#   vim ~/.hermes/.env
+# 🔒 不要从开发机 scp 这个文件 — install 脚本绝不包含真实 key
+
+# ===== LLM Provider (至少填一个) =====
+MINIMAX_CN_API_KEY=YOUR_M...n
+# OPENROUTER_API_KEY=YOUR_O...n
+
+# ===== KB embedding 模型 (国内环境走镜像站) =====
+HF_ENDPOINT=https://hf-mirror.com
 EOF
-    echo "  ⚠️  请编辑 $HOME/.hermes/.env 填 API key"
+    chmod 600 "$HOME/.hermes/.env"
+    echo ""
+    echo "  ⚠️  ⚠️  ⚠️  请编辑 ~/.hermes/.env 填你的 LLM API key  ⚠️  ⚠️  ⚠️"
+    echo "      vim ~/.hermes/.env"
+    echo "      # 把 MINIMAX_CN_API_KEY=YOUR_M...n 改成你的真 key"
+    echo ""
+else
+    echo "  ✅ ~/.hermes/.env 已存在(不动用户填好的 key)"
 fi
 
 # ===== 收尾 =====

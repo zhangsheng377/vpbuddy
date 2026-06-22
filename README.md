@@ -77,6 +77,24 @@ vpbuddy controller --start
 | **模型 swap** | [docs/部署/MODEL_SWAP.md](docs/部署/MODEL_SWAP.md) |
 | **踩坑记录** | [docs/部署/踩坑记录.md](docs/部署/踩坑记录.md) |
 | **用户手册** | [docs/用户手册.md](docs/用户手册.md) |
+| **🔒 安全 (ADR-0010)** | [INSTALL.md §🔒](./docs/部署/INSTALL.md#-安全信息隔离-adr-0010) / [ADR-0010](./docs/decisions/0010-信息隔离-deployment-clean-install.md) |
+
+### 🔒 安全:信息隔离 (ADR-0010)
+
+> 张胜东在 2026-06-22 发现 GPU 服务器的 `~/.hermes/.env` 含本机真实 API key,立即清理 + 修补 install 脚本。
+
+**三条铁律**:
+1. `config.yaml` / `.env` 都用占位符,真实 key 由用户手动 `vim` 填
+2. install 脚本从不包含真实 API key(可以安全推到 GitHub)
+3. install 脚本不覆盖用户已存在的 `~/.hermes/config.yaml` 或 `.env`
+
+```bash
+# 1. install 只创建占位符
+bash scripts/install-gpu-server.sh
+# 输出:MINIMAX_CN_API_KEY=*** 2. 用户手动填
+vim ~/.hermes/.env
+chmod 600 ~/.hermes/.env
+```
 
 ### 命令速查
 

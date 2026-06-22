@@ -12,8 +12,103 @@
 - [角色 A — 生产 GPU 服务器](#角色-a--生产-gpu-服务器)
 - [角色 B — VP 桌面客户端](#角色-b--vp-桌面客户端)
 - [角色 C — 开发者](#角色-c--开发者)
+- [🔒 安全:信息隔离 (ADR-0010)](#-安全信息隔离-adr-0010)
 - [故障排查](#故障排查)
 - [关联文档](#关联文档)
+
+---
+
+## 🔒 安全:信息隔离 (ADR-0010)
+
+> **2026-06-22**:张胜东发现 GPU 服务器的 `~/.hermes/.env` 包含本机的真实 API key (来自之前的 `scp` 同步),**立刻清理并修补 install 脚本**。
+
+### 三条铁律
+
+```
+1. config.yaml / .env 都用占位符,真实 key 由用户手动 vim 填
+2. install 脚本绝不包含真实 API key
+3. install 脚本绝不覆盖用户已存在的 ~/.hermes/config.yaml 或 .env
+```
+
+### install 脚本的安全保证
+
+```bash
+# install-gpu-server.sh 内部:
+if [[ ! -f "$HOME/.hermes/.env" ]]; then
+    # 创建干净模板(只有占位符)
+    MINIMAX_CN_API_KEY=YOUR_M...n
+    OPENROUTER_API_KEY=YOUR_O...n
+else
+    echo "✅ ~/.hermes/.env 已存在(不动用户填好的 key)"
+fi
+```
+
+✅ **install 脚本本身不含真实 key**,可以安全推到 GitHub / 公开 / 给 VP 用
+✅ **已经填过 key 的机器,重跑 install 不会清掉 key**
+
+### 用户填 key 流程
+
+```bash
+# 1. ssh 到目标机器
+ssh zsd@192.168.10.63   # 或 VP 在自己机器上
+
+# 2. 编辑 .env
+vim ~/.hermes/.env
+# 把 MINIMAX_CN_API_KEY=YOUR_M...n 改成你的真 key
+# (按 i 进入编辑模式,改完按 Esc,输入 :wq 保存)
+
+# 3. 确认权限 600
+chmod 600 ~/.hermes/.env
+
+# 4. 验证
+source ~/.hermes/.env
+hermes chat "ping"
+```
+
+### 验证命令(确认 install 脚本干净)
+
+```bash
+# 1. install 脚本里只有占位符,没真 key
+grep -E "MINIMAX_CN_API_KEY=|OPENR...Y=" scripts/install-*.sh
+# 应该看到 YOUR_M...n / YOUR_O...n
+
+# 2. 目标机器 .env 是占位符(部署后第一次验证)
+ssh zsd@192.168.10.63 "grep -v '^#' ~/.hermes/.env | grep -v '^$'"
+# 应该看到 MINIMAX_CN_API_KEY=YOUR_M...n
+
+# 3. 权限 600
+ssh zsd@192.168.10.63 "ls -la ~/.hermes/.env"
+# 应该 -rw------- zsd zsd
+
+# 4. 备份存在(清理前自动生成)
+ssh zsd@192.168.10.63 "ls -d ~/.hermes_clean_backup_*"
+# 应该看到 ~/.hermes_clean_backup_20260622_223413
+```
+
+### 备份与恢复
+
+| 备份位置 | 内容 | 何时生成 |
+|---|---|---|
+| `~/.hermes_clean_backup_YYYYMMDD_HHMMSS/` (目标机) | 旧 config.yaml + .env + memories + skills | 第一次 deploy 时自动生成 |
+| 本机 `~/.hermes_backups/<host>_YYYYMMDD_HHMMSS/` | 同上(开发者手动 rsync 备份) | 手动 `rsync` 命令 |
+
+恢复(如果误删了):
+```bash
+# 从目标机的本地 backup 恢复
+cp -a ~/.hermes_clean_backup_20260622_223413/config.yaml ~/.hermes/
+cp -a ~/.hermes_clean_backup_20260622_223413/.env ~/.hermes/
+chmod 600 ~/.hermes/.env
+
+# 从开发机的 backup 恢复(注意:开发机的 backup 可能含开发机 key,不要直接 copy .env)
+rsync -av ~/.hermes_backups/gpu_192.168.10.63_*/config.yaml 192.168.10.63:~/.hermes/
+rsync -av ~/.hermes_backups/gpu_192.168.10.63_*/memories/   192.168.10.63:~/.hermes/
+# .env 不要 scp! 手动重填!
+```
+
+### 关联文档
+
+- [ADR-0010 信息隔离 — Deployment Clean Install](../decisions/0010-信息隔离-deployment-clean-install.md) — 决策细节
+- [踩坑记录 §20 信息隔离](./踩坑记录.md#20) — 事件复盘
 
 ---
 
