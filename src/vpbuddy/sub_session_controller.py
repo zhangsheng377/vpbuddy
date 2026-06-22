@@ -432,6 +432,37 @@ def get_kb_status(meeting_id: Optional[str] = None) -> Dict[str, Any]:
         summary["total"] += 1
         status_key = st.get("status", "queued")
         summary[status_key] = summary.get(status_key, 0) + 1
+
+    # === 2026-06-22 修复:_KB_STATUS 是 process-local,CLI/UI 在新进程里 = 0 ===
+    # fallback:从 KB DB 查 documents 数量(已落库的)
+    if summary["total"] == 0:
+        try:
+            import sqlite3
+            from .knowledge_base import get_kb
+            kb = get_kb()
+            conn = sqlite3.connect(kb.db_path)
+            conn.enable_load_extension(True)
+            try:
+                import sqlite_vec
+                sqlite_vec.load(conn)
+            except Exception:
+                pass
+            c = conn.cursor()
+            if meeting_id:
+                c.execute("SELECT doc_kind FROM documents WHERE meeting_id=?", (meeting_id,))
+                for (kind,) in c.fetchall():
+                    items.append({"meeting_id": meeting_id, "doc_kind": kind, "status": "stored", "attempts": 0, "error": None, "source": "kb_db"})
+                    summary["stored"] += 1
+            else:
+                c.execute("SELECT meeting_id, doc_kind FROM documents")
+                for mid, kind in c.fetchall():
+                    items.append({"meeting_id": mid, "doc_kind": kind, "status": "stored", "attempts": 0, "error": None, "source": "kb_db"})
+                    summary["stored"] += 1
+            conn.close()
+            summary["total"] = summary["stored"]
+        except Exception as e:
+            logger.warning(f"[kb_status] fallback to KB DB failed: {e}")
+
     return {"summary": summary, "items": items}
 
 
