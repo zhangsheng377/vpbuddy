@@ -54,3 +54,14 @@
 | [0007](./0007-多平台适配器架构.md) | 多平台 MeetingAdapter 抽象(防锁定) | Accepted | 2026-06-21 |
 | [0008](./0008-ADR-0001-决策1-Superseded.md) | ADR-0001 决策 1 (飞书第一平台) Superseded | Superseded | 2026-06-21 |
 | [0009](./0009-部署架构-Hermes-runtime.md) | 部署架构 — 以 Hermes Agent 作为生产 runtime | Accepted | 2026-06-21 |
+| [0010](./0013-流式E2E-端到端工作流.md) | 流式 E2E 端到端工作流 (stream chunk + 5+1 agent in-process) | Accepted | 2026-06-23 |
+| [0011](./0014-VPBuddy装成Hermes-Skill.md) | VPBuddy 装成 Hermes Skill (5 doc + 1 demo agent) | Accepted | 2026-06-23 |
+| [0012](./0015-RAG-sqlite-vec本地知识库.md) | RAG 接入 — sqlite-vec + sentence-transformers 本地知识库 | Accepted | 2026-06-23 |
+| [0013](./0016-桌面客户端技术选型.md) | 桌面客户端技术选型 — Tauri 2.x + Rust (cpal 跨平台音频) | Accepted | 2026-06-24 |
+
+## 更新原则 (2026-06-23 张胜东立的铁律)
+
+- **代码先于文档**: 改架构先改代码, 验证代码落地, 再补 ADR
+- **ADR 驱动**: 每次架构变更 = 1 ADR + 同步 design / spec / 部署 / README / pyproject + 1 commit
+- **读 ADR 按编号**: `ls docs/decisions/` 从小到大读, 看顶部"Superseded by"
+- **假设错立即承认 + 修文档**: 不"为 ADR 辩护", "代码 = 真相"

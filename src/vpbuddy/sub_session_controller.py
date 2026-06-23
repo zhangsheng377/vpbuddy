@@ -78,10 +78,15 @@ def _agent_session_id(meeting_id: str, doc_kind: str) -> str:
 
 
 def _get_or_create_agent(meeting_id: str, doc_kind: str) -> Any:
-    """获取或创建缓存的 AIAgent 实例(2026-06-22 落地)
+    """获取或创建缓存的 AIAgent 实例(2026-06-22 落地, 2026-06-23 按 ADR-0006 加 demo sandbox)
 
     同 (meeting_id, doc_kind) 多次调用 → 同一 AIAgent → 同一 session_id →
     Hermes 内部 session 历史累积 → LLM 跨次记得上下文
+
+    工具权限 (2026-06-23 张胜东纠正):
+    - 6 个 doc_kind 全部给 ["terminal", "file"] — 不按 doc_kind 区分 sandbox
+    - demo agent 故意不禁 fetch/eval, 防止 sandbox 太严 demo 做不出来
+    - 隔离在 UI 层做(将来 iframe sandbox="allow-scripts" if 需要)
     """
     sid = _agent_session_id(meeting_id, doc_kind)
     if sid not in _AGENT_CACHE:
@@ -90,42 +95,49 @@ def _get_or_create_agent(meeting_id: str, doc_kind: str) -> Any:
                 "AIAgent not available — cannot create agent. "
                 "Install hermes-agent or use VPBUDDY_DIRECT=1 mode."
             )
+        # 2026-06-23 张胜东纠正: 不禁止 demo agent fetch/eval
+        # 防止 sandbox 太严 demo 做不出来, 先看效果
+        # 真出问题再在 UI 层 (iframe sandbox) 加隔离, 不在 agent 层禁
+        toolsets = ["terminal", "file"]
+        # ⚠️ 2026-06-23 bug 修: 之前写 ephemeral_system_prompt=(...) 多行 tuple
+        # Python 自动变 tuple, AIAgent chat 时 str + tuple 报错 TypeError
+        # 用 "\n".join([...]) 强制 str
         _AGENT_CACHE[sid] = _AIAgent(
             session_id=sid,
-            enabled_toolsets=["terminal", "file"],
+            enabled_toolsets=toolsets,
             platform="subagent",
             quiet_mode=True,
             max_iterations=30,
             model=os.environ.get("VPBUDDY_LLM_MODEL", "MiniMax-M3"),
-            ephemeral_system_prompt=(
-                f"你是 VPBuddy 的 {doc_kind} 子 session。\n"
-                f"session_id 固定 = {sid}。\n"
-                f"输出文件路径(必须写到这里):{get_doc_path(meeting_id, doc_kind)}\n"
-                "\n"
-                "【硬性要求 — 不遵守 = 任务失败】\n"
-                "1. 你**必须**调用 file toolset 里的 write_file 工具,把完整文档内容写入到上面的输出文件路径。\n"
-                "2. 不要只在文字响应里输出文档 — 文字响应不算完成任务。\n"
-                "3. 先调用 read_file 读取当前 state JSON 和(若存在)旧文档,再决定如何更新。\n"
-                "4. 如果 state 与旧文档完全一致,仍必须写一个空变更说明文件(标记 '无变化')。\n"
-                "\n"
-                "【工具调用示例 — 必须严格按这个模式】\n"
-                "```\n"
-                "1. 调 read_file 工具,路径 = state JSON 路径\n"
-                "2. 解析 state.facts.{doc_kind} 等字段\n"
-                "3. 调 read_file 工具,路径 = 旧 doc 路径(可能不存在)\n"
-                "4. 生成新文档内容(基于 state + 旧 doc)\n"
-                "5. 调 write_file 工具,路径 = 上面给的输出文件路径,内容 = 完整文档\n"
-                "6. 退出(不要再调其他工具)\n"
-                "```\n"
-                "\n"
-                "【反例 — 这是错的】\n"
-                "❌ 只在文字响应里输出整个文档,没调 write_file → 任务失败\n"
-                "❌ 调 write_file 但路径错了 → 任务失败\n"
-                "❌ 调 write_file 但内容空 → 任务失败\n"
-                "\n"
-                "工作流:\n"
-                "  read_file(state) → 解析 facts → 生成文档内容 → write_file(目标路径, 完整内容) → 退出\n"
-            ),
+            ephemeral_system_prompt="\n".join([
+                f"你是 VPBuddy 的 {doc_kind} 子 session。",
+                f"session_id 固定 = {sid}。",
+                f"输出文件路径(必须写到这里):{get_doc_path(meeting_id, doc_kind)}",
+                "",
+                "【硬性要求 — 不遵守 = 任务失败】",
+                "1. 你**必须**调用 file toolset 里的 write_file 工具,把完整文档内容写入到上面的输出文件路径。",
+                "2. 不要只在文字响应里输出文档 — 文字响应不算完成任务。",
+                "3. 先调用 read_file 读取当前 state JSON 和(若存在)旧文档,再决定如何更新。",
+                "4. 如果 state 与旧文档完全一致,仍必须写一个空变更说明文件(标记 '无变化')。",
+                "",
+                "【工具调用示例 — 必须严格按这个模式】",
+                "```",
+                "1. 调 read_file 工具,路径 = state JSON 路径",
+                "2. 解析 state.facts.{doc_kind} 等字段",
+                "3. 调 read_file 工具,路径 = 旧 doc 路径(可能不存在)",
+                "4. 生成新文档内容(基于 state + 旧 doc)",
+                "5. 调 write_file 工具,路径 = 上面给的输出文件路径,内容 = 完整文档",
+                "6. 退出(不要再调其他工具)",
+                "```",
+                "",
+                "【反例 — 这是错的】",
+                "❌ 只在文字响应里输出整个文档,没调 write_file → 任务失败",
+                "❌ 调 write_file 但路径错了 → 任务失败",
+                "❌ 调 write_file 但内容空 → 任务失败",
+                "",
+                "工作流:",
+                "  read_file(state) → 解析 facts → 生成文档内容 → write_file(目标路径, 完整内容) → 退出",
+            ]),
         )
         logger.info(f"创建新 AIAgent: session_id={sid}")
     return _AGENT_CACHE[sid]
@@ -136,6 +148,76 @@ def list_active_meetings() -> List[str]:
     if not DATA_DIR.exists():
         return []
     return [p.stem for p in DATA_DIR.glob("*.json")]
+
+
+def cleanup_inactive_agents(inactive_minutes: int = 30, dry_run: bool = False) -> Dict[str, Any]:
+    """清理长期不活跃会议的 AIAgent 缓存 (2026-06-24 张胜东要求,防内存泄漏)
+
+    判据: meeting_state JSON 文件 mtime > inactive_minutes 分钟前的会议视为已结束
+    行为: 从 _AGENT_CACHE 弹出对应的 6 个 session_id (req/arch/tasks/api/risk/demo)
+
+    ⚠️ 设计权衡:
+    - MeetingState 没有 status 字段 (state.py), 无法显式标记"会议结束"
+    - 用 JSON 文件 mtime 做判据 — VPBuddy 每次 save() 都更新文件
+    - 默认 30 分钟 — 短于 30 分钟的会议静默期不该清 (长会议/茶歇场景)
+    - dry_run=True 时只统计不真删 (默认 False)
+
+    Returns:
+        {"cleaned": [mid, ...], "kept_active": [mid, ...], "skipped_no_state": [mid, ...]}
+    """
+    import time as _time
+
+    now = _time.time()
+    threshold_sec = inactive_minutes * 60
+
+    cleaned: List[str] = []
+    kept: List[str] = []
+    skipped: List[str] = []
+
+    # 取所有已 cache 的 meeting_id
+    cached_mids = set()
+    for sid in _AGENT_CACHE.keys():
+        # sid 格式: meeting:{mid}:{kind}
+        parts = sid.split(":", 2)
+        if len(parts) == 3 and parts[0] == "meeting":
+            cached_mids.add(parts[1])
+
+    for mid in cached_mids:
+        state_path = DATA_DIR / f"{mid}.json"
+        # state JSON 已被删 (人工/V 主动删) → 该会议的 agent 也清
+        if not state_path.exists():
+            if not dry_run:
+                for kind in DOC_KINDS:
+                    sid = _agent_session_id(mid, kind)
+                    _AGENT_CACHE.pop(sid, None)
+            cleaned.append(mid)
+            if dry_run:
+                skipped.append(f"{mid} (no_state)")
+            continue
+
+        # mtime 判断
+        mtime = state_path.stat().st_mtime
+        if now - mtime > threshold_sec:
+            if not dry_run:
+                for kind in DOC_KINDS:
+                    sid = _agent_session_id(mid, kind)
+                    _AGENT_CACHE.pop(sid, None)
+                logger.info(
+                    f"清理 inactive AIAgent: meeting_id={mid} "
+                    f"(inactive {(now - mtime) / 60:.1f}min)"
+                )
+            cleaned.append(mid)
+        else:
+            kept.append(mid)
+
+    return {
+        "cleaned": cleaned,
+        "kept_active": kept,
+        "skipped_no_state": skipped,
+        "inactive_threshold_minutes": inactive_minutes,
+        "cache_size_before": len(cached_mids),
+        "cache_size_after": len(_AGENT_CACHE),
+    }
 
 
 def get_doc_path(meeting_id: str, doc_kind: str) -> Path:
@@ -194,12 +276,22 @@ def format_state_summary(state) -> str:
 
 
 def render_prompt(doc_kind: str, meeting_id: str, state_summary: str, last_doc: Optional[str]) -> str:
-    """渲染子 session 的 prompt(优先用专属模板,fallback 通用模板)"""
+    """渲染子 session 的 prompt(优先用专属模板,fallback 通用模板)
+
+    ⚠️ 2026-06-23 bug 修: prompt 模板里如果出现 `{` 或 `}`(比如 CSS 代码块
+    `<style>body { font-family: ... }</style>`), .format() 会抛 KeyError.
+    用 escape_braces 把 { → {{, } → }} (除了我们真要替换的 4 个变量).
+    """
     template_path = PROMPTS_DIR / f"{doc_kind}.md"
     template = template_path.read_text(encoding="utf-8") if template_path.exists() else _generic_template()
 
     doc_path = get_doc_path(meeting_id, doc_kind)
-    return template.format(
+    # 先把 template 里除已知变量外的 { } 转义 (CSS / JS / 模板字符串常见)
+    safe_template = template.replace("{", "{{").replace("}", "}}")
+    # 然后把我们的 4 个变量还原成单括号
+    for key in ["meeting_id", "doc_kind", "state_summary", "last_doc", "doc_path"]:
+        safe_template = safe_template.replace("{{" + key + "}}", "{" + key + "}")
+    return safe_template.format(
         meeting_id=meeting_id,
         doc_kind=doc_kind,
         state_summary=state_summary,
@@ -564,19 +656,33 @@ def run_one_round(
     return results
 
 
-def main_loop():
-    """主循环:每 POLL_INTERVAL 秒跑一轮"""
+def main_loop() -> None:
+    """主循环:每 POLL_INTERVAL 秒跑一轮,每小时清理一次 inactive agents"""
     print(f"VPBuddy sub-session controller started")
     print(f"  DATA_DIR: {DATA_DIR}")
     print(f"  DOCS_DIR: {DOCS_DIR}")
-    print(f"  PROMPTS_DIR: {PROMPTS_DIR}")
     print(f"  POLL_INTERVAL: {POLL_INTERVAL}s")
     print(f"  PARALLEL_WORKERS: {PARALLEL_WORKERS}")
     print(f"  DOC_KINDS: {DOC_KINDS}")
     print(f"  AIAgent in-process: {'✅ enabled' if _AGENT_AVAILABLE else '❌ disabled (subprocess fallback)'}")
+    print(f"  auto-cleanup: 每 {int(3600 / POLL_INTERVAL)} 轮 ≈ 1 小时")
     print()
+    cleanup_counter = 0
+    CLEANUP_EVERY = max(1, int(3600 / POLL_INTERVAL))  # 每小时清理一次
     while True:
         run_one_round()
+        cleanup_counter += 1
+        if cleanup_counter >= CLEANUP_EVERY:
+            cleanup_counter = 0
+            try:
+                result = cleanup_inactive_agents(inactive_minutes=30, dry_run=False)
+                if result["cleaned"]:
+                    print(
+                        f"  [auto-cleanup] cleaned {len(result['cleaned'])} inactive meetings, "
+                        f"cache {result['cache_size_before']} → {result['cache_size_after']}"
+                    )
+            except Exception as e:
+                logger.warning(f"auto-cleanup failed: {e}")
         print(f"  sleep {POLL_INTERVAL}s...\n")
         time.sleep(POLL_INTERVAL)
 
@@ -591,6 +697,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--list-meetings", action="store_true", help="列出活跃会议并退出")
     parser.add_argument("--serial", action="store_true", help="强制串行(默认并发)")
     parser.add_argument("--workers", type=int, help=f"并发线程数(默认 {PARALLEL_WORKERS})")
+    parser.add_argument(
+        "--cleanup-agents",
+        type=int,
+        metavar="MINUTES",
+        help="清理 inactive_minutes 分钟没更新的会议对应 AIAgent 缓存(0=用默认 30)",
+    )
     args = parser.parse_args(argv)
 
     if args.list_meetings:
@@ -598,6 +710,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"Active meetings ({len(meetings)}):")
         for m in meetings:
             print(f"  - {m}")
+        return 0
+
+    if args.cleanup_agents is not None:
+        threshold = args.cleanup_agents if args.cleanup_agents > 0 else 30
+        result = cleanup_inactive_agents(inactive_minutes=threshold, dry_run=False)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
 
     if args.once:

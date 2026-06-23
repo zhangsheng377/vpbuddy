@@ -44,6 +44,21 @@ from vpbuddy.state import (
     Requirement, Risk, Question,
 )
 from vpbuddy.storage import MeetingStorage
+from vpbuddy import sub_session_controller as ssc
+from vpbuddy.sub_session_controller import _AGENT_CACHE
+
+
+@pytest.fixture(autouse=True)
+def _isolate_agent_cache():
+    """每个 test 前清空 _AGENT_CACHE, 防测试间污染 (2026-06-24 +test_cleanup_inactive_agents 后必需)"""
+    _AGENT_CACHE.clear()
+    # 同时确保 DATA_DIR 指向 TEST_DATA (其它测试可能 monkeypatch 过)
+    ssc.DATA_DIR = Path(TEST_DATA)
+    ssc.DOCS_DIR = Path(TEST_DOCS)
+    yield
+    _AGENT_CACHE.clear()
+    ssc.DATA_DIR = Path(TEST_DATA)
+    ssc.DOCS_DIR = Path(TEST_DOCS)
 
 
 @pytest.fixture
