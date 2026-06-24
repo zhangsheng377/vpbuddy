@@ -84,6 +84,28 @@
     display: flex; gap: 8px; align-items: center;
     margin-bottom: 16px;
   }
+  .upload-section {
+    display: flex; gap: 10px; align-items: center;
+    margin-bottom: 16px; padding: 14px 16px;
+    background: var(--bg-panel);
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+  }
+  .upload-section label { color: var(--text-muted); font-size: 12px; }
+  .upload-section input[type="file"] {
+    background: var(--bg-surface); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 4px 8px; font-size: 12px; max-width: 320px;
+  }
+  .upload-section button {
+    background: var(--accent-bg); color: white;
+    border: none; padding: 6px 14px; border-radius: 5px;
+    font-size: 12px; cursor: pointer;
+  }
+  .upload-status {
+    font-size: 11px; color: var(--text-muted);
+    font-family: ui-monospace, monospace;
+  }
   .meeting-selector select {
     background: var(--bg-panel); color: var(--text-primary);
     border: 1px solid var(--border); border-radius: 6px;
@@ -192,6 +214,12 @@
 <div class="main">
   <!-- Tab 1: Main -->
   <div class="tab-content active" id="tab-main">
+    <div class="upload-section">
+      <label>上传会议录音 (用户视角端到端):</label>
+      <input type="file" id="audio-upload" accept="audio/*" />
+      <button onclick="uploadAudio()">上传 + 转写 + 出文档</button>
+      <span class="upload-status" id="upload-status">就绪</span>
+    </div>
     <div class="meeting-selector">
       <label>会议:</label>
       <select id="meeting-select"></select>
@@ -251,6 +279,48 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (tab.dataset.tab === 'settings') loadSettings();
   });
 });
+
+// === Upload audio (用户视角端到端) ===
+async function uploadAudio() {
+  const fileInput = document.getElementById('audio-upload');
+  const status = document.getElementById('upload-status');
+  if (!fileInput.files || fileInput.files.length === 0) {
+    status.textContent = '❌ 请先选文件';
+    return;
+  }
+  const file = fileInput.files[0];
+  status.textContent = `上传中 (${(file.size/1024).toFixed(0)} KB)...`;
+
+  const form = new FormData();
+  form.append('audio', file);
+
+  try {
+    const r = await fetch('/api/meetings/upload', { method: 'POST', body: form });
+    const data = await r.json();
+    if (!r.ok) {
+      status.textContent = `❌ ${data.error || '上传失败'}`;
+      return;
+    }
+    status.textContent = `✅ ${data.meeting_id} (${data.transcript_segments} 段, ${data.num_speakers} 说话人) · docs ~${data.docs_ready_in_seconds}s`;
+
+    // 30s 后刷新 dashboard 和会议列表
+    setTimeout(async () => {
+      await loadMeetings();
+      const sel = document.getElementById('meeting-select');
+      const opts = Array.from(sel.options).map(o => o.value);
+      const idx = opts.indexOf(data.meeting_id);
+      if (idx >= 0) {
+        sel.value = data.meeting_id;
+        refreshDashboard();
+        status.textContent = `✅ ${data.meeting_id} · 6 docs 已生成`;
+      } else {
+        status.textContent = `⚠️  docs 未找到, 刷新列表`;
+      }
+    }, data.docs_ready_in_seconds * 1000);
+  } catch (e) {
+    status.textContent = `❌ 网络错误: ${e}`;
+  }
+}
 
 // === Main: meetings + dashboard ===
 async function loadMeetings() {

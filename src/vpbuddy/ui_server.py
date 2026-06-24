@@ -1,4 +1,5 @@
-"""VPBuddy UI Server — 4 窗口 shell 的后端 API
+"""
+VPBuddy UI Server — 4 窗口 shell 的后端 API
 
 提供:
 - GET /                     → UI shell
@@ -7,6 +8,7 @@
 - GET /api/timeline         → 全部累积项按时间倒序
 - GET /api/kb/search?q=     → 跨会议 RAG 检索
 - GET /api/status           → Controller + 数据状态
+- POST /api/meetings/upload → 上传音频自动转写+入库+触发 6 docs (用户视角 E2E)
 
 用法: python -m vpbuddy.ui_server [--port 8765]
 """
@@ -14,7 +16,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
+import tempfile
+import uuid
 from typing import List, Optional
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -237,6 +242,267 @@ class Handler(BaseHTTPRequestHandler):
 
         return self._404(path)
 
+    def do_POST(self):
+        url = urlparse(self.path)
+        path = url.path
+
+        # API: upload audio → auto transcribe + ingest + trigger 6 docs
+        if path == "/api/meetings/upload":
+            return self._handle_upload_audio()
+
+        # API: 流式 start — 创建长连接会议 (Tauri 客户端调用)
+        if path == "/api/meetings/stream_start":
+            return self._handle_stream_start()
+
+        # API: 流式 chunk — 接收 30s 切片 + 立即触发 6 docs
+        if path.startswith("/api/meetings/") and path.endswith("/stream_chunk"):
+            meeting_id = path.split("/")[3]  # /api/meetings/{id}/stream_chunk
+            return self._handle_stream_chunk(meeting_id)
+
+        return self._404(path)
+
+    def _handle_stream_start(self):
+        """Tauri 客户端调用: 创建"持续接收"会议, 后续每 30s 推 chunk"""
+        meeting_id = f"STREAM_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        # 占位 state (空), 后续 chunk 会更新
+        try:
+            from .storage import MeetingStorage
+            from .state import MeetingState, Platform
+            storage = MeetingStorage()
+            state = MeetingState(
+                meeting_id=meeting_id,
+                platform=Platform.LOCAL,
+                project_name=f"长连接会议 {meeting_id}",
+            )
+            storage.save(state)
+        except Exception as e:
+            return self._json({"error": f"create state failed: {e}"}, 500)
+        return self._json({
+            "meeting_id": meeting_id,
+            "chunk_interval_sec": 30,
+            "message": "Stream started, send 30s WAV chunks to /api/meetings/{id}/stream_chunk",
+        })
+
+    def _handle_stream_chunk(self, meeting_id: str):
+        """Tauri 客户端调: 接收 30s WAV → funasr 转写 → ingest 累加 → 触发 controller"""
+        content_type = self.headers.get("Content-Type", "")
+        if not content_type.startswith("multipart/form-data"):
+            return self._json({"error": "Content-Type must be multipart/form-data"}, 400)
+
+        content_length = int(self.headers.get("Content-Length", "0"))
+        if content_length == 0:
+            return self._json({"error": "Empty body"}, 400)
+        body = self.rfile.read(content_length)
+
+        boundary_match = re.search(r'boundary=(?:"([^"]+)"|([^\s;]+))', content_type)
+        if not boundary_match:
+            return self._json({"error": "Missing boundary"}, 400)
+        boundary = (boundary_match.group(1) or boundary_match.group(2)).encode()
+        parts = body.split(b"--" + boundary)
+        file_data = None
+        for part in parts:
+            if b'name="audio"' in part or b'name="file"' in part:
+                header_end = part.find(b"\r\n\r\n")
+                if header_end == -1: continue
+                file_data = part[header_end + 4:]
+                if file_data.endswith(b"\r\n"):
+                    file_data = file_data[:-2]
+                if file_data: break
+        if not file_data:
+            return self._json({"error": "No audio file in form"}, 400)
+
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp.write(file_data)
+            tmp_path = tmp.name
+
+        try:
+            # 1. funasr 转写
+            from .scripts.gpu_transcribe import process
+            transcript = process(tmp_path)
+            new_segs = transcript.get("segments", [])
+
+            # 2. 累加到 meeting state (load 已有 + 追加新 segments)
+            from .storage import MeetingStorage
+            from .state import MeetingState, Platform, Priority
+            from .ingest import _classify, infer_speaker_map
+            storage = MeetingStorage()
+            if storage.exists(meeting_id):
+                state = storage.load(meeting_id)
+            else:
+                state = MeetingState(
+                    meeting_id=meeting_id,
+                    platform=Platform.LOCAL,
+                    project_name=f"长连接会议 {meeting_id}",
+                )
+
+            # 追加新 segments
+            if new_segs:
+                spk_map = state.speaker_map or infer_speaker_map(new_segs)
+                for spk_id, spk_name in spk_map.items():
+                    state.register_speaker(spk_id, spk_name)
+                for s in new_segs:
+                    text = s["text"]
+                    spk_name = spk_map.get(s["speaker_id"], "UNKNOWN")
+                    kind, prio = _classify(text)
+                    if kind == "requirement":
+                        state.add_requirement(text, priority=prio, speaker_id=spk_name)
+                    elif kind == "risk":
+                        state.add_risk(text, priority=prio, speaker_id=spk_name)
+                    elif kind == "question":
+                        state.add_question(text, is_urgent=(prio == Priority.HIGH), speaker_id=spk_name)
+            storage.save(state)
+
+            # 3. 触发 6 个子 session (in-process, 复用 AIAgent 缓存, 跨 chunk 真"长驻")
+            # ADR-0006 + ADR-0009: 同 (mid, kind) 跨次调 trigger_sub_session → 同一 AIAgent
+            #   → 同一 session_id → 持久 LLM 上下文 (本次会议所有累积)
+            # 不同会议起新 AIAgent, 上下文隔离
+            # demo agent 单独拎出来, 跟其他 5 个并行触发 (2026-06-23 张胜东纠正)
+            # 不禁止 fetch/eval (2026-06-23 二次纠正), 先看效果
+            from concurrent.futures import ThreadPoolExecutor
+            from .sub_session_controller import trigger_sub_session
+            doc_kinds = ["req", "arch", "tasks", "api", "risk", "demo"]
+
+            def _run_sub(mid, kind):
+                try:
+                    r = trigger_sub_session(mid, kind, False)
+                    return (kind, r.get("triggered"), r.get("error"))
+                except Exception as e:
+                    return (kind, False, str(e))
+
+            with ThreadPoolExecutor(max_workers=3) as ex:
+                futures = [ex.submit(_run_sub, meeting_id, k) for k in doc_kinds]
+                # 不等结果, fire-and-forget (前端立刻返回 new_segments)
+                # 加 done callback 写日志
+                def _log_done(fut):
+                    try:
+                        kind, triggered, err = fut.result(timeout=1)
+                        msg = f"[stream_chunk] {kind} triggered={triggered}"
+                        if err:
+                            msg += f" err={err[:200]}"
+                        print(msg)
+                    except Exception as e:
+                        print(f"[stream_chunk] callback err: {e}")
+                for f in futures:
+                    f.add_done_callback(_log_done)
+
+            return self._json({
+                "meeting_id": meeting_id,
+                "new_segments": [
+                    {
+                        "start_sec": s["start_sec"],
+                        "end_sec": s["end_sec"],
+                        "text": s["text"],
+                        "speaker_id": s["speaker_id"],
+                    } for s in new_segs
+                ],
+                "state_items": {
+                    "requirements": len(state.requirements),
+                    "risks": len(state.risks),
+                    "questions": len(state.open_questions),
+                },
+                "docs_triggered": True,
+            })
+        except Exception as e:
+            import traceback
+            return self._json({"error": f"Stream chunk failed: {e}", "trace": traceback.format_exc()}, 500)
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+
+    def _handle_upload_audio(self):
+        """处理 multipart/form-data 音频上传 → funasr 转写 → ingest → trigger 6 docs"""
+        content_type = self.headers.get("Content-Type", "")
+        if not content_type.startswith("multipart/form-data"):
+            return self._json({"error": "Content-Type must be multipart/form-data"}, 400)
+
+        # 简易 multipart parser (避免 cgi 在 Py3.13 被移除)
+        content_length = int(self.headers.get("Content-Length", "0"))
+        if content_length == 0:
+            return self._json({"error": "Empty body"}, 400)
+        body = self.rfile.read(content_length)
+
+        # 提取 boundary
+        boundary_match = re.search(r'boundary=(?:"([^"]+)"|([^\s;]+))', content_type)
+        if not boundary_match:
+            return self._json({"error": "Missing boundary"}, 400)
+        boundary = (boundary_match.group(1) or boundary_match.group(2)).encode()
+        parts = body.split(b"--" + boundary)
+        file_data = None
+        for part in parts:
+            if b'name="audio"' in part or b'name="file"' in part:
+                # 拆 header/body
+                header_end = part.find(b"\r\n\r\n")
+                if header_end == -1:
+                    continue
+                file_data = part[header_end + 4:]
+                # 去掉 trailing \r\n
+                if file_data.endswith(b"\r\n"):
+                    file_data = file_data[:-2]
+                if file_data:
+                    break
+        if not file_data:
+            return self._json({"error": "No audio file in form (field name: 'audio' or 'file')"}, 400)
+
+        # 生成 meeting_id
+        meeting_id = f"UPLOAD_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+
+        # 保存临时文件
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp.write(file_data)
+            tmp_path = tmp.name
+
+        try:
+            # 1. 调用 funasr 转写 (复用 gpu_transcribe.process)
+            from .scripts.gpu_transcribe import process
+            transcript = process(tmp_path)
+
+            # 2. ingest 到 MeetingState (复用 ingest.ingest_transcript)
+            from .ingest import ingest_transcript
+            from .state import Platform
+            state = ingest_transcript(
+                meeting_id=meeting_id,
+                transcript=transcript,
+                project_name=f"上传会议 {meeting_id}",
+                platform=Platform.LOCAL,
+            )
+
+            # 3. 触发 controller 一轮 (异步, 不阻塞)
+            import subprocess
+            controller_cmd = [
+                sys.executable, "-m", "vpbuddy.controller",
+                "--once", "--meeting", meeting_id
+            ]
+            subprocess.Popen(
+                controller_cmd,
+                cwd=str(Path(__file__).parent.parent.parent),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+            # 4. 返回结果
+            return self._json({
+                "meeting_id": meeting_id,
+                "transcript_segments": len(transcript.get("segments", [])),
+                "num_speakers": transcript.get("num_speakers", 0),
+                "state_items": {
+                    "requirements": len(state.requirements),
+                    "risks": len(state.risks),
+                    "questions": len(state.open_questions),
+                },
+                "docs_ready_in_seconds": 30,
+                "message": "Audio processed, docs will be ready in ~30s",
+            })
+        except Exception as e:
+            import traceback
+            return self._json({"error": f"Processing failed: {e}", "trace": traceback.format_exc()}, 500)
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+
     def _serve_file(self, path: Path, mime: str):
         try:
             data = path.read_bytes()
@@ -248,9 +514,9 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._500(str(e))
 
-    def _json(self, obj):
+    def _json(self, obj, status_code: int = 200):
         data = json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
-        self.send_response(200)
+        self.send_response(status_code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Access-Control-Allow-Origin", "*")
