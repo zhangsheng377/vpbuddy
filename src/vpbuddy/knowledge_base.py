@@ -94,8 +94,20 @@ class KnowledgeBase:
             return -1
 
         # 1. upsert 元数据(同 meeting+kind 覆盖)
+        # ⚠️ Pydantic/SQLite: INSERT OR REPLACE 会复用 rowid
+        #    必须先查老 doc_id 再删 vec, 不能 lastrowid (REPLACE 时拿到的是新 id, 旧 vec 残留)
+        old_row = self._conn.execute(
+            "SELECT id FROM documents WHERE meeting_id = ? AND doc_kind = ?",
+            (meeting_id, doc_kind),
+        ).fetchone()
+        old_doc_id = old_row[0] if old_row else None
+        if old_doc_id is not None:
+            self._conn.execute("DELETE FROM vec_documents WHERE id = ?", (old_doc_id,))
+            self._conn.execute("DELETE FROM documents WHERE id = ?", (old_doc_id,))
+            self._conn.commit()
+
         cur = self._conn.execute(
-            "INSERT OR REPLACE INTO documents (meeting_id, doc_kind, content) VALUES (?, ?, ?)",
+            "INSERT INTO documents (meeting_id, doc_kind, content) VALUES (?, ?, ?)",
             (meeting_id, doc_kind, content),
         )
         doc_id = cur.lastrowid
@@ -105,8 +117,7 @@ class KnowledgeBase:
         vec = model.encode(content, normalize_embeddings=True).tolist()
         vec_blob = sqlite_vec.serialize_float32(vec)
 
-        # 3. upsert 向量(先删旧的, 再插新的)
-        self._conn.execute("DELETE FROM vec_documents WHERE id = ?", (doc_id,))
+        # 3. 插入新 vec (用真新 doc_id, 老 vec 已删)
         self._conn.execute(
             "INSERT INTO vec_documents (id, embedding) VALUES (?, ?)",
             (doc_id, vec_blob),
