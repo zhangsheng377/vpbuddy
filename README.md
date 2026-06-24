@@ -74,6 +74,10 @@ vpbuddy controller --start
 | **产品需求** | [docs/product-spec/](docs/product-spec/) |
 | **决策记录** | [docs/decisions/](docs/decisions/) (ADR-0004 / 0005 / 0009) |
 | **安装指南** | [docs/部署/INSTALL.md](docs/部署/INSTALL.md) |
+| **Phase B Tauri 客户端** | [INSTALL.md §Phase B](./docs/部署/INSTALL.md#phase-b-tauri-桌面客户端-2026-06-24-adr-0016-落地) / [ADR-0016](./docs/decisions/0016-桌面客户端技术选型.md) |
+| **流式 E2E** | [ADR-0013](./docs/decisions/0013-流式E2E-端到端工作流.md) |
+| **VPBuddy Skill** | [ADR-0014](./docs/decisions/0014-VPBuddy装成Hermes-Skill.md) |
+| **sqlite-vec RAG** | [ADR-0015](./docs/decisions/0015-RAG-sqlite-vec本地知识库.md) |
 | **模型 swap** | [docs/部署/MODEL_SWAP.md](docs/部署/MODEL_SWAP.md) |
 | **踩坑记录** | [docs/部署/踩坑记录.md](docs/部署/踩坑记录.md) |
 | **用户手册** | [docs/用户手册.md](docs/用户手册.md) |
@@ -129,12 +133,12 @@ python3 -c "from run_agent import AIAgent; print('✅ VPBuddy ↔ Hermes 真连�
 - **LLM**: OpenAI 兼容 API(默认 MiniMax-M3,可换 GPT-4o / Claude / Qwen 等)
 - **音频**: PipeWire / PulseAudio / WASAPI / BlackHole (跨平台)
 
-### 状态(2026-06-22)
+### 状态(2026-06-24)
 
 - ✅ MVP 全链路 work: 音频 → ASR → 6 文档 → KB → UI 检索
-- ✅ 116 个单元测试 + 集成测试通过(GPU)
-- ✅ E2E 集成测试 `RUN_E2E=1 pytest` 真跑完整链路
-- 🚧 强模型 swap 提升工具调用成功率(当前 MiniMax-M3 8B 弱,需 fallback 兜底)
+- ✅ Tauri 桌面客户端编译过 (`cargo build --release`) + 6 子 session E2E 联调通过
+- ✅ 5 个 cargo test + 1 个 GPU E2E 联调测试
+- ✅ 文档齐全: 16 个 ADR + INSTALL.md + CI 工作流
 
 ### License
 
@@ -169,10 +173,18 @@ vpbuddy ui    # → http://localhost:8765
 
 See `docs/` for:
 - Architecture (`docs/design/总体架构.md`)
-- Decisions (`docs/decisions/0004-*.md`, `0009-*.md`)
+- Decisions (`docs/decisions/0004-*.md` through `0016-*.md`)
 - Installation (`docs/部署/INSTALL.md`)
 - Model swap guide (`docs/部署/MODEL_SWAP.md`)
+- Phase B Tauri desktop client (ADR-0016, since 2026-06-24)
+- Streaming E2E architecture (ADR-0013, since 2026-06-23)
+
+### Status (2026-06-24)
+- ✅ MVP full pipeline: audio → ASR → 6 docs → KB → UI
+- ✅ Tauri desktop client compiles (`cargo build --release`) + 6 sub-session E2E pass
+- ✅ 5 cargo tests + 1 GPU E2E integration test
+- ✅ Complete documentation: 16 ADRs + INSTALL.md + CI workflow
 
 ### License
-
+MIT
 MIT
