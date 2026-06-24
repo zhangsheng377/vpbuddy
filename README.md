@@ -126,6 +126,42 @@ python3 -c "from run_agent import AIAgent; print('✅ VPBuddy ↔ Hermes 真连�
 | `vpbuddy kb-status` | 查看 KB 状态(失败重试等) |
 | `vpbuddy setup-gpu` | 装 GPU 模型(开发用) |
 
+### 实时链路测试
+
+服务端实时链路有两种测试方式。
+
+进程内回归测试:
+
+```bash
+PYTHONPATH=src python src/tests/test_e2e_realtime_standalone.py
+```
+
+该测试在同一 Python 进程里启动测试服务端线程,覆盖 SSE、多客户端订阅、会议隔离、历史补偿、状态 API、文档 API、chunk 元数据和去重。
+
+两进程无头测试:
+
+```bash
+# 进程 1: 测试服务端
+PYTHONPATH=src python src/tests/headless_test_server.py --host 127.0.0.1 --port 18767
+
+# 进程 2: 无头客户端
+PYTHONPATH=src python src/tests/headless_client.py --server http://127.0.0.1:18767 --chunks 1 --json
+```
+
+两进程测试通过时,说明 `stream_start`、SSE、`stream_chunk`、事实更新、指标更新、6 类文档和 Demo 回流协议已经跑通。`headless_test_server.py` 使用 fake ASR 和 fake 文档生成器,因此它验证的是协议和实时链路,不验证真实 funasr、真实 GPU、真实 Hermes/LLM 或 Tauri GUI。
+
+要验证真实模型环境,启动真实 `vpbuddy ui` 或生产服务端,再用同一个 `headless_client.py` 连接。真实环境需要 funasr/Hermes/KB 路径可用。
+
+### 当前代码约束
+
+- VPBuddy 是客户端-服务端架构:客户端采集音频和展示结果,服务端处理 ASR、事实抽取、文档、Demo 和 KB。
+- 客户端上传 30s WAV chunk,当前保留 2s overlap。服务端用 `chunk_index` 去重,用 `chunk_start_sec` 转成会议绝对时间。
+- SSE 事件包括 `transcript-segment`、`state-update`、`metrics-update`、`doc-update`、`heartbeat`。事件历史存在服务端内存里,进程重启后不保留。
+- 会议持久状态写入 `{DATA_DIR}/{meeting_id}.json`,stream 元数据写入 `{DATA_DIR}/{meeting_id}.stream.json`,文档写入 `{DOCS_DIR}/{meeting_id}/`。
+- 6 类交付物固定为 `req`、`arch`、`tasks`、`api`、`risk`、`demo`;Demo 主文件是 `demo/demo.html`。
+- AI 可以主动在 VPBuddy 客户端内展示候选结论、风险和文档状态,但不能主动外发、投屏或调用外部会议软件。
+- Linux 构建 Tauri 客户端需要 GTK/WebKit/GLib 开发库。缺少 `glib-2.0.pc` 时,`cargo check` 会在 `glib-sys` 构建阶段失败。
+
 ### 技术栈
 
 - **Python 3.11+**,FastAPI / Pydantic v2
@@ -136,11 +172,11 @@ python3 -c "from run_agent import AIAgent; print('✅ VPBuddy ↔ Hermes 真连�
 - **LLM**: OpenAI 兼容 API(默认 MiniMax-M3,可换 GPT-4o / Claude / Qwen 等)
 - **音频**: PipeWire / PulseAudio / WASAPI / BlackHole (跨平台)
 
-### 状态(2026-06-22)
+### 状态(2026-06-24)
 
-- ✅ MVP 全链路 work: 音频 → ASR → 6 文档 → KB → UI 检索
-- ✅ 116 个单元测试 + 集成测试通过(GPU)
-- ✅ E2E 集成测试 `RUN_E2E=1 pytest` 真跑完整链路
+- ✅ MVP 全链路 work: 音频 → ASR → 6 文档 → Demo → KB → 客户端实时展示
+- ✅ 服务端实时链路独立测试通过
+- ✅ 两进程无头端到端测试通过
 - 🚧 强模型 swap 提升工具调用成功率(当前 MiniMax-M3 8B 弱,需 fallback 兜底)
 
 ### License
