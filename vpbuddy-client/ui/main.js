@@ -12,6 +12,7 @@ let byteCount = 0;
 let upCount = 0;
 let currentMeetingId = null;
 let docsByKind = {};
+const renderedChatIds = new Set();
 
 const i18n = {
   zh: {
@@ -49,6 +50,7 @@ document.getElementById("btn-start").addEventListener("click", async () => {
     document.getElementById("rec-dot").className = "dot live";
     document.getElementById("rec-status").textContent = t("capturing");
     await refreshDocs();
+    await refreshChatHistory();
   } catch (e) {
     document.getElementById("rec-status").textContent = "❌ " + e;
   }
@@ -115,6 +117,10 @@ listen("metrics-update", (e) => {
   const p = e.payload || {};
   const latency = p.end_to_end_ms || p.processing_ms;
   document.getElementById("latency").textContent = latency ? `延迟 ${latency}ms` : "延迟 -";
+});
+
+listen("chat-message", (e) => {
+  renderChatMessage(e.payload);
 });
 
 // 实时结构化事实更新 (REQ/GOAL/FEAT/RISK/QUE)
@@ -213,6 +219,73 @@ document.getElementById("kb-btn").addEventListener("click", async () => {
   `).join("");
   document.getElementById("kb-results").innerHTML = html || `<div style='color:var(--text2);padding:20px;'>${t("noResult")}</div>`;
 });
+
+// === VP Chat ===
+document.getElementById("chat-send").addEventListener("click", sendChat);
+document.getElementById("chat-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    sendChat();
+  }
+});
+
+async function sendChat() {
+  if (!currentMeetingId) {
+    try { currentMeetingId = await invoke("get_current_meeting"); } catch (_) {}
+  }
+  if (!currentMeetingId) {
+    document.getElementById("chat-status").textContent = "请先开始会议";
+    return;
+  }
+  const input = document.getElementById("chat-input");
+  const message = input.value.trim();
+  if (!message) return;
+  input.value = "";
+  document.getElementById("chat-status").textContent = "Hermes 正在思考...";
+  try {
+    const result = await invoke("send_chat_message", {
+      meetingId: currentMeetingId,
+      message,
+      context: {
+        active_panel: document.querySelector(".bottom-nav button.active")?.dataset.panel || "chat",
+        selected_doc_kind: document.querySelector(".doc-card.stored")?.dataset.kind || null,
+      }
+    });
+    if (result.user_message) renderChatMessage(result.user_message);
+    if (result.assistant_message) renderChatMessage(result.assistant_message);
+    document.getElementById("chat-status").textContent =
+      result.source === "hermes" ? "Hermes 已回复" : "Hermes 不可用，已使用 fallback";
+  } catch (e) {
+    document.getElementById("chat-status").textContent = "Chat 失败：" + e;
+  }
+}
+
+async function refreshChatHistory() {
+  if (!currentMeetingId) return;
+  try {
+    const result = await invoke("get_chat_history", { meetingId: currentMeetingId });
+    for (const msg of (result.messages || [])) renderChatMessage(msg);
+  } catch (e) {
+    console.warn("读取 Chat 历史失败", e);
+  }
+}
+
+function renderChatMessage(msg) {
+  if (!msg || !msg.id || renderedChatIds.has(msg.id)) return;
+  renderedChatIds.add(msg.id);
+  const list = document.getElementById("chat-list");
+  const empty = list.querySelector(".chat-empty");
+  if (empty) empty.remove();
+  const item = document.createElement("div");
+  item.className = `chat-msg ${msg.role || "assistant"} ${msg.status || "ok"}`;
+  const role = msg.role === "user" ? "VP" : (msg.source === "hermes" ? "Hermes" : "VPBuddy");
+  item.innerHTML = `
+    <div class="chat-meta"><span>${role}</span><span>${escapeHtml(msg.created_at || "")}</span></div>
+    <div class="chat-content">${escapeHtml(msg.content || "")}</div>
+  `;
+  list.appendChild(item);
+  list.scrollTop = list.scrollHeight;
+}
 
 async function initAudioDevices() {
   try {

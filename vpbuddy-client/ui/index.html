@@ -82,6 +82,19 @@
         <div id="kb-results"></div>
       </section>
 
+      <!-- VP Chat -->
+      <section id="panel-chat" class="panel">
+        <h2>VP Chat (Hermes)</h2>
+        <div id="chat-list" class="chat-list">
+          <div class="chat-empty">会议开始后，可以在这里向 Hermes 追问、改方向或调度 6 个子 agent。</div>
+        </div>
+        <div class="chat-input-row">
+          <textarea id="chat-input" placeholder="例如：把 Demo 改成面向企业管理员的后台视角"></textarea>
+          <button id="chat-send">发送</button>
+        </div>
+        <div id="chat-status" class="chat-status">Chat 未连接</div>
+      </section>
+
       <section id="panel-settings" class="panel">
         <h2>设置</h2>
         <div class="settings-card">
@@ -100,6 +113,7 @@
       <button data-panel="facts">事实</button>
       <button data-panel="docs">6 文档</button>
       <button data-panel="kb">知识库</button>
+      <button data-panel="chat">Chat</button>
       <button data-panel="settings">设置</button>
     </nav>
   </div>

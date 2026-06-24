@@ -160,6 +160,8 @@ PYTHONPATH=src python src/tests/headless_client.py --server http://127.0.0.1:187
 - 会议持久状态写入 `{DATA_DIR}/{meeting_id}.json`,stream 元数据写入 `{DATA_DIR}/{meeting_id}.stream.json`,文档写入 `{DOCS_DIR}/{meeting_id}/`。
 - 6 类交付物固定为 `req`、`arch`、`tasks`、`api`、`risk`、`demo`;Demo 主文件是 `demo/demo.html`。
 - AI 可以主动在 VPBuddy 客户端内展示候选结论、风险和文档状态,但不能主动外发、投屏或调用外部会议软件。
+- 客户端提供 VP 自由输入窗口。服务端把输入接到 Hermes `meeting:{meeting_id}:vp-chat` 主控 session,由 Hermes 负责上下文、工具调用、skill 选择和调度 6 个子 agent。
+- VP Chat 的历史写入 `{DATA_DIR}/{meeting_id}.chat.json`,并通过 SSE `chat-message` 回流客户端。
 - Linux 构建 Tauri 客户端需要 GTK/WebKit/GLib 开发库。缺少 `glib-2.0.pc` 时,`cargo check` 会在 `glib-sys` 构建阶段失败。
 
 ### 技术栈

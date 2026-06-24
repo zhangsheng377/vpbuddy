@@ -240,6 +240,9 @@ fn handle_sse_event(app: &AppHandle, event_str: &str, last_event_id: &mut Option
         "doc-update" => {
             let _ = app.emit("doc-status", &payload);
         }
+        "chat-message" => {
+            let _ = app.emit("chat-message", &payload);
+        }
         "metrics-update" => {
             let _ = app.emit("metrics-update", &payload);
         }
@@ -401,6 +404,43 @@ async fn get_meeting_docs(
         .map_err(|e| format!("文档解析失败: {e}"))
 }
 
+#[tauri::command]
+async fn send_chat_message(
+    state: State<'_, AppState>,
+    meeting_id: String,
+    message: String,
+    context: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let url = format!("{}/api/meetings/{}/chat", state.gpu_url, meeting_id);
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({
+            "message": message,
+            "context": context.unwrap_or_else(|| serde_json::json!({})),
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("Chat 请求失败: {e}"))?;
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("Chat 响应解析失败: {e}"))
+}
+
+#[tauri::command]
+async fn get_chat_history(
+    state: State<'_, AppState>,
+    meeting_id: String,
+) -> Result<serde_json::Value, String> {
+    let url = format!("{}/api/meetings/{}/chat/history", state.gpu_url, meeting_id);
+    let resp = reqwest::get(&url)
+        .await
+        .map_err(|e| format!("Chat 历史请求失败: {e}"))?;
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("Chat 历史解析失败: {e}"))
+}
+
 fn main() {
     env_logger::init();
     tauri::Builder::default()
@@ -428,6 +468,8 @@ fn main() {
             get_current_meeting,
             get_meeting_state,
             get_meeting_docs,
+            send_chat_message,
+            get_chat_history,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

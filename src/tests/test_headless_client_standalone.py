@@ -28,6 +28,18 @@ TEST_DOCS_DIR = Path("/tmp/vpbuddy_headless_docs")
 
 def install_fakes() -> None:
     """安装 fake ASR 和 fake 文档生成器，让无头测试不依赖 numpy/funasr/hermes。"""
+    fake_run_agent = types.ModuleType("run_agent")
+
+    class FakeAIAgent:
+        def __init__(self, session_id: str, **_kwargs):
+            self.session_id = session_id
+
+        def chat(self, _prompt: str) -> str:
+            return f"[fake hermes:{self.session_id}] Demo 方向调整已收到,建议同步更新 demo 子 agent。"
+
+    fake_run_agent.AIAgent = FakeAIAgent
+    sys.modules["run_agent"] = fake_run_agent
+
     fake_gpu = types.ModuleType("vpbuddy.scripts.gpu_transcribe")
 
     def fake_process(_path: str) -> dict:
@@ -103,10 +115,15 @@ def test_headless_client_full_flow(server: str) -> None:
     print("\n[Test] 无头客户端完整链路...")
     client = HeadlessVPBuddyClient(server)
     try:
-        result = client.run_smoke(chunks=1, chunk_duration_sec=1.0)
+        result = client.run_smoke(
+            chunks=1,
+            chunk_duration_sec=1.0,
+            chat_message="把 Demo 改成面向企业管理员的后台视角",
+        )
         event_types = [event["event"] for event in result["events"]]
         chunk = result["chunk_responses"][0]
         docs = result["docs"]["docs"]
+        chat = result["chat_response"]
 
         assert result["meeting_id"].startswith("STREAM_"), result["meeting_id"]
         assert len(chunk["new_segments"]) == 2, json.dumps(chunk, ensure_ascii=False)
@@ -115,9 +132,12 @@ def test_headless_client_full_flow(server: str) -> None:
         assert "state-update" in event_types, event_types
         assert "metrics-update" in event_types, event_types
         assert "doc-update" in event_types, event_types
+        assert "chat-message" in event_types, event_types
         assert result["state"]["state"]["requirements"] >= 1, result["state"]
         assert len(docs) == 6, docs
         assert any(doc["kind"] == "demo" and "VPBuddy Demo" in doc["content"] for doc in docs), docs
+        assert chat["source"] == "hermes", chat
+        assert len(result["chat_history"]["messages"]) >= 2, result["chat_history"]
         print(f"  PASS: meeting={result['meeting_id']}, events={event_types}")
     finally:
         client.stop()

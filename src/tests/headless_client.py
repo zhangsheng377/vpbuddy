@@ -114,6 +114,19 @@ class HeadlessVPBuddyClient:
             raise RuntimeError("请先调用 start_meeting()")
         return self._get_json(f"/api/meetings/{self.meeting_id}/docs")
 
+    def send_chat(self, message: str, context: Optional[dict[str, Any]] = None) -> dict:
+        if not self.meeting_id:
+            raise RuntimeError("请先调用 start_meeting()")
+        return self._post_json(
+            f"/api/meetings/{self.meeting_id}/chat",
+            {"message": message, "context": context or {"source": "headless_client"}},
+        )
+
+    def get_chat_history(self) -> dict:
+        if not self.meeting_id:
+            raise RuntimeError("请先调用 start_meeting()")
+        return self._get_json(f"/api/meetings/{self.meeting_id}/chat/history")
+
     def wait_for_events(self, required: set[str], timeout_sec: float = 10.0) -> bool:
         deadline = time.time() + timeout_sec
         while time.time() < deadline:
@@ -123,7 +136,7 @@ class HeadlessVPBuddyClient:
             time.sleep(0.1)
         return False
 
-    def run_smoke(self, chunks: int = 1, chunk_duration_sec: float = 1.0) -> dict:
+    def run_smoke(self, chunks: int = 1, chunk_duration_sec: float = 1.0, chat_message: Optional[str] = None) -> dict:
         meeting_id = self.start_meeting()
         self.connect_sse()
         time.sleep(0.3)
@@ -134,11 +147,18 @@ class HeadlessVPBuddyClient:
             responses.append(self.upload_chunk(wav, i, i * 28.0, overlap_sec=2.0))
 
         self.wait_for_events({"connected"}, timeout_sec=3)
+        chat_response = None
+        if chat_message:
+            chat_response = self.send_chat(chat_message)
+            self.wait_for_events({"chat-message"}, timeout_sec=5)
         state = self.get_state()
         docs = self.get_docs()
+        chat_history = self.get_chat_history()
         return {
             "meeting_id": meeting_id,
             "chunk_responses": responses,
+            "chat_response": chat_response,
+            "chat_history": chat_history,
             "events": [{"event": e.event, "data": e.data, "id": e.event_id} for e in self.events],
             "state": state,
             "docs": docs,
@@ -268,12 +288,17 @@ def main() -> int:
     parser.add_argument("--server", default="http://127.0.0.1:8765", help="VPBuddy 服务端地址")
     parser.add_argument("--chunks", type=int, default=1, help="上传音频分片数量")
     parser.add_argument("--duration", type=float, default=1.0, help="每个测试 WAV 的秒数")
+    parser.add_argument("--chat", default="", help="发送一条 VP Chat 消息")
     parser.add_argument("--json", action="store_true", help="输出完整 JSON")
     args = parser.parse_args()
 
     client = HeadlessVPBuddyClient(args.server)
     try:
-        result = client.run_smoke(chunks=args.chunks, chunk_duration_sec=args.duration)
+        result = client.run_smoke(
+            chunks=args.chunks,
+            chunk_duration_sec=args.duration,
+            chat_message=args.chat or None,
+        )
         if args.json:
             print(json.dumps(result, ensure_ascii=False, indent=2))
         else:
@@ -282,6 +307,8 @@ def main() -> int:
             print(f"chunks={len(result['chunk_responses'])}")
             print(f"events={event_types}")
             print(f"docs={len(result['docs'].get('docs', []))}")
+            if result.get("chat_response"):
+                print(f"chat_status={result['chat_response'].get('status')}")
         return 0
     finally:
         client.stop()

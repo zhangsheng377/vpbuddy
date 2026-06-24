@@ -23,6 +23,21 @@ from vpbuddy import ui_server
 
 def install_fakes(docs_dir: Path) -> None:
     """安装 fake ASR 和 fake 文档生成器，避免测试依赖 GPU/funasr/hermes。"""
+    fake_run_agent = types.ModuleType("run_agent")
+
+    class FakeAIAgent:
+        def __init__(self, session_id: str, **_kwargs):
+            self.session_id = session_id
+
+        def chat(self, prompt: str) -> str:
+            return (
+                f"[fake hermes:{self.session_id}] 已收到 VP 输入。"
+                "建议由 demo 子 agent 优先调整 Demo,并同步检查 req/arch 文档是否需要更新。"
+            )
+
+    fake_run_agent.AIAgent = FakeAIAgent
+    sys.modules["run_agent"] = fake_run_agent
+
     fake_gpu = types.ModuleType("vpbuddy.scripts.gpu_transcribe")
 
     def fake_process(_path: str) -> dict:

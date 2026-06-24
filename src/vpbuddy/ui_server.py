@@ -22,6 +22,7 @@ import os
 import re
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from typing import Any, List, Optional
@@ -54,6 +55,8 @@ DOC_LABELS = {
     "risk": "风险分析",
     "demo": "Demo",
 }
+_CHAT_AGENT_CACHE: dict[str, Any] = {}
+_CHAT_AGENT_LOCK = threading.Lock()
 
 
 def _stream_meta_path(meeting_id: str) -> Path:
@@ -142,6 +145,168 @@ def _doc_payload(meeting_id: str, kind: str) -> dict[str, Any]:
         "content": content,
         "updated_at": updated_at,
         "doc_size": path.stat().st_size if exists else 0,
+    }
+
+
+def _chat_path(meeting_id: str) -> Path:
+    return DATA_DIR / f"{meeting_id}.chat.json"
+
+
+def _load_chat_history(meeting_id: str) -> list[dict[str, Any]]:
+    path = _chat_path(meeting_id)
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return data
+        return data.get("messages", [])
+    except Exception:
+        return []
+
+
+def _save_chat_history(meeting_id: str, messages: list[dict[str, Any]]) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    _chat_path(meeting_id).write_text(
+        json.dumps(messages[-500:], ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _append_chat_message(
+    meeting_id: str,
+    role: str,
+    content: str,
+    *,
+    source: str = "vp-chat",
+    status: str = "ok",
+    extra: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    message = {
+        "id": f"chat-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}",
+        "meeting_id": meeting_id,
+        "role": role,
+        "content": content,
+        "source": source,
+        "status": status,
+        "created_at": datetime.now().isoformat(),
+    }
+    if extra:
+        message.update(extra)
+    history = _load_chat_history(meeting_id)
+    history.append(message)
+    _save_chat_history(meeting_id, history)
+    return message
+
+
+def _meeting_context_for_chat(meeting_id: str) -> dict[str, Any]:
+    state_payload: dict[str, Any] = {"meeting_id": meeting_id, "items": []}
+    try:
+        from .storage import MeetingStorage
+        storage = MeetingStorage(DATA_DIR)
+        if storage.exists(meeting_id):
+            state_payload = _state_payload(storage.load(meeting_id), include_items=True)
+    except Exception as e:
+        state_payload["error"] = str(e)
+
+    docs = []
+    for kind in DOC_KINDS:
+        doc = _doc_payload(meeting_id, kind)
+        docs.append({
+            "kind": kind,
+            "label": doc["label"],
+            "status": doc["status"],
+            "doc_size": doc["doc_size"],
+            "content_preview": doc["content"][:1200],
+        })
+    meta = _load_stream_meta(meeting_id)
+    return {
+        "meeting_id": meeting_id,
+        "state": state_payload,
+        "docs": docs,
+        "recent_transcript": meta.get("transcript_segments", [])[-20:],
+        "recent_metrics": meta.get("metrics", [])[-5:],
+    }
+
+
+def _get_chat_agent(meeting_id: str):
+    session_id = f"meeting:{meeting_id}:vp-chat"
+    with _CHAT_AGENT_LOCK:
+        if session_id in _CHAT_AGENT_CACHE:
+            return _CHAT_AGENT_CACHE[session_id]
+        from run_agent import AIAgent  # type: ignore
+
+        _CHAT_AGENT_CACHE[session_id] = AIAgent(
+            session_id=session_id,
+            enabled_toolsets=["terminal", "file"],
+            platform="subagent",
+            quiet_mode=True,
+            max_iterations=20,
+            model=os.environ.get("VPBUDDY_LLM_MODEL", "MiniMax-M3"),
+            ephemeral_system_prompt="\n".join([
+                "你是 VPBuddy 的 VP Chat 主控 agent。",
+                f"session_id 固定 = {session_id}。",
+                "你的职责是帮助 VP 理解会议、追问风险、调整方向,并在必要时调度 6 个子 agent。",
+                "6 个固定子 agent session 是 req、arch、tasks、api、risk、demo。",
+                "你可以建议或触发内部文档/Demo更新,但禁止主动外发、投屏或调用外部会议软件。",
+                "固定交付物只有 req/arch/tasks/api/risk/demo,不能创造第 7 类固定交付物。",
+                "回答要简洁、明确,并说明你是否建议更新哪个交付物。",
+            ]),
+        )
+        return _CHAT_AGENT_CACHE[session_id]
+
+
+def _run_vp_chat(meeting_id: str, message: str, client_context: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    ctx = _meeting_context_for_chat(meeting_id)
+    prompt = "\n".join([
+        "VP 在 VPBuddy 客户端输入了下面这句话。请结合当前会议上下文回答。",
+        "",
+        f"VP 输入:\n{message}",
+        "",
+        f"客户端上下文:\n{json.dumps(client_context or {}, ensure_ascii=False)}",
+        "",
+        f"当前会议上下文 JSON:\n{json.dumps(ctx, ensure_ascii=False)[:12000]}",
+        "",
+        "如果 VP 的意图是修改某个交付物,请明确指出目标 kind(req/arch/tasks/api/risk/demo),并给出下一步建议。",
+    ])
+
+    holder: dict[str, Any] = {"done": False, "response": None, "error": None}
+
+    def _runner():
+        try:
+            agent = _get_chat_agent(meeting_id)
+            holder["response"] = agent.chat(prompt)
+        except Exception as e:
+            holder["error"] = e
+        finally:
+            holder["done"] = True
+
+    t = threading.Thread(target=_runner, daemon=True)
+    t.start()
+    t.join(timeout=int(os.environ.get("VPBUDDY_CHAT_TIMEOUT", "120")))
+
+    if not holder["done"]:
+        return {
+            "status": "fallback",
+            "source": "fallback",
+            "content": "Hermes VP Chat 暂时超时。当前输入已记录,但未完成 Hermes 上下文推理或子 agent 调度。",
+            "error": "AIAgent timeout",
+        }
+    if holder["error"]:
+        return {
+            "status": "fallback",
+            "source": "fallback",
+            "content": (
+                "Hermes VP Chat 当前不可用。输入已记录,服务端没有静默执行外部动作。"
+                "请确认 run_agent/AIAgent 或 hermes 运行环境可用后重试。"
+            ),
+            "error": f"{type(holder['error']).__name__}: {str(holder['error'])[:300]}",
+        }
+    return {
+        "status": "ok",
+        "source": "hermes",
+        "content": str(holder["response"] or "").strip(),
+        "error": None,
     }
 
 
@@ -383,6 +548,11 @@ class Handler(BaseHTTPRequestHandler):
             meeting_id = path.split("/")[3]
             return self._handle_meeting_state(meeting_id)
 
+        # API: 单场会议 VP Chat 历史
+        if path.startswith("/api/meetings/") and path.endswith("/chat/history"):
+            meeting_id = path.split("/")[3]
+            return self._handle_chat_history(meeting_id)
+
         # API: 单场会议 6 类文档正文
         if path.startswith("/api/meetings/") and path.endswith("/docs"):
             meeting_id = path.split("/")[3]
@@ -418,6 +588,11 @@ class Handler(BaseHTTPRequestHandler):
             meeting_id = path.split("/")[3]  # /api/meetings/{id}/stream_chunk
             return self._handle_stream_chunk(meeting_id)
 
+        # API: VP Chat — VP 自由输入接 Hermes 主控 agent
+        if path.startswith("/api/meetings/") and path.endswith("/chat"):
+            meeting_id = path.split("/")[3]
+            return self._handle_chat(meeting_id)
+
         return self._404(path)
 
     def _handle_meeting_state(self, meeting_id: str):
@@ -448,6 +623,64 @@ class Handler(BaseHTTPRequestHandler):
         if kind not in DOC_KINDS:
             return self._json({"error": f"unknown doc kind: {kind}"}, 400)
         return self._json(_doc_payload(meeting_id, kind))
+
+    def _handle_chat_history(self, meeting_id: str):
+        """返回 VP Chat 历史。"""
+        return self._json({
+            "meeting_id": meeting_id,
+            "messages": _load_chat_history(meeting_id),
+        })
+
+    def _handle_chat(self, meeting_id: str):
+        """VP 自由输入 → Hermes VP Chat 主控 agent → SSE 回流。"""
+        content_length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(content_length)
+        try:
+            payload = json.loads(body.decode("utf-8") or "{}")
+        except json.JSONDecodeError:
+            return self._json({"error": "Invalid JSON"}, 400)
+
+        message = str(payload.get("message", "")).strip()
+        if not message:
+            return self._json({"error": "message is required"}, 400)
+
+        client_context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+        user_msg = _append_chat_message(
+            meeting_id,
+            "user",
+            message,
+            source="client",
+            extra={"context": client_context},
+        )
+        try:
+            from .realtime_server import push_event
+            push_event(meeting_id, "chat-message", user_msg)
+        except Exception:
+            pass
+
+        result = _run_vp_chat(meeting_id, message, client_context)
+        assistant_msg = _append_chat_message(
+            meeting_id,
+            "assistant",
+            result["content"],
+            source=result["source"],
+            status=result["status"],
+            extra={"error": result.get("error")},
+        )
+        try:
+            from .realtime_server import push_event
+            push_event(meeting_id, "chat-message", assistant_msg)
+        except Exception:
+            pass
+
+        return self._json({
+            "meeting_id": meeting_id,
+            "user_message": user_msg,
+            "assistant_message": assistant_msg,
+            "status": result["status"],
+            "source": result["source"],
+            "error": result.get("error"),
+        })
 
     def _handle_stream_start(self):
         """Tauri 客户端调用: 创建"持续接收"会议, 后续每 30s 推 chunk"""
