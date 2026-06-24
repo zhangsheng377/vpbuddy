@@ -39,8 +39,10 @@ impl AudioCapture {
         Ok(Self { _stream: stream, rx })
     }
 
-    /// 读 0.5s 的 audio (timeout 1s)
-    pub async fn read_chunk(&mut self, seconds: f32, sample_rate: u32) -> Result<Vec<i16>> {
+    /// 读 N 秒的 audio (blocking — 用于 spawn_blocking context)
+    /// ⚠️ 不能 .await — cpal::Stream 持有 *mut () 跨 await 不是 Send.
+    /// 必须在 spawn_blocking 跑, 跟 run_capture_loop 的设计配套.
+    pub fn read_chunk_blocking(&mut self, seconds: f32, sample_rate: u32) -> Result<Vec<i16>> {
         let needed = (sample_rate as f32 * seconds) as usize;
         let mut out = Vec::with_capacity(needed);
         let timeout = Duration::from_millis(1000);
@@ -74,7 +76,7 @@ pub fn encode_wav(samples: &[i16], sample_rate: u32) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
-fn make_wav_header(data_len: u32, sample_rate: u32, channels: u16) -> Vec<u8> {
+pub fn make_wav_header(data_len: u32, sample_rate: u32, channels: u16) -> Vec<u8> {
     let byte_rate = sample_rate * channels as u32 * 2;
     let block_align = channels * 2;
     let data_size = data_len * 2;

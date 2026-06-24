@@ -15,8 +15,7 @@ use tokio::sync::Mutex;
 mod audio;
 mod upload;
 
-// ⚠️ Phase A: AudioCapture 暂未用 (cpal::Stream 跨 await 不是 Send, 留 Phase B 修)
-// use audio::AudioCapture;
+use audio::AudioCapture;
 
 /// 全局状态
 pub struct AppState {
@@ -104,13 +103,14 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
 
 /// 采集主循环: cpal 流 → 30s 切片 → WAV → multipart POST GPU
 ///
-/// ⚠️ Phase A (2026-06-24): 当前是 stub — 真音频采集在 Phase B 实现
-/// Phase A 只需要 cargo check 通过 + 空白窗口能开. 真 Phase B 要做:
-/// 1. cpal 流跑在 std::thread (不是 tokio task), cpal::Stream 内部 *mut () 不是 Send
-/// 2. samples 通过 mpsc::channel 发给 tokio task
-/// 3. tokio task 拼 30s 切片 + multipart POST
+/// Phase B (2026-06-24): cpal::Stream 持有 *mut () 不是 Send. 拆架构:
+/// - spawn_blocking 跑 cpal 采集 (sync context, 不需要 Send)
+/// - spawn_blocking 通过 mpsc channel 把 samples 发给 tokio task
+/// - tokio task 拼 30s 切片 + multipart POST GPU (async context, 需要 Send)
 ///
-/// 当前 stub: 生成 0.5s 静音 samples 让循环跑通 + stats emit 验证全链路.
+/// 设计取舍: 为什么不用 std::thread + crossbeam_channel?
+/// - tokio 整体架构, 用 spawn_blocking 更一致
+/// - 跨平台 Rust 习惯, tokio 文档推荐 pattern
 async fn run_capture_loop(
     app: AppHandle,
     gpu_url: String,
@@ -120,18 +120,37 @@ async fn run_capture_loop(
     ups: Arc<AtomicU64>,
     auto_upload: bool,
 ) -> anyhow::Result<()> {
-    let sample_rate = 16000u32;
-    // 0.5s 静音 (8000 samples i16) — Phase A stub
-    let chunk_05s: Vec<i16> = vec![0i16; (sample_rate / 2) as usize];
+    use tokio::sync::mpsc as tmpsc;
+    let (tx, mut rx) = tmpsc::channel::<Vec<i16>>(64);
 
-    // 30s 切片缓冲 = 16000 * 30 samples
+    // 1. spawn_blocking 跑 cpal 采集 — 不要求 Send (跑在专用 blocking pool)
+    let capturing_bg = capturing.clone();
+    let _capture_handle = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let mut capture = AudioCapture::new()?;
+        let sample_rate = 16000u32;
+        while capturing_bg.load(Ordering::SeqCst) {
+            // 0.5s blocking read — cpal 流在 std context (不需要 Send)
+            let samples = capture.read_chunk_blocking(0.5, sample_rate)?;
+            // send 是 async 的, 但我们在 blocking context → 用 blocking_send
+            if let Err(e) = tx.blocking_send(samples) {
+                log::warn!("audio channel closed: {e}");
+                break;
+            }
+        }
+        Ok(())
+    });
+
+    let sample_rate = 16000u32;
+    // 30s 切片缓冲
     let chunk_samples = (sample_rate as usize) * 30;
     let mut buffer: Vec<i16> = Vec::with_capacity(chunk_samples);
 
+    // 2. tokio task 拼切片 + POST
     while capturing.load(Ordering::SeqCst) {
-        // Phase A stub: 不调 AudioCapture (cpal 不是 Send)
-        let samples = chunk_05s.clone();
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        let samples = match rx.recv().await {
+            Some(s) => s,
+            None => break,  // channel 关闭 (cpal 异常退出)
+        };
         buffer.extend(samples);
 
         // 累计字节数
