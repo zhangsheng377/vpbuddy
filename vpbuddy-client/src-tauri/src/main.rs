@@ -5,7 +5,7 @@
 // 关键约束:
 // - 跨平台音频: Linux=PipeWire, macOS=CoreAudio+BlackHole, Windows=WASAPI
 // - 不上 Rust streaming funasr (太重), GPU 端切片 batch ASR
-// - 复用 Python vpbuddy 的 /api/meetings/upload 端点 (已 commit 05a2664)
+// - 复用 Python vpbuddy 的 /api/meetings/stream_start + stream_chunk + events 端点
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -14,9 +14,6 @@ use tokio::sync::Mutex;
 
 mod audio;
 mod upload;
-
-// ⚠️ Phase A: AudioCapture 暂未用 (cpal::Stream 跨 await 不是 Send, 留 Phase B 修)
-// use audio::AudioCapture;
 
 /// 全局状态
 pub struct AppState {
@@ -65,6 +62,7 @@ async fn start_capture(
     state.total_uploads.store(0, Ordering::SeqCst);
 
     // 2. 启动音频采集线程 → 30s 切片 → 推 GPU
+    // 3. 同时启动 SSE 连接接收实时结果
     let gpu_url = state.gpu_url.clone();
     let mid = meeting_id.clone();
     let capturing = state.capturing.clone();
@@ -73,6 +71,18 @@ async fn start_capture(
     let app_clone = app.clone();
 
     let handle = tokio::spawn(async move {
+        // 启动 SSE 接收任务
+        let sse_gpu_url = gpu_url.clone();
+        let sse_mid = mid.clone();
+        let sse_app = app_clone.clone();
+        let sse_capturing = capturing.clone();
+        let sse_handle = tokio::spawn(async move {
+            if let Err(e) = run_sse_loop(sse_app, sse_gpu_url, sse_mid, sse_capturing).await {
+                log::error!("SSE 连接错误: {e}");
+            }
+        });
+
+        // 启动音频采集循环
         if let Err(e) = run_capture_loop(
             app_clone.clone(),
             gpu_url,
@@ -86,6 +96,9 @@ async fn start_capture(
         {
             let _ = app_clone.emit("error", format!("采集错误: {e}"));
         }
+
+        // 采集结束, 等 SSE 也结束
+        sse_handle.abort();
     });
 
     *state.capture_handle.lock().await = Some(handle);
@@ -102,15 +115,108 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// SSE 接收循环: 连接服务端事件流, 实时推送给前端
+async fn run_sse_loop(
+    app: AppHandle,
+    gpu_url: String,
+    meeting_id: String,
+    capturing: Arc<AtomicBool>,
+) -> anyhow::Result<()> {
+    let url = format!("{}/api/meetings/{}/events", gpu_url, meeting_id);
+    log::info!("SSE 连接: {url}");
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("SSE 连接失败: {e}"))?;
+
+    let mut stream = resp.bytes_stream();
+    let mut buf = String::new();
+
+    while capturing.load(Ordering::SeqCst) {
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stream.next(),
+        )
+        .await
+        {
+            Ok(Some(Ok(chunk))) => {
+                buf.push_str(&String::from_utf8_lossy(&chunk));
+
+                // 解析 SSE 事件 (按 \n\n 分割)
+                while let Some(pos) = buf.find("\n\n") {
+                    let event_str = buf[..pos].to_string();
+                    buf = buf[pos + 2..].to_string();
+
+                    if let Some((event_type, data)) = parse_sse_event(&event_str) {
+                        match event_type.as_str() {
+                            "transcript-segment" => {
+                                let _ = app.emit("transcript-segment", &data);
+                            }
+                            "state-update" => {
+                                let _ = app.emit("state-update", &data);
+                            }
+                            "doc-update" => {
+                                let _ = app.emit("doc-status", &data);
+                            }
+                            "heartbeat" | "connected" => {
+                                // 忽略
+                            }
+                            "timeout" => {
+                                log::warn!("SSE timeout, 准备重连");
+                                break;
+                            }
+                            _ => {
+                                let _ = app.emit("server-event", &data);
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(Some(Err(e))) => {
+                log::error!("SSE 流错误: {e}");
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+            Ok(None) => {
+                log::info!("SSE 流结束");
+                break;
+            }
+            Err(_) => {
+                // 超时, 继续
+                continue;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// 解析单个 SSE 事件字符串
+fn parse_sse_event(text: &str) -> Option<(String, serde_json::Value)> {
+    let mut event_type = "message".to_string();
+    let mut data = String::new();
+
+    for line in text.lines() {
+        if line.starts_with("event: ") {
+            event_type = line[7..].trim().to_string();
+        } else if line.starts_with("data: ") {
+            data = line[6..].trim().to_string();
+        }
+    }
+
+    if data.is_empty() {
+        return None;
+    }
+
+    match serde_json::from_str(&data) {
+        Ok(json) => Some((event_type, json)),
+        Err(_) => Some((event_type, serde_json::Value::String(data))),
+    }
+}
+
 /// 采集主循环: cpal 流 → 30s 切片 → WAV → multipart POST GPU
-///
-/// ⚠️ Phase A (2026-06-24): 当前是 stub — 真音频采集在 Phase B 实现
-/// Phase A 只需要 cargo check 通过 + 空白窗口能开. 真 Phase B 要做:
-/// 1. cpal 流跑在 std::thread (不是 tokio task), cpal::Stream 内部 *mut () 不是 Send
-/// 2. samples 通过 mpsc::channel 发给 tokio task
-/// 3. tokio task 拼 30s 切片 + multipart POST
-///
-/// 当前 stub: 生成 0.5s 静音 samples 让循环跑通 + stats emit 验证全链路.
 async fn run_capture_loop(
     app: AppHandle,
     gpu_url: String,
@@ -121,18 +227,27 @@ async fn run_capture_loop(
     auto_upload: bool,
 ) -> anyhow::Result<()> {
     let sample_rate = 16000u32;
-    // 0.5s 静音 (8000 samples i16) — Phase A stub
-    let chunk_05s: Vec<i16> = vec![0i16; (sample_rate / 2) as usize];
+
+    // 启动真实音频采集 (cpal)
+    let mut capture = audio::AudioCapture::new()
+        .map_err(|e| anyhow::anyhow!("音频采集初始化失败: {e}"))?;
 
     // 30s 切片缓冲 = 16000 * 30 samples
     let chunk_samples = (sample_rate as usize) * 30;
     let mut buffer: Vec<i16> = Vec::with_capacity(chunk_samples);
 
     while capturing.load(Ordering::SeqCst) {
-        // Phase A stub: 不调 AudioCapture (cpal 不是 Send)
-        let samples = chunk_05s.clone();
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        buffer.extend(samples);
+        // 读 0.5s 真实音频
+        match capture.read_chunk(0.5, sample_rate).await {
+            Ok(samples) => {
+                buffer.extend(samples);
+            }
+            Err(e) => {
+                log::error!("音频读取错误: {e}");
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
+            }
+        }
 
         // 累计字节数
         let n = (buffer.len() * 2) as u64;

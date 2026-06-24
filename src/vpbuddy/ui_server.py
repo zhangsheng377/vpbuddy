@@ -1,5 +1,5 @@
 """
-VPBuddy UI Server — 4 窗口 shell 的后端 API
+VPBuddy UI Server — 实时会议 AI 后端 API
 
 提供:
 - GET /                     → UI shell
@@ -8,7 +8,10 @@ VPBuddy UI Server — 4 窗口 shell 的后端 API
 - GET /api/timeline         → 全部累积项按时间倒序
 - GET /api/kb/search?q=     → 跨会议 RAG 检索
 - GET /api/status           → Controller + 数据状态
-- POST /api/meetings/upload → 上传音频自动转写+入库+触发 6 docs (用户视角 E2E)
+- POST /api/meetings/upload → 上传音频自动转写+入库+触发 6 docs
+- POST /api/meetings/stream_start → 创建流式会议
+- POST /api/meetings/{id}/stream_chunk → 接收音频切片
+- GET  /api/meetings/{id}/events → SSE 实时推送转写/文档/状态更新
 
 用法: python -m vpbuddy.ui_server [--port 8765]
 """
@@ -240,6 +243,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/status":
             return self._json(get_status())
 
+        # API: SSE 实时事件流 /api/meetings/{id}/events
+        if path.startswith("/api/meetings/") and path.endswith("/events"):
+            meeting_id = path.split("/")[3]  # /api/meetings/{id}/events
+            return self._handle_sse_events(meeting_id)
+
         return self._404(path)
 
     def do_POST(self):
@@ -385,6 +393,35 @@ class Handler(BaseHTTPRequestHandler):
                 for f in futures:
                     f.add_done_callback(_log_done)
 
+            # 4. 推送实时事件到 SSE (让连接的客户端立即收到更新)
+            try:
+                from .realtime_server import push_event
+                # 推送转写段
+                for s in new_segs:
+                    push_event(meeting_id, "transcript-segment", {
+                        "start_sec": s["start_sec"],
+                        "end_sec": s["end_sec"],
+                        "text": s["text"],
+                        "speaker_id": s["speaker_id"],
+                        "speaker_name": spk_map.get(s["speaker_id"], "UNKNOWN"),
+                    })
+                # 推送状态更新
+                push_event(meeting_id, "state-update", {
+                    "requirements": len(state.requirements),
+                    "goals": len(state.goals),
+                    "features": len(state.features),
+                    "risks": len(state.risks),
+                    "questions": len(state.open_questions),
+                })
+                # 推送文档触发事件
+                push_event(meeting_id, "doc-update", {
+                    "status": "triggered",
+                    "kinds": doc_kinds,
+                    "message": "6 docs generation triggered",
+                })
+            except Exception as e:
+                print(f"[stream_chunk] push_event error: {e}")
+
             return self._json({
                 "meeting_id": meeting_id,
                 "new_segments": [
@@ -528,6 +565,28 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
         self.wfile.write(f"404 Not Found: {what}".encode("utf-8"))
+
+    def _handle_sse_events(self, meeting_id: str):
+        """SSE 实时事件流: 客户端连接后持续接收转写/文档/状态更新"""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        # 强制 flush HTTP 响应头, 避免缓冲
+        self.wfile.flush()
+
+        try:
+            from .realtime_server import sse_generator
+            for chunk in sse_generator(meeting_id):
+                self.wfile.write(chunk)
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            # 客户端断开, 正常
+            pass
+        except Exception as e:
+            print(f"[SSE] {meeting_id} error: {e}")
 
     def _500(self, msg):
         self.send_response(500)

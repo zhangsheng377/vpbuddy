@@ -79,6 +79,23 @@ listen("doc-status", (e) => {
   }
 });
 
+// 实时结构化事实更新 (REQ/GOAL/FEAT/RISK/QUE)
+listen("state-update", (e) => {
+  const stats = e.payload;
+  const factsPanel = document.getElementById("panel-facts");
+  if (factsPanel) {
+    factsPanel.innerHTML = `
+      <div class="fact-stats">
+        <div class="fact-item"><span class="fact-label">需求 REQ</span><span class="fact-count">${stats.requirements || 0}</span></div>
+        <div class="fact-item"><span class="fact-label">目标 GOAL</span><span class="fact-count">${stats.goals || 0}</span></div>
+        <div class="fact-item"><span class="fact-label">功能 FEAT</span><span class="fact-count">${stats.features || 0}</span></div>
+        <div class="fact-item"><span class="fact-label">风险 RISK</span><span class="fact-count">${stats.risks || 0}</span></div>
+        <div class="fact-item"><span class="fact-label">问题 QUE</span><span class="fact-count">${stats.questions || 0}</span></div>
+      </div>
+    `;
+  }
+});
+
 listen("error", (e) => {
   document.getElementById("rec-status").textContent = "❌ " + e.payload;
   document.getElementById("rec-dot").className = "dot err";
