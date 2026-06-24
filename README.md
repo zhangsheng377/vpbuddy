@@ -1,6 +1,6 @@
 # VPBuddy
 
-> **本地优先的会议操作系统级 AI 助手** —— 为 VP / 售前 / 项目负责人设计,运行在 VP 自己桌面客户端,数据完全本地化。
+> **会议操作系统级 AI 助手** —— 为 VP / 售前 / 项目负责人设计。桌面客户端采集会议音频，服务端实时转写、结构化累积、生成文档与 Demo，结果回传客户端实时展示。
 
 [English](#english) | [中文](#中文)
 
@@ -10,15 +10,15 @@
 
 ### 什么是 VPBuddy?
 
-VPBuddy 是一款**本地优先的会议 AI 系统**,直接捕获系统音频(腾讯会议/钉钉/企微 不需要 SDK),在会议过程中自动:
+VPBuddy 是一款**会议 AI 系统**，桌面客户端直接捕获系统音频（腾讯会议/钉钉/企微 不需要 SDK），上传到服务端后在会议过程中实时：
 
-- 🎙️ **实时转写** — funasr paraformer-zh (本地 ASR,中文识别率 > 90%)
+- 🎙️ **实时转写** — funasr paraformer-zh（服务端 ASR，中文识别率 > 90%）
 - 📋 **结构化累积** — REQ / GOAL / FEAT / RISK / QUE 5 类事实自动分类
-- 📄 **6 种文档自动生成** — 需求 / 架构 / 任务 / API / 风险 / 演示
-- 🧠 **跨会议知识库** — sqlite-vec + sentence-transformers,余弦相似度检索
-- 🌐 **Web UI** — 端口 8765,实时看累积、检索历史会议
+- 📄 **6 种文档实时生成** — 需求 / 架构 / 任务 / API / 风险 / 演示，会议中持续更新
+- 🧠 **跨会议知识库** — sqlite-vec + sentence-transformers，余弦相似度检索
+- 🌐 **客户端实时展示** — 结构化事实、文档、Demo 在客户端对应窗口实时刷新
 
-**关键特性**: 完全运行在 VP 自己机器,数据不上传云端。单租户,单实例,单镜像。
+**关键特性**：客户端装在 VP 本地，负责采集和展示；重计算（ASR、LLM、向量检索）在服务端运行；支持私有化部署，数据可控。
 
 ### 5 分钟上手
 
@@ -46,9 +46,15 @@ vpbuddy controller --start
 ```
 ┌─────────────────────────────────────────────────────┐
 │  VP 桌面客户端 (Ubuntu 24.04 / macOS 14+ / Win11)  │
+│  - 系统音频采集 (PipeWire / WASAPI / BlackHole)     │
+│  - 实时展示: 结构化事实 / 6 类文档 / Demo            │
+│  - VP steer / 采纳 / 修改 / 外发                     │
+└──────────────┬──────────────────────────────────────┘
+               │ 音频流上传
+               ▼
+┌─────────────────────────────────────────────────────┐
+│  服务端 (GPU 可选)                                   │
 ├─────────────────────────────────────────────────────┤
-│  Audio loopback (PipeWire / WASAPI / BlackHole)     │
-│        ↓                                            │
 │  ASR (funasr paraformer-zh)                        │
 │        ↓                                            │
 │  MeetingState (5 类事实累积)                       │
@@ -59,12 +65,13 @@ vpbuddy controller --start
 │  └────┴────┴────┴────┴────┴────┘                  │
 │        ↓                                            │
 │  Knowledge Base (sqlite-vec + sentence-transformers)│
-│        ↓                                            │
-│  Web UI (FastAPI + Vanilla JS, port 8765)          │
-└─────────────────────────────────────────────────────┘
-
-可选: GPU 服务器 (cuda) 跑 ASR/embedding,加速
+└──────────────┬──────────────────────────────────────┘
+               │ 文档文本 + Demo 实时回传
+               ▼
+        客户端对应窗口实时展示
 ```
+
+部署形态：服务端可部署在 GPU 服务器加速 ASR/embedding；客户端在 VP 本地采集和展示。
 
 ### 文档
 
@@ -146,15 +153,15 @@ MIT
 
 ### What is VPBuddy?
 
-VPBuddy is a **local-first meeting AI system** that captures system audio directly (no SDK needed for Tencent Meeting / DingTalk / WeCom). During meetings, it automatically:
+VPBuddy is a **meeting AI system**. A desktop client captures system audio directly (no SDK needed for Tencent Meeting / DingTalk / WeCom) and streams it to the server. During meetings, the system produces in real time:
 
-- 🎙️ **Real-time transcription** — funasr paraformer-zh (>90% Chinese accuracy)
+- 🎙️ **Real-time transcription** — funasr paraformer-zh (>90% Chinese accuracy, server-side)
 - 📋 **Structured accumulation** — 5 fact categories: REQ / GOAL / FEAT / RISK / QUE
-- 📄 **6 document types auto-generated** — requirements / architecture / tasks / API / risks / demo
+- 📄 **6 document types generated live** — requirements / architecture / tasks / API / risks / demo, updated continuously during the meeting
 - 🧠 **Cross-meeting KB** — sqlite-vec + sentence-transformers with cosine similarity
-- 🌐 **Web UI** — port 8765, real-time accumulation + history search
+- 🌐 **Client-side live display** — structured facts, documents, and demo update in real time on the client
 
-**Key feature**: Runs entirely on VP's own machine. Data never leaves the device. Single-tenant, single-instance, single-binary.
+**Key characteristics**: The client runs locally on the VP's machine for capture and display; heavy computation (ASR, LLM, vector search) runs on the server. Supports private deployment with data control.
 
 ### 5-minute Quick Start
 
