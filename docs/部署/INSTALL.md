@@ -361,6 +361,45 @@ open http://localhost:8765  # macOS
 
 需要 PulseAudio / PipeWire 给音频采集用,默认都装好了。
 
+### Phase B Tauri 桌面客户端 (2026-06-24 ADR-0016 落地)
+
+**用途**: VP 在自己笔记本跑的真客户端 (Rust + Tauri 2.x + cpal),持续抓系统音频 → 30s 切片 → multipart POST GPU server。
+跟上面 `vpbuddy ui` (Python http.server) 是两条独立路径,互不依赖。
+
+**⚠️ 关键: Tauri 客户端必须在 VP 笔记本 (有 X11/Wayland) 上跑,不能在 GPU 服务器**
+
+| 机器 | 跑得了 Tauri? | 为什么 |
+|---|---|---|
+| VP 笔记本 (macOS/Win/Linux desktop) | ✅ | 有 DISPLAY/Wayland 图形会话 |
+| GPU 服务器 (192.168.10.63, Linux server) | ❌ | 无 DISPLAY → `gtk::rt::init()` panic |
+
+**踩坑 (2026-06-24)**:
+```
+$ ./vpbuddy-client
+thread 'main' panicked at .../gtk-0.18.2/src/rt.rs:141
+Failed to initialize gtk backend!
+```
+这是预期,不是 bug。
+
+### Phase B 安装 (3 步, 在 VP 笔记本跑)
+
+```bash
+# 1. 系统依赖 (跟上面 venv 客户端不同, Tauri 要 GUI lib)
+# Linux: sudo apt install -y libdbus-1-dev pkg-config librsvg2-dev libsoup-3.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libasound2-dev
+# macOS: brew install librsvg libsoup webkit2gtk pkg-config gtk+3
+# Windows: wix + Visual Studio Build Tools (见 cargo-tauri 官方文档)
+
+# 2. 编译 release
+cd vpbuddy-client/src-tauri
+cargo build --release
+# 产物: target/release/vpbuddy-client (~30MB stripped)
+
+# 3. 启动 (要在图形会话里,SSH 远程要 X11 forward 或 VNC)
+./target/release/vpbuddy-client
+# 第一次: 默认连 http://192.168.10.63:8765 (GPU server)
+# 改 GPU server 地址: 设置页或 VPBUDDY_GPU_URL 环境变量
+```
+
 ---
 
 ## 角色 C — 开发者
