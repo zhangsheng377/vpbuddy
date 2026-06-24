@@ -9,14 +9,14 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Mutex;
 
 mod audio;
 mod upload;
 
-use audio::AudioCapture;
+// ⚠️ Phase A: AudioCapture 暂未用 (cpal::Stream 跨 await 不是 Send, 留 Phase B 修)
+// use audio::AudioCapture;
 
 /// 全局状态
 pub struct AppState {
@@ -103,6 +103,14 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 /// 采集主循环: cpal 流 → 30s 切片 → WAV → multipart POST GPU
+///
+/// ⚠️ Phase A (2026-06-24): 当前是 stub — 真音频采集在 Phase B 实现
+/// Phase A 只需要 cargo check 通过 + 空白窗口能开. 真 Phase B 要做:
+/// 1. cpal 流跑在 std::thread (不是 tokio task), cpal::Stream 内部 *mut () 不是 Send
+/// 2. samples 通过 mpsc::channel 发给 tokio task
+/// 3. tokio task 拼 30s 切片 + multipart POST
+///
+/// 当前 stub: 生成 0.5s 静音 samples 让循环跑通 + stats emit 验证全链路.
 async fn run_capture_loop(
     app: AppHandle,
     gpu_url: String,
@@ -112,17 +120,18 @@ async fn run_capture_loop(
     ups: Arc<AtomicU64>,
     auto_upload: bool,
 ) -> anyhow::Result<()> {
-    // cpal 抓音频 (跨平台抽象)
-    let mut capture = AudioCapture::new()?;
     let sample_rate = 16000u32;
+    // 0.5s 静音 (8000 samples i16) — Phase A stub
+    let chunk_05s: Vec<i16> = vec![0i16; (sample_rate / 2) as usize];
 
-    // 30s 切片缓冲 = 16000 * 30 * 2 bytes (i16) = 960KB
+    // 30s 切片缓冲 = 16000 * 30 samples
     let chunk_samples = (sample_rate as usize) * 30;
     let mut buffer: Vec<i16> = Vec::with_capacity(chunk_samples);
 
     while capturing.load(Ordering::SeqCst) {
-        // 抓 0.5s 的 samples
-        let samples = capture.read_chunk(0.5, sample_rate).await?;
+        // Phase A stub: 不调 AudioCapture (cpal 不是 Send)
+        let samples = chunk_05s.clone();
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         buffer.extend(samples);
 
         // 累计字节数

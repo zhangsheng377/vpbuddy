@@ -2,9 +2,9 @@
 
 use anyhow::Result;
 use reqwest::multipart;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TranscriptSegment {
     pub start_sec: f32,
     pub end_sec: f32,
