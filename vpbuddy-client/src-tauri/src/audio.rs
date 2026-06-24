@@ -42,6 +42,7 @@ impl AudioCapture {
     /// 读 N 秒的 audio (blocking — 用于 spawn_blocking context)
     /// ⚠️ 不能 .await — cpal::Stream 持有 *mut () 跨 await 不是 Send.
     /// 必须在 spawn_blocking 跑, 跟 run_capture_loop 的设计配套.
+    /// 取代之前的 async fn read_chunk (持有 cpal::Stream 跨 await 不是 Send, 已废)
     pub fn read_chunk_blocking(&mut self, seconds: f32, sample_rate: u32) -> Result<Vec<i16>> {
         let needed = (sample_rate as f32 * seconds) as usize;
         let mut out = Vec::with_capacity(needed);
