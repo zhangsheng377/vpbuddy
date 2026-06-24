@@ -55,3 +55,18 @@ html, body { font-family: -apple-system, "Segoe UI", sans-serif; background: var
 .bottom-nav { display: flex; background: var(--bg2); border-top: 1px solid var(--border); }
 .bottom-nav button { flex: 1; padding: 12px; background: transparent; border: none; color: var(--text2); font-size: 12px; cursor: pointer; }
 .bottom-nav button.active { color: var(--accent); border-top: 2px solid var(--accent); }
+
+/* 结构化事实面板 */
+.fact-stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 16px; }
+.fact-item { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 12px 8px; text-align: center; }
+.fact-label { display: block; font-size: 10px; color: var(--text2); text-transform: uppercase; margin-bottom: 4px; }
+.fact-count { font-size: 24px; font-weight: 600; color: var(--text); }
+.fact-list { display: flex; flex-direction: column; gap: 6px; }
+.fact-item-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 5px; padding: 8px 12px; font-size: 12px; display: flex; gap: 8px; align-items: flex-start; }
+.fact-tag { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; flex-shrink: 0; }
+.fact-tag-req { background: rgba(94,106,210,0.2); color: #a8a8ff; }
+.fact-tag-goal { background: rgba(16,185,129,0.2); color: #6ee7b7; }
+.fact-tag-feat { background: rgba(245,158,11,0.2); color: #fbbf24; }
+.fact-tag-risk { background: rgba(239,68,68,0.2); color: #fca5a5; }
+.fact-tag-que { background: rgba(139,92,246,0.2); color: #c4b5fd; }
+.fact-text { color: var(--text); line-height: 1.5; }

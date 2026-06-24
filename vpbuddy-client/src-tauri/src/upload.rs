@@ -26,25 +26,39 @@ pub async fn create_meeting(gpu_url: &str) -> Result<String> {
         .to_string())
 }
 
-/// 上传一个 30s WAV 切片 → GPU 端 funasr 增量转写 → 返回新 segments
-pub async fn upload_chunk(gpu_url: &str, meeting_id: &str, wav_data: Vec<u8>) -> Result<TranscriptSegment> {
+/// 上传一个 30s WAV 切片 → GPU 端 funasr 增量转写 → 返回所有新 segments
+pub async fn upload_chunk(
+    gpu_url: &str,
+    meeting_id: &str,
+    wav_data: Vec<u8>,
+) -> Result<Vec<TranscriptSegment>> {
     let url = format!("{}/api/meetings/{}/stream_chunk", gpu_url, meeting_id);
     let part = multipart::Part::bytes(wav_data)
         .file_name("chunk.wav")
         .mime_str("audio/wav")?;
     let form = multipart::Form::new().part("audio", part);
     let client = reqwest::Client::new();
-    let resp = client.post(&url)
+    let resp = client
+        .post(&url)
         .multipart(form)
         .send()
         .await?;
     let body: serde_json::Value = resp.json().await?;
-    // 取第一个新 segment
-    let seg = &body["new_segments"][0];
-    Ok(TranscriptSegment {
-        start_sec: seg["start_sec"].as_f64().unwrap_or(0.0) as f32,
-        end_sec: seg["end_sec"].as_f64().unwrap_or(0.0) as f32,
-        text: seg["text"].as_str().unwrap_or("").to_string(),
-        speaker_id: seg["speaker_id"].as_str().unwrap_or("SPEAKER_00").to_string(),
-    })
+
+    // 解析所有 new_segments
+    let mut segments = Vec::new();
+    if let Some(arr) = body["new_segments"].as_array() {
+        for seg in arr {
+            segments.push(TranscriptSegment {
+                start_sec: seg["start_sec"].as_f64().unwrap_or(0.0) as f32,
+                end_sec: seg["end_sec"].as_f64().unwrap_or(0.0) as f32,
+                text: seg["text"].as_str().unwrap_or("").to_string(),
+                speaker_id: seg["speaker_id"]
+                    .as_str()
+                    .unwrap_or("SPEAKER_00")
+                    .to_string(),
+            });
+        }
+    }
+    Ok(segments)
 }

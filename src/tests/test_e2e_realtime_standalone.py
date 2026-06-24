@@ -160,9 +160,6 @@ def test_push_and_receive_event(server):
     print("\n[Test 2] push_event → SSE 客户端能收到...")
     meeting_id = "TEST_PUSH_001"
 
-    if meeting_id in realtime_server._event_queues:
-        del realtime_server._event_queues[meeting_id]
-
     # 后台收集 SSE
     collected = []
 
@@ -234,6 +231,108 @@ def test_stream_chunk_with_sse(server):
     print(f"  PASS: 收到 {len(collected)} 个事件, 类型: {event_types}")
 
 
+def test_multiple_clients_same_meeting(server):
+    """Test 4: 多个客户端订阅同一个 meeting 的 SSE"""
+    print("\n[Test 4] 多个客户端订阅同一个 meeting...")
+    resp = post(f"{server}/api/meetings/stream_start", {})
+    meeting_id = resp["meeting_id"]
+
+    collected1 = []
+    collected2 = []
+
+    def collect1():
+        events = read_sse_events(TEST_HOST, TEST_PORT, f"/api/meetings/{meeting_id}/events", max_events=5, timeout_sec=8)
+        collected1.extend(events)
+
+    def collect2():
+        events = read_sse_events(TEST_HOST, TEST_PORT, f"/api/meetings/{meeting_id}/events", max_events=5, timeout_sec=8)
+        collected2.extend(events)
+
+    t1 = threading.Thread(target=collect1, daemon=True)
+    t2 = threading.Thread(target=collect2, daemon=True)
+    t1.start()
+    t2.start()
+    time.sleep(0.5)
+
+    realtime_server.push_event(meeting_id, "transcript-segment", {"text": "多客户端测试", "speaker_id": "S0"})
+    realtime_server.push_event(meeting_id, "state-update", {"requirements": 2})
+
+    t1.join(timeout=8)
+    t2.join(timeout=8)
+
+    types1 = [e[0] for e in collected1]
+    types2 = [e[0] for e in collected2]
+
+    assert "transcript-segment" in types1, f"客户端1 没收到 transcript: {types1}"
+    assert "transcript-segment" in types2, f"客户端2 没收到 transcript: {types2}"
+    assert "state-update" in types1, f"客户端1 没收到 state-update: {types1}"
+    assert "state-update" in types2, f"客户端2 没收到 state-update: {types2}"
+    print(f"  PASS: 客户端1 收到 {len(collected1)} 个, 客户端2 收到 {len(collected2)} 个")
+
+
+def test_different_meetings_isolated(server):
+    """Test 5: 不同会议的 SSE 事件隔离"""
+    print("\n[Test 5] 不同会议的 SSE 事件隔离...")
+    resp1 = post(f"{server}/api/meetings/stream_start", {})
+    mid1 = resp1["meeting_id"]
+    resp2 = post(f"{server}/api/meetings/stream_start", {})
+    mid2 = resp2["meeting_id"]
+
+    collected1 = []
+    collected2 = []
+
+    def collect1():
+        events = read_sse_events(TEST_HOST, TEST_PORT, f"/api/meetings/{mid1}/events", max_events=5, timeout_sec=6)
+        collected1.extend(events)
+
+    def collect2():
+        events = read_sse_events(TEST_HOST, TEST_PORT, f"/api/meetings/{mid2}/events", max_events=5, timeout_sec=6)
+        collected2.extend(events)
+
+    t1 = threading.Thread(target=collect1, daemon=True)
+    t2 = threading.Thread(target=collect2, daemon=True)
+    t1.start()
+    t2.start()
+    time.sleep(0.5)
+
+    # 只给 mid1 推事件
+    realtime_server.push_event(mid1, "transcript-segment", {"text": "仅会议1的消息", "speaker_id": "S0"})
+
+    t1.join(timeout=6)
+    t2.join(timeout=6)
+
+    types1 = [e[0] for e in collected1]
+    types2 = [e[0] for e in collected2]
+
+    assert "transcript-segment" in types1, f"mid1 没收到: {types1}"
+    assert "transcript-segment" not in types2, f"mid2 不该收到 mid1 的事件: {types2}"
+    print(f"  PASS: 会议隔离正常 (mid1={len(collected1)} 事件, mid2={len(collected2)} 事件)")
+
+
+def test_heartbeat_event(server):
+    """Test 6: SSE 心跳事件 (长时间无数据时保活)"""
+    print("\n[Test 6] SSE 心跳事件...")
+    resp = post(f"{server}/api/meetings/stream_start", {})
+    meeting_id = resp["meeting_id"]
+
+    collected = []
+
+    def collect():
+        # 等 5 秒, 看是否收到心跳
+        events = read_sse_events(TEST_HOST, TEST_PORT, f"/api/meetings/{meeting_id}/events", max_events=10, timeout_sec=6)
+        collected.extend(events)
+
+    t = threading.Thread(target=collect, daemon=True)
+    t.start()
+    t.join(timeout=7)
+
+    event_types = [e[0] for e in collected]
+    # 至少应该有 connected 事件
+    assert "connected" in event_types, f"没收到 connected: {event_types}"
+    # heartbeat 事件可能有也可能没有(取决于 timeout 设置), 不强制断言
+    print(f"  PASS: 连接正常, 收到 {len(collected)} 个事件, 类型: {event_types}")
+
+
 def main():
     print("=" * 60)
     print("VPBuddy 端到端实时链路测试")
@@ -246,6 +345,9 @@ def main():
         test_sse_endpoint_exists(server)
         test_push_and_receive_event(server)
         test_stream_chunk_with_sse(server)
+        test_multiple_clients_same_meeting(server)
+        test_different_meetings_isolated(server)
+        test_heartbeat_event(server)
         print("\n" + "=" * 60)
         print("所有测试通过!")
         print("=" * 60)

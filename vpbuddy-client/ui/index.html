@@ -34,9 +34,24 @@
         <div id="stream-list" class="stream-list"></div>
       </section>
 
+      <!-- 结构化事实 (5 类) -->
+      <section id="panel-facts" class="panel">
+        <h2>结构化事实 (实时累积)</h2>
+        <div class="fact-stats">
+          <div class="fact-item"><span class="fact-label">需求 REQ</span><span class="fact-count" id="fact-req">0</span></div>
+          <div class="fact-item"><span class="fact-label">目标 GOAL</span><span class="fact-count" id="fact-goal">0</span></div>
+          <div class="fact-item"><span class="fact-label">功能 FEAT</span><span class="fact-count" id="fact-feat">0</span></div>
+          <div class="fact-item"><span class="fact-label">风险 RISK</span><span class="fact-count" id="fact-risk">0</span></div>
+          <div class="fact-item"><span class="fact-label">问题 QUE</span><span class="fact-count" id="fact-que">0</span></div>
+        </div>
+        <div id="fact-list" class="fact-list">
+          <div style="color:var(--text2);padding:20px;text-align:center;">会议开始后自动累积...</div>
+        </div>
+      </section>
+
       <!-- 6 docs 实时状态 -->
       <section id="panel-docs" class="panel">
-        <h2>6 类文档 (实时累积)</h2>
+        <h2>6 类文档 (实时生成)</h2>
         <div id="docs-grid" class="docs-grid">
           <div class="doc-card" data-kind="req"><div class="doc-kind">需求</div><div class="doc-count">0</div><div class="doc-state">待生成</div></div>
           <div class="doc-card" data-kind="arch"><div class="doc-kind">架构</div><div class="doc-count">0</div><div class="doc-state">待生成</div></div>
@@ -60,6 +75,7 @@
 
     <nav class="bottom-nav">
       <button data-panel="stream" class="active">转写</button>
+      <button data-panel="facts">事实</button>
       <button data-panel="docs">6 文档</button>
       <button data-panel="kb">知识库</button>
     </nav>

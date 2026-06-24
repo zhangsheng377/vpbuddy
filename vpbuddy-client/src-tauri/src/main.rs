@@ -1,11 +1,12 @@
 // VPBuddy Desktop Client — Tauri Rust 后端
 // 设计: 持续抓系统音频 (cpal) → 16kHz mono PCM → 切片 30s → 推 GPU server
-//       接收 GPU SSE 流 (transcript-segment / doc-status) → emit 到前端
+//       同时通过 SSE 接收服务端实时推送 → emit 到前端
 //
 // 关键约束:
 // - 跨平台音频: Linux=PipeWire, macOS=CoreAudio+BlackHole, Windows=WASAPI
 // - 不上 Rust streaming funasr (太重), GPU 端切片 batch ASR
 // - 复用 Python vpbuddy 的 /api/meetings/stream_start + stream_chunk + events 端点
+// - SSE 自动重连, 指数退避
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -32,9 +33,8 @@ impl AppState {
             capture_handle: Arc::new(Mutex::new(None)),
             total_bytes: Arc::new(AtomicU64::new(0)),
             total_uploads: Arc::new(AtomicU64::new(0)),
-            // 默认 GPU server 端点 (VP 装客户端时改)
             gpu_url: std::env::var("VPBUDDY_GPU_URL")
-                .unwrap_or_else(|_| "http://192.168.10.63:8765".to_string()),
+                .unwrap_or_else(|_| "http://127.0.0.1:8765".to_string()),
             meeting_id: Arc::new(Mutex::new(None)),
         }
     }
@@ -71,18 +71,16 @@ async fn start_capture(
     let app_clone = app.clone();
 
     let handle = tokio::spawn(async move {
-        // 启动 SSE 接收任务
+        // SSE 接收任务 (独立 task)
         let sse_gpu_url = gpu_url.clone();
         let sse_mid = mid.clone();
         let sse_app = app_clone.clone();
         let sse_capturing = capturing.clone();
         let sse_handle = tokio::spawn(async move {
-            if let Err(e) = run_sse_loop(sse_app, sse_gpu_url, sse_mid, sse_capturing).await {
-                log::error!("SSE 连接错误: {e}");
-            }
+            run_sse_loop(sse_app, sse_gpu_url, sse_mid, sse_capturing).await;
         });
 
-        // 启动音频采集循环
+        // 音频采集 + 上传任务
         if let Err(e) = run_capture_loop(
             app_clone.clone(),
             gpu_url,
@@ -97,7 +95,7 @@ async fn start_capture(
             let _ = app_clone.emit("error", format!("采集错误: {e}"));
         }
 
-        // 采集结束, 等 SSE 也结束
+        // 采集结束, 终止 SSE
         sse_handle.abort();
     });
 
@@ -115,76 +113,79 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
-/// SSE 接收循环: 连接服务端事件流, 实时推送给前端
+/// SSE 接收主循环: 连接服务端事件流, 自动重连, 实时推送给前端
 async fn run_sse_loop(
     app: AppHandle,
     gpu_url: String,
     meeting_id: String,
     capturing: Arc<AtomicBool>,
-) -> anyhow::Result<()> {
+) {
     let url = format!("{}/api/meetings/{}/events", gpu_url, meeting_id);
-    log::info!("SSE 连接: {url}");
+    let mut retry_count = 0u32;
 
-    let client = reqwest::Client::new();
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| anyhow::anyhow!("SSE 连接失败: {e}"))?;
+    while capturing.load(Ordering::SeqCst) {
+        log::info!("SSE 连接: {url}");
+
+        match connect_and_read_sse(&app, &url, capturing.clone()).await {
+            Ok(()) => {
+                // 正常断开, 退出
+                break;
+            }
+            Err(e) => {
+                log::warn!("SSE 断开: {e}, 准备重连...");
+                retry_count += 1;
+                // 指数退避: 1s, 2s, 4s, 8s, 最多 10s
+                let delay = (1u64 << retry_count.min(3)) * 1000;
+                let delay = delay.min(10_000);
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            }
+        }
+    }
+}
+
+/// 单次 SSE 连接与读取
+async fn connect_and_read_sse(
+    app: &AppHandle,
+    url: &str,
+    capturing: Arc<AtomicBool>,
+) -> anyhow::Result<()> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+
+    let resp = client.get(url).send().await?;
+    if !resp.status().is_success() {
+        anyhow::bail!("HTTP {}", resp.status());
+    }
 
     let mut stream = resp.bytes_stream();
     let mut buf = String::new();
 
     while capturing.load(Ordering::SeqCst) {
+        use futures_util::StreamExt;
         match tokio::time::timeout(
-            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(15),
             stream.next(),
         )
         .await
         {
             Ok(Some(Ok(chunk))) => {
                 buf.push_str(&String::from_utf8_lossy(&chunk));
-
-                // 解析 SSE 事件 (按 \n\n 分割)
+                // 解析所有完整事件
                 while let Some(pos) = buf.find("\n\n") {
                     let event_str = buf[..pos].to_string();
                     buf = buf[pos + 2..].to_string();
-
-                    if let Some((event_type, data)) = parse_sse_event(&event_str) {
-                        match event_type.as_str() {
-                            "transcript-segment" => {
-                                let _ = app.emit("transcript-segment", &data);
-                            }
-                            "state-update" => {
-                                let _ = app.emit("state-update", &data);
-                            }
-                            "doc-update" => {
-                                let _ = app.emit("doc-status", &data);
-                            }
-                            "heartbeat" | "connected" => {
-                                // 忽略
-                            }
-                            "timeout" => {
-                                log::warn!("SSE timeout, 准备重连");
-                                break;
-                            }
-                            _ => {
-                                let _ = app.emit("server-event", &data);
-                            }
-                        }
-                    }
+                    handle_sse_event(app, &event_str);
                 }
             }
             Ok(Some(Err(e))) => {
-                log::error!("SSE 流错误: {e}");
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                anyhow::bail!("SSE 流错误: {e}");
             }
             Ok(None) => {
-                log::info!("SSE 流结束");
-                break;
+                anyhow::bail!("SSE 流结束");
             }
             Err(_) => {
-                // 超时, 继续
+                // 超时, 继续 (心跳保活)
                 continue;
             }
         }
@@ -193,26 +194,50 @@ async fn run_sse_loop(
     Ok(())
 }
 
-/// 解析单个 SSE 事件字符串
-fn parse_sse_event(text: &str) -> Option<(String, serde_json::Value)> {
+/// 处理单个 SSE 事件, 分发 emit 给前端
+fn handle_sse_event(app: &AppHandle, event_str: &str) {
     let mut event_type = "message".to_string();
     let mut data = String::new();
 
-    for line in text.lines() {
-        if line.starts_with("event: ") {
-            event_type = line[7..].trim().to_string();
-        } else if line.starts_with("data: ") {
-            data = line[6..].trim().to_string();
+    for line in event_str.lines() {
+        if let Some(rest) = line.strip_prefix("event: ") {
+            event_type = rest.trim().to_string();
+        } else if let Some(rest) = line.strip_prefix("data: ") {
+            data = rest.trim().to_string();
         }
     }
 
     if data.is_empty() {
-        return None;
+        return;
     }
 
-    match serde_json::from_str(&data) {
-        Ok(json) => Some((event_type, json)),
-        Err(_) => Some((event_type, serde_json::Value::String(data))),
+    // 解析 JSON
+    let payload: serde_json::Value = match serde_json::from_str(&data) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    match event_type.as_str() {
+        "transcript-segment" => {
+            let _ = app.emit("transcript-segment", &payload);
+        }
+        "state-update" => {
+            let _ = app.emit("state-update", &payload);
+        }
+        "doc-update" => {
+            let _ = app.emit("doc-status", &payload);
+        }
+        "heartbeat" | "connected" => {
+            // 内部事件, 不 emit 到前端
+        }
+        "timeout" => {
+            log::warn!("SSE timeout event received");
+        }
+        other => {
+            // 其他事件统一转发
+            let _ = app.emit("server-event", &payload);
+            log::debug!("SSE event: {other}");
+        }
     }
 }
 
@@ -252,10 +277,13 @@ async fn run_capture_loop(
         // 累计字节数
         let n = (buffer.len() * 2) as u64;
         bytes.store(n, Ordering::SeqCst);
-        let _ = app.emit("capture-stats", serde_json::json!({
-            "bytes": n,
-            "uploads": ups.load(Ordering::SeqCst),
-        }));
+        let _ = app.emit(
+            "capture-stats",
+            serde_json::json!({
+                "bytes": n,
+                "uploads": ups.load(Ordering::SeqCst),
+            }),
+        );
 
         // 满 30s 就切片上传
         if buffer.len() >= chunk_samples && auto_upload {
@@ -264,9 +292,12 @@ async fn run_capture_loop(
 
             // 推 GPU
             match upload::upload_chunk(&gpu_url, &meeting_id, wav_data).await {
-                Ok(seg) => {
+                Ok(segments) => {
                     ups.fetch_add(1, Ordering::SeqCst);
-                    let _ = app.emit("transcript-segment", &seg);
+                    // HTTP 响应里的 segments 也 emit 一份 (双保险, SSE 可能延迟)
+                    for seg in &segments {
+                        let _ = app.emit("transcript-segment", seg);
+                    }
                 }
                 Err(e) => {
                     let _ = app.emit("error", format!("上传失败: {e}"));
@@ -285,14 +316,17 @@ async fn kb_search(
     query: String,
     top_k: u32,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let url = format!("{}/api/kb/search?q={}&top_k={}",
+    let url = format!(
+        "{}/api/kb/search?q={}&top_k={}",
         state.gpu_url,
         urlencoding::encode(&query),
-        top_k);
+        top_k
+    );
     let resp = reqwest::get(&url)
         .await
         .map_err(|e| format!("KB 请求失败: {e}"))?;
-    let body: serde_json::Value = resp.json()
+    let body: serde_json::Value = resp
+        .json()
         .await
         .map_err(|e| format!("KB 解析失败: {e}"))?;
     Ok(body["results"].as_array().cloned().unwrap_or_default())

@@ -82,17 +82,27 @@ listen("doc-status", (e) => {
 // 实时结构化事实更新 (REQ/GOAL/FEAT/RISK/QUE)
 listen("state-update", (e) => {
   const stats = e.payload;
-  const factsPanel = document.getElementById("panel-facts");
-  if (factsPanel) {
-    factsPanel.innerHTML = `
-      <div class="fact-stats">
-        <div class="fact-item"><span class="fact-label">需求 REQ</span><span class="fact-count">${stats.requirements || 0}</span></div>
-        <div class="fact-item"><span class="fact-label">目标 GOAL</span><span class="fact-count">${stats.goals || 0}</span></div>
-        <div class="fact-item"><span class="fact-label">功能 FEAT</span><span class="fact-count">${stats.features || 0}</span></div>
-        <div class="fact-item"><span class="fact-label">风险 RISK</span><span class="fact-count">${stats.risks || 0}</span></div>
-        <div class="fact-item"><span class="fact-label">问题 QUE</span><span class="fact-count">${stats.questions || 0}</span></div>
+  // 更新统计数字
+  const reqEl = document.getElementById("fact-req");
+  const goalEl = document.getElementById("fact-goal");
+  const featEl = document.getElementById("fact-feat");
+  const riskEl = document.getElementById("fact-risk");
+  const queEl = document.getElementById("fact-que");
+  if (reqEl) reqEl.textContent = stats.requirements || 0;
+  if (goalEl) goalEl.textContent = stats.goals || 0;
+  if (featEl) featEl.textContent = stats.features || 0;
+  if (riskEl) riskEl.textContent = stats.risks || 0;
+  if (queEl) queEl.textContent = stats.questions || 0;
+
+  // 如果有 items 详情，更新列表
+  const listEl = document.getElementById("fact-list");
+  if (listEl && stats.items && stats.items.length > 0) {
+    listEl.innerHTML = stats.items.map(item => `
+      <div class="fact-item-card">
+        <span class="fact-tag fact-tag-${item.type}">${item.type.toUpperCase()}</span>
+        <span class="fact-text">${escapeHtml(item.text)}</span>
       </div>
-    `;
+    `).join("");
   }
 });
 
