@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VPBuddy Desktop</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-icon">V</div>
+        <span>VPBuddy Desktop</span>
+      </div>
+      <div class="status">
+        <span class="dot" id="rec-dot"></span>
+        <span id="rec-status">未连接</span>
+      </div>
+    </header>
+
+    <main class="content">
+      <!-- 实时转写流 (替换 tab-1) -->
+      <section id="panel-stream" class="panel active">
+        <h2>实时转写</h2>
+        <div class="rec-controls">
+          <button id="btn-start">开始录音</button>
+          <button id="btn-stop" disabled>停止</button>
+          <label><input type="checkbox" id="auto-upload" checked /> 自动上传</label>
+        </div>
+        <div class="stream-info">
+          <span id="seg-count">0 段</span> · <span id="byte-count">0 KB</span> · <span id="up-count">0 上传</span>
+        </div>
+        <div id="stream-list" class="stream-list"></div>
+      </section>
+
+      <!-- 6 docs 实时状态 -->
+      <section id="panel-docs" class="panel">
+        <h2>6 类文档 (实时累积)</h2>
+        <div id="docs-grid" class="docs-grid">
+          <div class="doc-card" data-kind="req"><div class="doc-kind">需求</div><div class="doc-count">0</div><div class="doc-state">待生成</div></div>
+          <div class="doc-card" data-kind="arch"><div class="doc-kind">架构</div><div class="doc-count">0</div><div class="doc-state">待生成</div></div>
+          <div class="doc-card" data-kind="tasks"><div class="doc-kind">任务</div><div class="doc-count">0</div><div class="doc-state">待生成</div></div>
+          <div class="doc-card" data-kind="api"><div class="doc-kind">API</div><div class="doc-count">0</div><div class="doc-state">待生成</div></div>
+          <div class="doc-card" data-kind="risk"><div class="doc-kind">风险</div><div class="doc-count">0</div><div class="doc-state">待生成</div></div>
+          <div class="doc-card" data-kind="demo"><div class="doc-kind">演示</div><div class="doc-count">0</div><div class="doc-state">待生成</div></div>
+        </div>
+      </section>
+
+      <!-- 知识库检索 -->
+      <section id="panel-kb" class="panel">
+        <h2>知识库 RAG</h2>
+        <div class="kb-search">
+          <input type="text" id="kb-q" placeholder="输入查询..." />
+          <button id="kb-btn">检索</button>
+        </div>
+        <div id="kb-results"></div>
+      </section>
+    </main>
+
+    <nav class="bottom-nav">
+      <button data-panel="stream" class="active">转写</button>
+      <button data-panel="docs">6 文档</button>
+      <button data-panel="kb">知识库</button>
+    </nav>
+  </div>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
