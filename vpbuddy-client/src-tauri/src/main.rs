@@ -8,8 +8,8 @@
 // - 复用 Python vpbuddy 的 /api/meetings/stream_start + stream_chunk + events 端点
 // - SSE 自动重连, 指数退避
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Mutex;
 
@@ -46,6 +46,7 @@ async fn start_capture(
     app: AppHandle,
     state: State<'_, AppState>,
     auto_upload: bool,
+    audio_device: Option<String>,
 ) -> Result<String, String> {
     if state.capturing.load(Ordering::SeqCst) {
         return Err("已在采集中".into());
@@ -89,6 +90,7 @@ async fn start_capture(
             bytes,
             ups,
             auto_upload,
+            audio_device,
         )
         .await
         {
@@ -113,6 +115,12 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// 枚举系统音频输入设备
+#[tauri::command]
+async fn list_audio_devices() -> Result<Vec<audio::AudioDeviceInfo>, String> {
+    audio::list_input_devices().map_err(|e| format!("获取音频设备失败: {e}"))
+}
+
 /// SSE 接收主循环: 连接服务端事件流, 自动重连, 实时推送给前端
 async fn run_sse_loop(
     app: AppHandle,
@@ -122,11 +130,18 @@ async fn run_sse_loop(
 ) {
     let url = format!("{}/api/meetings/{}/events", gpu_url, meeting_id);
     let mut retry_count = 0u32;
+    let mut last_event_id: Option<String> = None;
 
     while capturing.load(Ordering::SeqCst) {
-        log::info!("SSE 连接: {url}");
+        let connect_url = if let Some(id) = &last_event_id {
+            format!("{url}?last_event_id={}", urlencoding::encode(id))
+        } else {
+            url.clone()
+        };
+        log::info!("SSE 连接: {connect_url}");
 
-        match connect_and_read_sse(&app, &url, capturing.clone()).await {
+        match connect_and_read_sse(&app, &connect_url, capturing.clone(), &mut last_event_id).await
+        {
             Ok(()) => {
                 // 正常断开, 退出
                 break;
@@ -148,6 +163,7 @@ async fn connect_and_read_sse(
     app: &AppHandle,
     url: &str,
     capturing: Arc<AtomicBool>,
+    last_event_id: &mut Option<String>,
 ) -> anyhow::Result<()> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -163,19 +179,14 @@ async fn connect_and_read_sse(
 
     while capturing.load(Ordering::SeqCst) {
         use futures_util::StreamExt;
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(15),
-            stream.next(),
-        )
-        .await
-        {
+        match tokio::time::timeout(std::time::Duration::from_secs(15), stream.next()).await {
             Ok(Some(Ok(chunk))) => {
                 buf.push_str(&String::from_utf8_lossy(&chunk));
                 // 解析所有完整事件
                 while let Some(pos) = buf.find("\n\n") {
                     let event_str = buf[..pos].to_string();
                     buf = buf[pos + 2..].to_string();
-                    handle_sse_event(app, &event_str);
+                    handle_sse_event(app, &event_str, last_event_id);
                 }
             }
             Ok(Some(Err(e))) => {
@@ -195,12 +206,14 @@ async fn connect_and_read_sse(
 }
 
 /// 处理单个 SSE 事件, 分发 emit 给前端
-fn handle_sse_event(app: &AppHandle, event_str: &str) {
+fn handle_sse_event(app: &AppHandle, event_str: &str, last_event_id: &mut Option<String>) {
     let mut event_type = "message".to_string();
     let mut data = String::new();
 
     for line in event_str.lines() {
-        if let Some(rest) = line.strip_prefix("event: ") {
+        if let Some(rest) = line.strip_prefix("id: ") {
+            *last_event_id = Some(rest.trim().to_string());
+        } else if let Some(rest) = line.strip_prefix("event: ") {
             event_type = rest.trim().to_string();
         } else if let Some(rest) = line.strip_prefix("data: ") {
             data = rest.trim().to_string();
@@ -227,8 +240,14 @@ fn handle_sse_event(app: &AppHandle, event_str: &str) {
         "doc-update" => {
             let _ = app.emit("doc-status", &payload);
         }
-        "heartbeat" | "connected" => {
-            // 内部事件, 不 emit 到前端
+        "metrics-update" => {
+            let _ = app.emit("metrics-update", &payload);
+        }
+        "connected" => {
+            let _ = app.emit("connection-status", serde_json::json!({"sse": "connected"}));
+        }
+        "heartbeat" => {
+            let _ = app.emit("connection-status", serde_json::json!({"sse": "heartbeat"}));
         }
         "timeout" => {
             log::warn!("SSE timeout event received");
@@ -250,16 +269,20 @@ async fn run_capture_loop(
     bytes: Arc<AtomicU64>,
     ups: Arc<AtomicU64>,
     auto_upload: bool,
+    audio_device: Option<String>,
 ) -> anyhow::Result<()> {
     let sample_rate = 16000u32;
 
     // 启动真实音频采集 (cpal)
-    let mut capture = audio::AudioCapture::new()
+    let mut capture = audio::AudioCapture::new_with_device(audio_device)
         .map_err(|e| anyhow::anyhow!("音频采集初始化失败: {e}"))?;
 
     // 30s 切片缓冲 = 16000 * 30 samples
     let chunk_samples = (sample_rate as usize) * 30;
+    let overlap_samples = (sample_rate as usize) * 2;
+    let overlap_sec = overlap_samples as f32 / sample_rate as f32;
     let mut buffer: Vec<i16> = Vec::with_capacity(chunk_samples);
+    let mut chunk_index: u64 = 0;
 
     while capturing.load(Ordering::SeqCst) {
         // 读 0.5s 真实音频
@@ -287,13 +310,28 @@ async fn run_capture_loop(
 
         // 满 30s 就切片上传
         if buffer.len() >= chunk_samples && auto_upload {
-            let chunk: Vec<i16> = buffer.drain(..chunk_samples).collect();
+            let chunk: Vec<i16> = buffer[..chunk_samples].to_vec();
+            let keep_from = chunk_samples.saturating_sub(overlap_samples);
+            buffer = buffer[keep_from..].to_vec();
             let wav_data = audio::encode_wav(&chunk, sample_rate)?;
+            let chunk_start_sec = (chunk_index as f32
+                * (chunk_samples.saturating_sub(overlap_samples)) as f32)
+                / sample_rate as f32;
 
             // 推 GPU
-            match upload::upload_chunk(&gpu_url, &meeting_id, wav_data).await {
+            match upload::upload_chunk(
+                &gpu_url,
+                &meeting_id,
+                wav_data,
+                chunk_index,
+                chunk_start_sec,
+                overlap_sec,
+            )
+            .await
+            {
                 Ok(segments) => {
                     ups.fetch_add(1, Ordering::SeqCst);
+                    chunk_index += 1;
                     // HTTP 响应里的 segments 也 emit 一份 (双保险, SSE 可能延迟)
                     for seg in &segments {
                         let _ = app.emit("transcript-segment", seg);
@@ -301,6 +339,7 @@ async fn run_capture_loop(
                 }
                 Err(e) => {
                     let _ = app.emit("error", format!("上传失败: {e}"));
+                    let _ = app.emit("connection-status", serde_json::json!({"upload": "failed"}));
                 }
             }
         }
@@ -325,11 +364,41 @@ async fn kb_search(
     let resp = reqwest::get(&url)
         .await
         .map_err(|e| format!("KB 请求失败: {e}"))?;
-    let body: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("KB 解析失败: {e}"))?;
+    let body: serde_json::Value = resp.json().await.map_err(|e| format!("KB 解析失败: {e}"))?;
     Ok(body["results"].as_array().cloned().unwrap_or_default())
+}
+
+#[tauri::command]
+async fn get_current_meeting(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    Ok(state.meeting_id.lock().await.clone())
+}
+
+#[tauri::command]
+async fn get_meeting_state(
+    state: State<'_, AppState>,
+    meeting_id: String,
+) -> Result<serde_json::Value, String> {
+    let url = format!("{}/api/meetings/{}/state", state.gpu_url, meeting_id);
+    let resp = reqwest::get(&url)
+        .await
+        .map_err(|e| format!("会议状态请求失败: {e}"))?;
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("会议状态解析失败: {e}"))
+}
+
+#[tauri::command]
+async fn get_meeting_docs(
+    state: State<'_, AppState>,
+    meeting_id: String,
+) -> Result<serde_json::Value, String> {
+    let url = format!("{}/api/meetings/{}/docs", state.gpu_url, meeting_id);
+    let resp = reqwest::get(&url)
+        .await
+        .map_err(|e| format!("文档请求失败: {e}"))?;
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("文档解析失败: {e}"))
 }
 
 fn main() {
@@ -354,7 +423,11 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             start_capture,
             stop_capture,
+            list_audio_devices,
             kb_search,
+            get_current_meeting,
+            get_meeting_state,
+            get_meeting_docs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

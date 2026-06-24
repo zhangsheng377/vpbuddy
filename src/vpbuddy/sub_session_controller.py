@@ -490,6 +490,7 @@ def trigger_sub_session(meeting_id: str, doc_kind: str, dry_run: bool = False) -
             return result
     if result.get("triggered") and doc_path.exists():
         result["doc_size"] = doc_path.stat().st_size
+        content = doc_path.read_text(encoding="utf-8", errors="replace")
         # 推送 SSE: 文档生成完成
         try:
             from .realtime_server import push_event
@@ -498,6 +499,9 @@ def trigger_sub_session(meeting_id: str, doc_kind: str, dry_run: bool = False) -
                 "status": "stored",
                 "doc_size": result["doc_size"],
                 "meeting_id": meeting_id,
+                "content": content,
+                "updated_at": datetime.now().isoformat(),
+                "is_demo": doc_kind == "demo",
             })
         except Exception as e:
             logger.warning(f"[{meeting_id}/{doc_kind}] push SSE doc-update failed: {e}")

@@ -10,6 +10,20 @@ let recording = false;
 let segCount = 0;
 let byteCount = 0;
 let upCount = 0;
+let currentMeetingId = null;
+let docsByKind = {};
+
+const i18n = {
+  zh: {
+    idle: "未连接", capturing: "采集中...", stopped: "已停止", noResult: "无结果",
+    docHint: "选择文档查看内容", sseConnected: "SSE 已连接", sseHeartbeat: "SSE 心跳正常"
+  },
+  en: {
+    idle: "Disconnected", capturing: "Capturing...", stopped: "Stopped", noResult: "No results",
+    docHint: "Select a document to view", sseConnected: "SSE connected", sseHeartbeat: "SSE heartbeat ok"
+  }
+};
+let lang = localStorage.getItem("vpbuddy-lang") || "zh";
 
 // === UI 切换 ===
 document.querySelectorAll(".bottom-nav button").forEach(b => {
@@ -24,12 +38,17 @@ document.querySelectorAll(".bottom-nav button").forEach(b => {
 // === 录音控制 ===
 document.getElementById("btn-start").addEventListener("click", async () => {
   try {
-    await invoke("start_capture", { autoUpload: document.getElementById("auto-upload").checked });
+    const device = document.getElementById("audio-device").value || null;
+    currentMeetingId = await invoke("start_capture", {
+      autoUpload: document.getElementById("auto-upload").checked,
+      audioDevice: device
+    });
     recording = true;
     document.getElementById("btn-start").disabled = true;
     document.getElementById("btn-stop").disabled = false;
     document.getElementById("rec-dot").className = "dot live";
-    document.getElementById("rec-status").textContent = "采集中...";
+    document.getElementById("rec-status").textContent = t("capturing");
+    await refreshDocs();
   } catch (e) {
     document.getElementById("rec-status").textContent = "❌ " + e;
   }
@@ -42,7 +61,7 @@ document.getElementById("btn-stop").addEventListener("click", async () => {
     document.getElementById("btn-start").disabled = false;
     document.getElementById("btn-stop").disabled = true;
     document.getElementById("rec-dot").className = "dot";
-    document.getElementById("rec-status").textContent = "已停止";
+    document.getElementById("rec-status").textContent = t("stopped");
   } catch (e) {
     document.getElementById("rec-status").textContent = "❌ " + e;
   }
@@ -70,13 +89,32 @@ listen("capture-stats", (e) => {
 });
 
 listen("doc-status", (e) => {
-  const { meeting_id, kind, state, count } = e.payload;
+  const { meeting_id, kind, state, status, count, content, updated_at, doc_size, is_demo } = e.payload;
+  if (meeting_id) currentMeetingId = meeting_id;
+  const docState = state || status || "queued";
   const card = document.querySelector(`.doc-card[data-kind="${kind}"]`);
   if (card) {
-    card.className = `doc-card ${state}`;
-    card.querySelector(".doc-count").textContent = count || 0;
-    card.querySelector(".doc-state").textContent = state === "stored" ? "✓ 已生成" : state === "queued" ? "..." : "✗";
+    card.className = `doc-card ${docState}`;
+    card.querySelector(".doc-count").textContent = doc_size ? `${Math.ceil(doc_size / 1024)}KB` : (count || 0);
+    card.querySelector(".doc-state").textContent = docState === "stored" ? "✓ 已生成" : docState === "queued" || docState === "triggered" ? "生成中..." : "✗";
   }
+  if (kind && content) {
+    docsByKind[kind] = { kind, status: docState, content, updated_at, is_demo };
+    if (kind === "demo") renderDoc(kind);
+  }
+});
+
+listen("connection-status", (e) => {
+  const p = e.payload || {};
+  if (p.sse === "connected") document.getElementById("conn-status").textContent = t("sseConnected");
+  if (p.sse === "heartbeat") document.getElementById("conn-status").textContent = t("sseHeartbeat");
+  if (p.upload === "failed") document.getElementById("conn-status").textContent = "上传失败，已重试";
+});
+
+listen("metrics-update", (e) => {
+  const p = e.payload || {};
+  const latency = p.end_to_end_ms || p.processing_ms;
+  document.getElementById("latency").textContent = latency ? `延迟 ${latency}ms` : "延迟 -";
 });
 
 // 实时结构化事实更新 (REQ/GOAL/FEAT/RISK/QUE)
@@ -106,6 +144,53 @@ listen("state-update", (e) => {
   }
 });
 
+// === 文档展示 / Demo 预览 ===
+document.querySelectorAll(".doc-card").forEach(card => {
+  card.addEventListener("click", () => renderDoc(card.dataset.kind));
+});
+
+document.getElementById("btn-refresh-docs").addEventListener("click", refreshDocs);
+
+async function refreshDocs() {
+  if (!currentMeetingId) {
+    try { currentMeetingId = await invoke("get_current_meeting"); } catch (_) {}
+  }
+  if (!currentMeetingId) return;
+  const result = await invoke("get_meeting_docs", { meetingId: currentMeetingId });
+  docsByKind = {};
+  for (const doc of (result.docs || [])) {
+    docsByKind[doc.kind] = doc;
+    const card = document.querySelector(`.doc-card[data-kind="${doc.kind}"]`);
+    if (card) {
+      card.className = `doc-card ${doc.status}`;
+      card.querySelector(".doc-count").textContent = doc.doc_size ? `${Math.ceil(doc.doc_size / 1024)}KB` : 0;
+      card.querySelector(".doc-state").textContent = doc.status === "stored" ? "✓ 已生成" : "待生成";
+    }
+  }
+}
+
+function renderDoc(kind) {
+  const doc = docsByKind[kind];
+  document.getElementById("doc-title").textContent = doc?.label || kind || t("docHint");
+  const pre = document.getElementById("doc-content");
+  const frame = document.getElementById("demo-frame");
+  if (!doc || !doc.content) {
+    pre.style.display = "block";
+    frame.style.display = "none";
+    pre.textContent = "暂未生成";
+    return;
+  }
+  if (kind === "demo") {
+    pre.style.display = "none";
+    frame.style.display = "block";
+    frame.srcdoc = doc.content;
+  } else {
+    frame.style.display = "none";
+    pre.style.display = "block";
+    pre.textContent = doc.content;
+  }
+}
+
 listen("error", (e) => {
   document.getElementById("rec-status").textContent = "❌ " + e.payload;
   document.getElementById("rec-dot").className = "dot err";
@@ -126,9 +211,37 @@ document.getElementById("kb-btn").addEventListener("click", async () => {
       <div>${escapeHtml(r.snippet).slice(0, 200)}</div>
     </div>
   `).join("");
-  document.getElementById("kb-results").innerHTML = html || "<div style='color:var(--text2);padding:20px;'>无结果</div>";
+  document.getElementById("kb-results").innerHTML = html || `<div style='color:var(--text2);padding:20px;'>${t("noResult")}</div>`;
 });
+
+async function initAudioDevices() {
+  try {
+    const select = document.getElementById("audio-device");
+    const devices = await invoke("list_audio_devices");
+    for (const d of devices) {
+      const opt = document.createElement("option");
+      opt.value = d.id;
+      opt.textContent = d.is_default ? `${d.name}（默认）` : d.name;
+      select.appendChild(opt);
+    }
+  } catch (e) {
+    console.warn("获取音频设备失败", e);
+  }
+}
+
+document.getElementById("ui-lang").value = lang;
+document.getElementById("ui-lang").addEventListener("change", (e) => {
+  lang = e.target.value;
+  localStorage.setItem("vpbuddy-lang", lang);
+  document.getElementById("rec-status").textContent = recording ? t("capturing") : t("idle");
+});
+
+function t(key) {
+  return (i18n[lang] || i18n.zh)[key] || key;
+}
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+
+initAudioDevices();

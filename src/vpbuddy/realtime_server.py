@@ -16,14 +16,16 @@ import json
 import queue
 import threading
 import time
-import uuid
-from typing import Dict, Any, Optional, List
+from collections import deque
+from typing import Dict, Any, List
 
 # meeting_id -> [subscriber_queue1, subscriber_queue2, ...]
 _subscribers: Dict[str, List[queue.Queue]] = {}
+_event_history: Dict[str, deque] = {}
 _subscribers_lock = threading.Lock()
 
 EVENT_TTL = 300
+HISTORY_LIMIT = 500
 
 
 def _add_subscriber(meeting_id: str) -> queue.Queue:
@@ -60,12 +62,15 @@ def push_event(meeting_id: str, event_type: str, payload: dict) -> int:
         成功推送的订阅者数量
     """
     event = {
+        "id": f"{int(time.time() * 1000)}-{event_type}",
         "type": event_type,
         "payload": payload,
         "timestamp": time.time(),
     }
 
     with _subscribers_lock:
+        history = _event_history.setdefault(meeting_id, deque(maxlen=HISTORY_LIMIT))
+        history.append(event)
         subs = list(_subscribers.get(meeting_id, []))
 
     sent = 0
@@ -82,6 +87,18 @@ def push_event(meeting_id: str, event_type: str, payload: dict) -> int:
             except queue.Empty:
                 pass
     return sent
+
+
+def get_event_history(meeting_id: str, since_id: str | None = None, limit: int = 200) -> List[dict]:
+    """返回会议近期事件历史, 用于断线重连后补偿。"""
+    with _subscribers_lock:
+        events = list(_event_history.get(meeting_id, []))
+    if since_id:
+        for idx, event in enumerate(events):
+            if event.get("id") == since_id:
+                events = events[idx + 1:]
+                break
+    return events[-limit:]
 
 
 def get_subscriber_count(meeting_id: str) -> int:
@@ -101,7 +118,19 @@ def cleanup_meetings_without_subscribers() -> int:
         return removed
 
 
-def sse_generator(meeting_id: str, timeout: float = 30.0):
+def _format_sse(event: dict) -> bytes:
+    event_type = event.get("type", "message")
+    payload = event.get("payload", {})
+    event_id = event.get("id")
+    chunks = []
+    if event_id:
+        chunks.append(f"id: {event_id}\n")
+    chunks.append(f"event: {event_type}\n")
+    chunks.append(f"data: {json.dumps(payload, ensure_ascii=False)}\n\n")
+    return "".join(chunks).encode("utf-8")
+
+
+def sse_generator(meeting_id: str, timeout: float = 30.0, last_event_id: str | None = None):
     """SSE 事件生成器, 供 HTTP handler 使用
 
     Yields SSE 格式的字节流:
@@ -114,6 +143,11 @@ def sse_generator(meeting_id: str, timeout: float = 30.0):
         yield b"event: connected\n"
         yield f"data: {json.dumps({'meeting_id': meeting_id, 'subscribers': get_subscriber_count(meeting_id)}, ensure_ascii=False)}\n\n".encode("utf-8")
 
+        # 先补发断线期间的历史事件
+        for event in get_event_history(meeting_id, last_event_id, limit=200):
+            if time.time() - event.get("timestamp", 0) <= EVENT_TTL:
+                yield _format_sse(event)
+
         last_event_time = time.time()
         while True:
             try:
@@ -121,11 +155,7 @@ def sse_generator(meeting_id: str, timeout: float = 30.0):
                 if time.time() - event.get("timestamp", 0) > EVENT_TTL:
                     continue
 
-                event_type = event.get("type", "message")
-                payload = event.get("payload", {})
-
-                yield f"event: {event_type}\n".encode("utf-8")
-                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
+                yield _format_sse(event)
                 last_event_time = time.time()
             except queue.Empty:
                 yield b"event: heartbeat\n"

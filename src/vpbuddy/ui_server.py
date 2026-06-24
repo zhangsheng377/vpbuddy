@@ -22,8 +22,9 @@ import os
 import re
 import sys
 import tempfile
+import time
 import uuid
-from typing import List, Optional
+from typing import Any, List, Optional
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -43,6 +44,140 @@ UI_DIR = Path(os.environ.get("VPBUDDY_UI_DIR", "/home/zsd/vpbuddy/ui"))
 KB_PATH = Path(os.environ.get("VPBUDDY_KB_DB", "/home/zsd/vpbuddy/data/knowledge.db"))
 CONTROLLER_PID_FILE = Path("/tmp/vpbuddy_controller.pid")
 CONTROLLER_LOG = Path("/tmp/vpbuddy_controller.log")
+
+DOC_KINDS = ["req", "arch", "tasks", "api", "risk", "demo"]
+DOC_LABELS = {
+    "req": "需求文档",
+    "arch": "架构文档",
+    "tasks": "任务拆解",
+    "api": "API 设计",
+    "risk": "风险分析",
+    "demo": "Demo",
+}
+
+
+def _stream_meta_path(meeting_id: str) -> Path:
+    return DATA_DIR / f"{meeting_id}.stream.json"
+
+
+def _load_stream_meta(meeting_id: str) -> dict:
+    path = _stream_meta_path(meeting_id)
+    if not path.exists():
+        return {"processed_chunks": [], "transcript_segments": [], "metrics": []}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"processed_chunks": [], "transcript_segments": [], "metrics": []}
+
+
+def _save_stream_meta(meeting_id: str, meta: dict) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    _stream_meta_path(meeting_id).write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _norm_text(text: str) -> str:
+    return re.sub(r"\s+", "", text or "").strip("，。,.!?！？；;：:")
+
+
+def _is_duplicate_segment(segment: dict, seen_segments: list[dict]) -> bool:
+    text = _norm_text(segment.get("text", ""))
+    if not text:
+        return True
+    for old in seen_segments[-30:]:
+        old_text = _norm_text(old.get("text", ""))
+        if not old_text:
+            continue
+        if text == old_text or text in old_text or old_text in text:
+            return True
+    return False
+
+
+def _parse_multipart(body: bytes, content_type: str) -> tuple[dict[str, str], Optional[bytes]]:
+    boundary_match = re.search(r'boundary=(?:"([^"]+)"|([^\s;]+))', content_type)
+    if not boundary_match:
+        raise ValueError("Missing boundary")
+    boundary = (boundary_match.group(1) or boundary_match.group(2)).encode()
+    fields: dict[str, str] = {}
+    file_data = None
+    for part in body.split(b"--" + boundary):
+        if b"\r\n\r\n" not in part:
+            continue
+        header, data = part.split(b"\r\n\r\n", 1)
+        data = data.rstrip(b"\r\n")
+        name_match = re.search(rb'name="([^"]+)"', header)
+        if not name_match:
+            continue
+        name = name_match.group(1).decode("utf-8", "ignore")
+        if b"filename=" in header or name in ("audio", "file"):
+            if data:
+                file_data = data
+        else:
+            fields[name] = data.decode("utf-8", "ignore")
+    return fields, file_data
+
+
+def _doc_path(meeting_id: str, kind: str) -> Path:
+    if kind == "demo":
+        return DOCS_DIR / meeting_id / "demo" / "demo.html"
+    return DOCS_DIR / meeting_id / f"{kind}.md"
+
+
+def _doc_payload(meeting_id: str, kind: str) -> dict[str, Any]:
+    path = _doc_path(meeting_id, kind)
+    exists = path.exists()
+    content = ""
+    updated_at = None
+    if exists:
+        content = path.read_text(encoding="utf-8", errors="replace")
+        updated_at = datetime.fromtimestamp(path.stat().st_mtime).isoformat()
+    return {
+        "meeting_id": meeting_id,
+        "kind": kind,
+        "label": DOC_LABELS.get(kind, kind),
+        "status": "stored" if exists else "pending",
+        "path": str(path),
+        "content": content,
+        "updated_at": updated_at,
+        "doc_size": path.stat().st_size if exists else 0,
+    }
+
+
+def _state_payload(state, include_items: bool = True) -> dict[str, Any]:
+    def _items(items, typ: str):
+        return [
+            {
+                "id": getattr(item, "id", ""),
+                "type": typ,
+                "text": getattr(item, "text", ""),
+                "priority": getattr(getattr(item, "priority", None), "value", ""),
+                "status": getattr(getattr(item, "status", None), "value", ""),
+                "speaker_name": getattr(item, "speaker_name", None) or getattr(item, "speaker_id", None),
+                "created_at": getattr(item, "created_at", None),
+            }
+            for item in items
+        ]
+
+    payload = {
+        "meeting_id": state.meeting_id,
+        "requirements": len(state.requirements),
+        "goals": len(state.goals),
+        "features": len(state.features),
+        "risks": len(state.risks),
+        "questions": len(state.open_questions),
+        "last_updated": state.last_updated,
+    }
+    if include_items:
+        payload["items"] = (
+            _items(state.requirements, "req")
+            + _items(state.goals, "goal")
+            + _items(state.features, "feat")
+            + _items(state.risks, "risk")
+            + _items(state.open_questions, "que")
+        )[-100:]
+    return payload
 
 
 def list_meetings() -> list[dict]:
@@ -243,6 +378,22 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/status":
             return self._json(get_status())
 
+        # API: 单场会议状态/事实 + 转写历史
+        if path.startswith("/api/meetings/") and path.endswith("/state"):
+            meeting_id = path.split("/")[3]
+            return self._handle_meeting_state(meeting_id)
+
+        # API: 单场会议 6 类文档正文
+        if path.startswith("/api/meetings/") and path.endswith("/docs"):
+            meeting_id = path.split("/")[3]
+            return self._handle_meeting_docs(meeting_id)
+
+        # API: 单场会议某一文档正文
+        doc_match = re.match(r"^/api/meetings/([^/]+)/docs/([^/]+)$", path)
+        if doc_match:
+            meeting_id, kind = doc_match.group(1), doc_match.group(2)
+            return self._handle_meeting_doc(meeting_id, kind)
+
         # API: SSE 实时事件流 /api/meetings/{id}/events
         if path.startswith("/api/meetings/") and path.endswith("/events"):
             meeting_id = path.split("/")[3]  # /api/meetings/{id}/events
@@ -269,6 +420,35 @@ class Handler(BaseHTTPRequestHandler):
 
         return self._404(path)
 
+    def _handle_meeting_state(self, meeting_id: str):
+        """返回单场会议的实时状态、事实列表、转写历史和性能指标。"""
+        try:
+            from .storage import MeetingStorage
+            storage = MeetingStorage(DATA_DIR)
+            if not storage.exists(meeting_id):
+                return self._json({"error": f"meeting {meeting_id} not found"}, 404)
+            state = storage.load(meeting_id)
+            meta = _load_stream_meta(meeting_id)
+            return self._json({
+                "state": _state_payload(state, include_items=True),
+                "transcript_segments": meta.get("transcript_segments", [])[-300:],
+                "metrics": meta.get("metrics", [])[-100:],
+                "processed_chunks": meta.get("processed_chunks", []),
+            })
+        except Exception as e:
+            return self._json({"error": str(e)}, 500)
+
+    def _handle_meeting_docs(self, meeting_id: str):
+        """返回单场会议 6 类文档正文。"""
+        docs = [_doc_payload(meeting_id, kind) for kind in DOC_KINDS]
+        return self._json({"meeting_id": meeting_id, "docs": docs})
+
+    def _handle_meeting_doc(self, meeting_id: str, kind: str):
+        """返回单场会议某一类文档正文。"""
+        if kind not in DOC_KINDS:
+            return self._json({"error": f"unknown doc kind: {kind}"}, 400)
+        return self._json(_doc_payload(meeting_id, kind))
+
     def _handle_stream_start(self):
         """Tauri 客户端调用: 创建"持续接收"会议, 后续每 30s 推 chunk"""
         meeting_id = f"STREAM_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
@@ -276,13 +456,19 @@ class Handler(BaseHTTPRequestHandler):
         try:
             from .storage import MeetingStorage
             from .state import MeetingState, Platform
-            storage = MeetingStorage()
+            storage = MeetingStorage(DATA_DIR)
             state = MeetingState(
                 meeting_id=meeting_id,
                 platform=Platform.LOCAL,
                 project_name=f"长连接会议 {meeting_id}",
             )
             storage.save(state)
+            _save_stream_meta(meeting_id, {
+                "processed_chunks": [],
+                "transcript_segments": [],
+                "metrics": [],
+                "created_at": datetime.now().isoformat(),
+            })
         except Exception as e:
             return self._json({"error": f"create state failed: {e}"}, 500)
         return self._json({
@@ -302,38 +488,53 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "Empty body"}, 400)
         body = self.rfile.read(content_length)
 
-        boundary_match = re.search(r'boundary=(?:"([^"]+)"|([^\s;]+))', content_type)
-        if not boundary_match:
-            return self._json({"error": "Missing boundary"}, 400)
-        boundary = (boundary_match.group(1) or boundary_match.group(2)).encode()
-        parts = body.split(b"--" + boundary)
-        file_data = None
-        for part in parts:
-            if b'name="audio"' in part or b'name="file"' in part:
-                header_end = part.find(b"\r\n\r\n")
-                if header_end == -1: continue
-                file_data = part[header_end + 4:]
-                if file_data.endswith(b"\r\n"):
-                    file_data = file_data[:-2]
-                if file_data: break
+        try:
+            fields, file_data = _parse_multipart(body, content_type)
+        except ValueError as e:
+            return self._json({"error": str(e)}, 400)
         if not file_data:
             return self._json({"error": "No audio file in form"}, 400)
+
+        chunk_index = int(fields.get("chunk_index", "0") or "0")
+        chunk_start_sec = float(fields.get("chunk_start_sec", "0") or "0")
+        overlap_sec = float(fields.get("overlap_sec", "0") or "0")
+        client_sent_at = float(fields.get("client_sent_at", "0") or "0")
+
+        meta = _load_stream_meta(meeting_id)
+        if chunk_index in meta.get("processed_chunks", []):
+            return self._json({
+                "meeting_id": meeting_id,
+                "chunk_index": chunk_index,
+                "new_segments": [],
+                "duplicate_chunk": True,
+                "docs_triggered": False,
+            })
 
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             tmp.write(file_data)
             tmp_path = tmp.name
 
         try:
+            started = time.time()
             # 1. funasr 转写
             from .scripts.gpu_transcribe import process
             transcript = process(tmp_path)
-            new_segs = transcript.get("segments", [])
+            raw_segs = transcript.get("segments", [])
+            seen_segments = meta.get("transcript_segments", [])
+            new_segs = []
+            for s in raw_segs:
+                abs_seg = dict(s)
+                abs_seg["start_sec"] = round(float(s.get("start_sec", 0)) + chunk_start_sec, 3)
+                abs_seg["end_sec"] = round(float(s.get("end_sec", 0)) + chunk_start_sec, 3)
+                abs_seg["chunk_index"] = chunk_index
+                if not _is_duplicate_segment(abs_seg, seen_segments + new_segs):
+                    new_segs.append(abs_seg)
 
             # 2. 累加到 meeting state (load 已有 + 追加新 segments)
             from .storage import MeetingStorage
             from .state import MeetingState, Platform, Priority
             from .ingest import _classify, infer_speaker_map
-            storage = MeetingStorage()
+            storage = MeetingStorage(DATA_DIR)
             if storage.exists(meeting_id):
                 state = storage.load(meeting_id)
             else:
@@ -344,21 +545,54 @@ class Handler(BaseHTTPRequestHandler):
                 )
 
             # 追加新 segments
+            spk_map = state.speaker_map
             if new_segs:
-                spk_map = state.speaker_map or infer_speaker_map(new_segs)
+                # 保持已有 speaker_map 不变；新 speaker 只补新增映射，避免跨 chunk 漂移
+                inferred = infer_speaker_map(new_segs)
+                spk_map = dict(state.speaker_map or {})
+                for spk_id, spk_name in inferred.items():
+                    spk_map.setdefault(spk_id, spk_name)
                 for spk_id, spk_name in spk_map.items():
                     state.register_speaker(spk_id, spk_name)
+                existing_texts = {_norm_text(getattr(item, "text", "")) for item in (
+                    state.requirements + state.goals + state.features + state.risks + state.open_questions
+                )}
                 for s in new_segs:
                     text = s["text"]
+                    norm = _norm_text(text)
+                    if not norm or norm in existing_texts:
+                        continue
+                    existing_texts.add(norm)
                     spk_name = spk_map.get(s["speaker_id"], "UNKNOWN")
                     kind, prio = _classify(text)
                     if kind == "requirement":
                         state.add_requirement(text, priority=prio, speaker_id=spk_name)
+                    elif any(k in text for k in ["目标", "希望", "为了", "达成"]):
+                        state.add_goal(text, speaker_id=spk_name)
+                    elif any(k in text for k in ["功能", "支持", "能力", "可以"]):
+                        state.add_feature(text, speaker_id=spk_name)
                     elif kind == "risk":
                         state.add_risk(text, priority=prio, speaker_id=spk_name)
                     elif kind == "question":
                         state.add_question(text, is_urgent=(prio == Priority.HIGH), speaker_id=spk_name)
             storage.save(state)
+
+            meta.setdefault("processed_chunks", []).append(chunk_index)
+            meta["processed_chunks"] = sorted(set(meta["processed_chunks"]))
+            meta.setdefault("transcript_segments", []).extend(new_segs)
+            processing_ms = int((time.time() - started) * 1000)
+            end_to_end_ms = int((time.time() - client_sent_at) * 1000) if client_sent_at else None
+            meta.setdefault("metrics", []).append({
+                "chunk_index": chunk_index,
+                "chunk_start_sec": chunk_start_sec,
+                "overlap_sec": overlap_sec,
+                "raw_segments": len(raw_segs),
+                "new_segments": len(new_segs),
+                "processing_ms": processing_ms,
+                "end_to_end_ms": end_to_end_ms,
+                "received_at": datetime.now().isoformat(),
+            })
+            _save_stream_meta(meeting_id, meta)
 
             # 3. 触发 6 个子 session (in-process, 复用 AIAgent 缓存, 跨 chunk 真"长驻")
             # ADR-0006 + ADR-0009: 同 (mid, kind) 跨次调 trigger_sub_session → 同一 AIAgent
@@ -368,7 +602,7 @@ class Handler(BaseHTTPRequestHandler):
             # 不禁止 fetch/eval (2026-06-23 二次纠正), 先看效果
             from concurrent.futures import ThreadPoolExecutor
             from .sub_session_controller import trigger_sub_session
-            doc_kinds = ["req", "arch", "tasks", "api", "risk", "demo"]
+            doc_kinds = DOC_KINDS
 
             def _run_sub(mid, kind):
                 try:
@@ -403,15 +637,17 @@ class Handler(BaseHTTPRequestHandler):
                         "end_sec": s["end_sec"],
                         "text": s["text"],
                         "speaker_id": s["speaker_id"],
+                        "chunk_index": chunk_index,
                         "speaker_name": spk_map.get(s["speaker_id"], "UNKNOWN"),
                     })
                 # 推送状态更新
-                push_event(meeting_id, "state-update", {
-                    "requirements": len(state.requirements),
-                    "goals": len(state.goals),
-                    "features": len(state.features),
-                    "risks": len(state.risks),
-                    "questions": len(state.open_questions),
+                push_event(meeting_id, "state-update", _state_payload(state, include_items=True))
+                push_event(meeting_id, "metrics-update", {
+                    "chunk_index": chunk_index,
+                    "processing_ms": processing_ms,
+                    "end_to_end_ms": end_to_end_ms,
+                    "raw_segments": len(raw_segs),
+                    "new_segments": len(new_segs),
                 })
                 # 推送文档触发事件
                 push_event(meeting_id, "doc-update", {
@@ -424,19 +660,18 @@ class Handler(BaseHTTPRequestHandler):
 
             return self._json({
                 "meeting_id": meeting_id,
+                "chunk_index": chunk_index,
                 "new_segments": [
                     {
                         "start_sec": s["start_sec"],
                         "end_sec": s["end_sec"],
                         "text": s["text"],
                         "speaker_id": s["speaker_id"],
+                        "chunk_index": s.get("chunk_index", chunk_index),
                     } for s in new_segs
                 ],
-                "state_items": {
-                    "requirements": len(state.requirements),
-                    "risks": len(state.risks),
-                    "questions": len(state.open_questions),
-                },
+                "state_items": _state_payload(state, include_items=False),
+                "metrics": meta.get("metrics", [])[-1],
                 "docs_triggered": True,
             })
         except Exception as e:
@@ -579,7 +814,8 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             from .realtime_server import sse_generator
-            for chunk in sse_generator(meeting_id):
+            last_event_id = self.headers.get("Last-Event-ID") or parse_qs(urlparse(self.path).query).get("last_event_id", [None])[0]
+            for chunk in sse_generator(meeting_id, last_event_id=last_event_id):
                 self.wfile.write(chunk)
                 self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):

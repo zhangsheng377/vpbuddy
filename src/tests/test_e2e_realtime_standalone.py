@@ -21,12 +21,15 @@ from vpbuddy import realtime_server
 TEST_HOST = "127.0.0.1"
 TEST_PORT = 18765
 TEST_DATA_DIR = Path("/tmp/vpbuddy_test_data")
+TEST_DOCS_DIR = Path("/tmp/vpbuddy_test_docs")
 
 
 def setup_server():
     """启动测试服务器"""
     TEST_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    TEST_DOCS_DIR.mkdir(parents=True, exist_ok=True)
     ui_server.DATA_DIR = TEST_DATA_DIR
+    ui_server.DOCS_DIR = TEST_DOCS_DIR
 
     t = threading.Thread(
         target=ui_server.main,
@@ -47,13 +50,26 @@ def post(url, data):
         return json.loads(r.read().decode())
 
 
-def upload_audio(url, wav_data):
+def get(url):
+    with urllib.request.urlopen(url, timeout=10) as r:
+        return json.loads(r.read().decode())
+
+
+def upload_audio(url, wav_data, fields=None):
+    fields = fields or {}
     boundary = "----TestBoundary"
     body = (
         f"--{boundary}\r\n"
         f'Content-Disposition: form-data; name="audio"; filename="c.wav"\r\n'
         f"Content-Type: audio/wav\r\n\r\n"
-    ).encode() + wav_data + f"\r\n--{boundary}--\r\n".encode()
+    ).encode() + wav_data + b"\r\n"
+    for key, value in fields.items():
+        body += (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="{key}"\r\n\r\n'
+            f"{value}\r\n"
+        ).encode()
+    body += f"--{boundary}--\r\n".encode()
 
     req = urllib.request.Request(url, data=body,
         headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
@@ -109,6 +125,28 @@ def read_sse_events(host, port, path, max_events=10, timeout_sec=10):
     start = time.time()
     while len(events) < max_events and time.time() - start < timeout_sec:
         try:
+            # 先解析响应头后已经读到的 body，再继续 recv
+            while b"\n\n" in body:
+                pos = body.index(b"\n\n")
+                event_text = body[:pos].decode("utf-8")
+                body = body[pos + 2:]
+
+                event_type = "message"
+                event_data = ""
+                for line in event_text.split("\n"):
+                    if line.startswith("event: "):
+                        event_type = line[7:].strip()
+                    elif line.startswith("data: "):
+                        event_data = line[6:].strip()
+
+                if event_data:
+                    try:
+                        data = json.loads(event_data)
+                    except json.JSONDecodeError:
+                        data = event_data
+                    events.append((event_type, data))
+            if len(events) >= max_events:
+                break
             chunk = sock.recv(512)
             if not chunk:
                 break
@@ -333,6 +371,77 @@ def test_heartbeat_event(server):
     print(f"  PASS: 连接正常, 收到 {len(collected)} 个事件, 类型: {event_types}")
 
 
+def test_event_history_replay(server):
+    """Test 7: SSE 历史事件补偿"""
+    print("\n[Test 7] SSE 历史事件补偿...")
+    meeting_id = "TEST_HISTORY_001"
+    realtime_server.push_event(meeting_id, "transcript-segment", {"text": "历史消息1", "speaker_id": "S0"})
+    realtime_server.push_event(meeting_id, "state-update", {"requirements": 1})
+
+    events = read_sse_events(TEST_HOST, TEST_PORT, f"/api/meetings/{meeting_id}/events", max_events=5, timeout_sec=5)
+    types = [e[0] for e in events]
+    assert "transcript-segment" in types, f"没收到历史 transcript: {types}"
+    assert "state-update" in types, f"没收到历史 state-update: {types}"
+    print(f"  PASS: 历史补偿事件正常, 类型: {types}")
+
+
+def test_state_and_docs_api(server):
+    """Test 8: 会议状态 API + 6 文档 API"""
+    print("\n[Test 8] 会议状态 API + 6 文档 API...")
+    resp = post(f"{server}/api/meetings/stream_start", {})
+    meeting_id = resp["meeting_id"]
+
+    state = get(f"{server}/api/meetings/{meeting_id}/state")
+    assert "state" in state, f"状态 API 缺少 state: {state}"
+    assert "transcript_segments" in state, f"状态 API 缺少 transcript_segments: {state}"
+
+    docs_dir = ui_server.DOCS_DIR / meeting_id
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    (docs_dir / "req.md").write_text("# 测试需求文档\n", encoding="utf-8")
+    docs = get(f"{server}/api/meetings/{meeting_id}/docs")
+    assert len(docs["docs"]) == 6, f"文档数量不对: {docs}"
+    req_doc = [d for d in docs["docs"] if d["kind"] == "req"][0]
+    assert req_doc["status"] == "stored", f"req 文档状态不对: {req_doc}"
+    assert "测试需求文档" in req_doc["content"], f"req 文档内容不对: {req_doc}"
+    print("  PASS: 状态和文档 API 正常")
+
+
+def test_stream_chunk_metadata_and_dedupe(server):
+    """Test 9: stream_chunk 元数据、绝对时间和重复 chunk 去重"""
+    print("\n[Test 9] stream_chunk 元数据、绝对时间和重复 chunk 去重...")
+    import vpbuddy.sub_session_controller as sub_session_controller
+    import types
+
+    fake_gpu = types.ModuleType("vpbuddy.scripts.gpu_transcribe")
+    fake_gpu.process = lambda _path: {
+        "segments": [{
+            "start_sec": 0.5,
+            "end_sec": 1.5,
+            "text": "必须支持实时文档展示",
+            "speaker_id": "SPEAKER_00",
+        }],
+        "num_speakers": 1,
+    }
+    sys.modules["vpbuddy.scripts.gpu_transcribe"] = fake_gpu
+    sub_session_controller.trigger_sub_session = lambda mid, kind, dry_run=False: {"triggered": True}
+
+    resp = post(f"{server}/api/meetings/stream_start", {})
+    meeting_id = resp["meeting_id"]
+    wav = make_silent_wav(1, 16000)
+    fields = {"chunk_index": "7", "chunk_start_sec": "28.0", "overlap_sec": "2.0", "client_sent_at": str(time.time())}
+
+    result = upload_audio(f"{server}/api/meetings/{meeting_id}/stream_chunk", wav, fields)
+    assert result["chunk_index"] == 7, f"chunk_index 不对: {result}"
+    assert len(result["new_segments"]) == 1, f"首次上传应有 1 个新片段: {result}"
+    assert result["new_segments"][0]["start_sec"] == 28.5, f"绝对时间不对: {result}"
+    assert result["metrics"]["new_segments"] == 1, f"metrics 不对: {result}"
+
+    duplicate = upload_audio(f"{server}/api/meetings/{meeting_id}/stream_chunk", wav, fields)
+    assert duplicate["duplicate_chunk"] is True, f"重复 chunk 未识别: {duplicate}"
+    assert duplicate["new_segments"] == [], f"重复 chunk 不应返回新片段: {duplicate}"
+    print("  PASS: stream_chunk 元数据、绝对时间和重复 chunk 去重正常")
+
+
 def main():
     print("=" * 60)
     print("VPBuddy 端到端实时链路测试")
@@ -348,6 +457,9 @@ def main():
         test_multiple_clients_same_meeting(server)
         test_different_meetings_isolated(server)
         test_heartbeat_event(server)
+        test_event_history_replay(server)
+        test_state_and_docs_api(server)
+        test_stream_chunk_metadata_and_dedupe(server)
         print("\n" + "=" * 60)
         print("所有测试通过!")
         print("=" * 60)
