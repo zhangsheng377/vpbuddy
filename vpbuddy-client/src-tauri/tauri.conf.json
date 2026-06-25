@@ -35,8 +35,10 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "webviewInstallMode": {
-      "type": "skipRuntimeInstall"
+    "windows": {
+      "wix": {
+        "skipWebviewInstall": true
+      }
     },
     "linux": {
       "deb": {
