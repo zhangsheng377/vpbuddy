@@ -3,9 +3,15 @@
 
 运行:
     PYTHONPATH=src python src/tests/test_e2e_realtime_standalone.py
+    或:
+    VP_E2E_BASE_URL=http://192.168.10.63:8765 PYTHONPATH=src python src/tests/test_e2e_realtime_standalone.py
+        # 用 GPU 端已部署的 ui_server, 跳过本地起 server (KB embedding 预热慢)
+
+默认连本地起的测试服务器 (127.0.0.1:18765), 但可设 VP_E2E_BASE_URL 指向 GPU 端真实 server。
 """
 from __future__ import annotations
 import json
+import os
 import socket
 import sys
 import threading
@@ -23,9 +29,27 @@ TEST_PORT = 18765
 TEST_DATA_DIR = Path("/tmp/vpbuddy_test_data")
 TEST_DOCS_DIR = Path("/tmp/vpbuddy_test_docs")
 
+# 2026-06-25: 如果 GPU 端 8765 已部署新 cherry-pick 代码, 优先用它 (避免本地 KB 预热慢)
+EXTERNAL_BASE_URL = os.environ.get("VP_E2E_BASE_URL", "").rstrip("/")
+# SSE 实际连接用 host/port — 如果走 EXTERNAL, 从 URL 解析
+SSE_HOST = "127.0.0.1"
+SSE_PORT = 18765
 
-def setup_server():
-    """启动测试服务器"""
+
+def setup_server() -> str:
+    """启动测试服务器 — 优先用外部 server (VP_E2E_BASE_URL), 否则本地起"""
+    global SSE_HOST, SSE_PORT
+    if EXTERNAL_BASE_URL:
+        print(f"使用外部 server: {EXTERNAL_BASE_URL}")
+        # 解析 host/port 给 read_sse_events 用
+        from urllib.parse import urlparse
+        u = urlparse(EXTERNAL_BASE_URL)
+        SSE_HOST = u.hostname or "127.0.0.1"
+        SSE_PORT = u.port or 80
+        print(f"SSE 走 {SSE_HOST}:{SSE_PORT}")
+        return EXTERNAL_BASE_URL
+
+    print("本地起 server (KB embedding 预热可能要 30s+)...")
     TEST_DATA_DIR.mkdir(parents=True, exist_ok=True)
     TEST_DOCS_DIR.mkdir(parents=True, exist_ok=True)
     ui_server.DATA_DIR = TEST_DATA_DIR
@@ -37,8 +61,15 @@ def setup_server():
         daemon=True,
     )
     t.start()
-    time.sleep(2)
-    return f"http://{TEST_HOST}:{TEST_PORT}"
+    # 等 server 真起来 — KB 预热 + bind 端口都可能慢
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        try:
+            with socket.create_connection((TEST_HOST, TEST_PORT), timeout=1):
+                return f"http://{TEST_HOST}:{TEST_PORT}"
+        except OSError:
+            time.sleep(1)
+    raise RuntimeError(f"本地 server {TEST_PORT} 端口 60s 内未起来")
 
 
 def post(url, data):
@@ -187,7 +218,7 @@ def test_sse_endpoint_exists(server):
     assert "meeting_id" in resp, f"创建会议失败: {resp}"
     meeting_id = resp["meeting_id"]
 
-    events = read_sse_events(TEST_HOST, TEST_PORT, f"/api/meetings/{meeting_id}/events", max_events=2, timeout_sec=5)
+    events = read_sse_events(SSE_HOST, SSE_PORT, f"/api/meetings/{meeting_id}/events", max_events=2, timeout_sec=5)
     assert len(events) > 0, f"没收到事件: {events}"
     assert events[0][0] == "connected", f"第一个事件不是 connected: {events[0]}"
     print(f"  PASS: 收到 {len(events)} 个事件, 第一个是 connected")
@@ -202,7 +233,7 @@ def test_push_and_receive_event(server):
     collected = []
 
     def collect():
-        events = read_sse_events(TEST_HOST, TEST_PORT, f"/api/meetings/{meeting_id}/events", max_events=5, timeout_sec=8)
+        events = read_sse_events(SSE_HOST, SSE_PORT, f"/api/meetings/{meeting_id}/events", max_events=5, timeout_sec=8)
         collected.extend(events)
 
     t = threading.Thread(target=collect, daemon=True)
@@ -231,7 +262,7 @@ def test_stream_chunk_with_sse(server):
     collected = []
 
     def collect():
-        events = read_sse_events(TEST_HOST, TEST_PORT, f"/api/meetings/{meeting_id}/events", max_events=10, timeout_sec=10)
+        events = read_sse_events(SSE_HOST, SSE_PORT, f"/api/meetings/{meeting_id}/events", max_events=10, timeout_sec=10)
         collected.extend(events)
 
     t = threading.Thread(target=collect, daemon=True)
@@ -279,11 +310,11 @@ def test_multiple_clients_same_meeting(server):
     collected2 = []
 
     def collect1():
-        events = read_sse_events(TEST_HOST, TEST_PORT, f"/api/meetings/{meeting_id}/events", max_events=5, timeout_sec=8)
+        events = read_sse_events(SSE_HOST, SSE_PORT, f"/api/meetings/{meeting_id}/events", max_events=5, timeout_sec=8)
         collected1.extend(events)
 
     def collect2():
-        events = read_sse_events(TEST_HOST, TEST_PORT, f"/api/meetings/{meeting_id}/events", max_events=5, timeout_sec=8)
+        events = read_sse_events(SSE_HOST, SSE_PORT, f"/api/meetings/{meeting_id}/events", max_events=5, timeout_sec=8)
         collected2.extend(events)
 
     t1 = threading.Thread(target=collect1, daemon=True)
@@ -320,11 +351,11 @@ def test_different_meetings_isolated(server):
     collected2 = []
 
     def collect1():
-        events = read_sse_events(TEST_HOST, TEST_PORT, f"/api/meetings/{mid1}/events", max_events=5, timeout_sec=6)
+        events = read_sse_events(SSE_HOST, SSE_PORT, f"/api/meetings/{mid1}/events", max_events=5, timeout_sec=6)
         collected1.extend(events)
 
     def collect2():
-        events = read_sse_events(TEST_HOST, TEST_PORT, f"/api/meetings/{mid2}/events", max_events=5, timeout_sec=6)
+        events = read_sse_events(SSE_HOST, SSE_PORT, f"/api/meetings/{mid2}/events", max_events=5, timeout_sec=6)
         collected2.extend(events)
 
     t1 = threading.Thread(target=collect1, daemon=True)
@@ -357,7 +388,7 @@ def test_heartbeat_event(server):
 
     def collect():
         # 等 5 秒, 看是否收到心跳
-        events = read_sse_events(TEST_HOST, TEST_PORT, f"/api/meetings/{meeting_id}/events", max_events=10, timeout_sec=6)
+        events = read_sse_events(SSE_HOST, SSE_PORT, f"/api/meetings/{meeting_id}/events", max_events=10, timeout_sec=6)
         collected.extend(events)
 
     t = threading.Thread(target=collect, daemon=True)
@@ -378,7 +409,7 @@ def test_event_history_replay(server):
     realtime_server.push_event(meeting_id, "transcript-segment", {"text": "历史消息1", "speaker_id": "S0"})
     realtime_server.push_event(meeting_id, "state-update", {"requirements": 1})
 
-    events = read_sse_events(TEST_HOST, TEST_PORT, f"/api/meetings/{meeting_id}/events", max_events=5, timeout_sec=5)
+    events = read_sse_events(SSE_HOST, SSE_PORT, f"/api/meetings/{meeting_id}/events", max_events=5, timeout_sec=5)
     types = [e[0] for e in events]
     assert "transcript-segment" in types, f"没收到历史 transcript: {types}"
     assert "state-update" in types, f"没收到历史 state-update: {types}"
