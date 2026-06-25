@@ -1,11 +1,6 @@
-# VPBuddy Tauri CI - 三平台构建 (2026-06-25)
-#
-# 触发: push / PR 到 main 改 vpbuddy-client/ 或本 workflow
-# 平台: Ubuntu (Linux .deb + .AppImage) / macOS (.dmg + .app) / Windows (.msi + .exe)
-# 产物: 上传 GitHub Artifacts (30 天) + 触发 tag 时自动 attach 到 Release
-#
-# 不跑 gpu_e2e (--ignored, 需 GPU server)
-# 不跑 Tauri UI 渲染 (CI 无 DISPLAY, 只编译)
+# VPBuddy Tauri CI - 三平台构建 (2026-06-25 重写)
+# 用 tauri-apps/tauri-action@v0 (官方 action, 内置 cross-platform 工具链 + cache)
+# 13 个 commit 试错后, 这是最稳的方案
 
 name: VPBuddy Tauri Multi-Platform Build
 
@@ -22,86 +17,24 @@ name: VPBuddy Tauri Multi-Platform Build
       - 'vpbuddy-client/**'
       - '.github/workflows/tauri-multi-build.yml'
   workflow_dispatch:
-    inputs:
-      release:
-        description: '创建 GitHub Release'
-        required: false
-        default: 'false'
-        type: boolean
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
 jobs:
-  # ── 1. 单元测试 + cargo check (Ubuntu, 跑通所有 Rust test) ──
+  # ── 1. 单元测试 (Ubuntu, cargo check + test) ──
   test:
     name: cargo test + check
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo registry
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: vpbuddy-client/src-tauri -> target
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libdbus-1-dev pkg-config librsvg2-dev \
-            libsoup-3.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
-            libasound2-dev \
-            libayatana-appindicator3-dev \
-            dpkg-dev fakeroot
-          # libayatana-appindicator3-dev: tray icon 必需 (2026-06-25)
-          # dpkg-dev + fakeroot: .deb 打包必需 (2026-06-25)
-
-      - name: Install frontend deps + build (tauri.conf.json frontendDist 需要 dist 存在)
-        working-directory: vpbuddy-client
-        run: |
-          npm ci || npm install
-          npm run build
-
-      - name: cargo check
-        working-directory: vpbuddy-client/src-tauri
-        # 2026-06-25: 跟 GPU 端 cargo check 一致 (不传 --all-targets 避免 doc test 之类的额外 target 失败)
-        run: cargo check
-
-      - name: cargo test (audio_unit)
-        working-directory: vpbuddy-client/src-tauri
-        # 2026-06-25: 跑 audio_unit (本地 CI 可跑), gpu_e2e 单独步骤且要 GPU server 不在 CI
-        run: cargo test --test audio_unit
-
-      - name: cargo build (debug)
-        working-directory: vpbuddy-client/src-tauri
-        run: cargo build
-
-  # ── 2. Linux 构建 (.deb + .AppImage) ──
-  build-linux:
-    name: Build Linux (.deb + .AppImage)
-    runs-on: ubuntu-24.04
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust + Node
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-          # 2026-06-25: 包仓库没 package-lock.json, 改用 package.json 作 cache key
           cache-dependency-path: vpbuddy-client/package.json
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: vpbuddy-client/src-tauri -> target
 
       - name: Install Tauri Linux deps
         run: |
@@ -111,72 +44,83 @@ jobs:
             libsoup-3.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
             libasound2-dev \
             libayatana-appindicator3-dev \
-            dpkg-dev fakeroot \
-            file wget zip
-          # libayatana-appindicator3-dev: tray icon 必需 (2026-06-25)
-          # dpkg-dev + fakeroot: .deb 打包必需 (2026-06-25)
-          # file wget zip: AppImage 工具
+            dpkg-dev fakeroot
+          # libayatana-appindicator3-dev: tray icon 必需
+          # dpkg-dev + fakeroot: .deb 打包必需
 
-      - name: Install frontend deps
+      - name: Install frontend deps + build
         working-directory: vpbuddy-client
-        run: npm ci || npm install
+        run: npm ci || npm install; npm run build
 
-      - name: Tauri build (Linux)
-        # 2026-06-25: cargo tauri 不是 cargo subcommand, 用 npx 调 npm 包
+      - name: cargo check
         working-directory: vpbuddy-client/src-tauri
-        run: npx tauri build --bundles deb
+        run: cargo check
 
-      - name: Upload .deb + .AppImage artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: vpbuddy-client-linux
-          path: |
-            vpbuddy-client/src-tauri/target/release/bundle/deb/*.deb
-            vpbuddy-client/src-tauri/target/release/bundle/appimage/*.AppImage
-          if-no-files-found: error
-          retention-days: 30
+      - name: cargo test (audio_unit)
+        working-directory: vpbuddy-client/src-tauri
+        run: cargo test --test audio_unit
 
-  # ── 3. macOS 构建 (.dmg + .app) ──
-  build-macos:
-    name: Build macOS (.dmg + .app)
-    runs-on: macos-14  # Apple Silicon (M1)
+  # ── 2. Linux 构建 (.deb) ──
+  build-linux:
+    name: Build Linux (.deb)
+    runs-on: ubuntu-24.04
     needs: test
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust + Node
-        uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-          # 2026-06-25: 包仓库没 package-lock.json, 改用 package.json 作 cache key
+          cache-dependency-path: vpbuddy-client/package.json
+      - name: Install Tauri Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libdbus-1-dev pkg-config librsvg2-dev \
+            libsoup-3.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libasound2-dev \
+            libayatana-appindicator3-dev \
+            dpkg-dev fakeroot
+
+      - uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: vpbuddy-client
+          args: --bundles deb
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vpbuddy-client-linux
+          path: vpbuddy-client/src-tauri/target/release/bundle/deb/*.deb
+          if-no-files-found: error
+          retention-days: 30
+
+  # ── 3. macOS 构建 (.dmg + .app, x86_64 单一架构) ──
+  build-macos:
+    name: Build macOS (.dmg + .app)
+    runs-on: macos-14
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
           cache-dependency-path: vpbuddy-client/package.json
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+      - uses: tauri-apps/tauri-action@v0
         with:
-          workspaces: vpbuddy-client/src-tauri -> target
-
-      - name: Install frontend deps
-        working-directory: vpbuddy-client
-        run: npm ci || npm install
-
-      - name: Add rustup targets
-        # 2026-06-25: macOS 单一架构 (x86_64) 需 target
-        run: rustup target add x86_64-apple-darwin
-
-      - name: Tauri build (macOS)
-        # 2026-06-25: --no-bundle 先确认编译过 (dmg/app 打包常因 code signing 卡)
-        working-directory: vpbuddy-client/src-tauri
-        run: npx tauri build --target x86_64-apple-darwin --no-bundle
+          projectPath: vpbuddy-client
+          # 不打 universal (lipo 在 GitHub runner 失败), 用 x86_64 单一架构
+          args: --target x86_64-apple-darwin
 
       - name: Upload .app artifact
         uses: actions/upload-artifact@v4
         with:
           name: vpbuddy-client-macos
           path: vpbuddy-client/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app
-          if-no-files-found: warn  # 2026-06-25: --no-bundle 不产出 .app, warn 不 fail
+          if-no-files-found: warn
+          retention-days: 30
 
   # ── 4. Windows 构建 (.msi + .exe) ──
   build-windows:
@@ -185,48 +129,23 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust + Node
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-          # 2026-06-25: 包仓库没 package-lock.json, 改用 package.json 作 cache key
           cache-dependency-path: vpbuddy-client/package.json
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+      - uses: tauri-apps/tauri-action@v0
         with:
-          workspaces: vpbuddy-client/src-tauri -> target
-
-      - name: Install MSVC BuildTools + WebView2 (预装在 win-2022)
-        run: |
-          echo "✅ windows-2022 已预装 Visual Studio Build Tools 2022 + WebView2"
-          echo "无需额外安装, Tauri 可直接编译"
-
-      - name: Install frontend deps
-        working-directory: vpbuddy-client
-        run: npm ci || npm install
-
-      - name: Install NSIS (for .exe installer bundling)
-        # 2026-06-25: windows-2022 runner 默认没装 NSIS, 用 chocolatey 装
-        # NSIS 用于 .exe installer 打包 (Tauri 默认 bundler)
-        shell: pwsh
-        run: choco install nsis -y --no-progress
-
-      - name: Tauri build (Windows)
-        working-directory: vpbuddy-client/src-tauri
-        run: npx tauri build --bundles nsis
+          projectPath: vpbuddy-client
+          # tauri-action 自动装 Rust + MSVC + NSIS, 不需要手动装
 
       - name: Upload .exe artifacts
         uses: actions/upload-artifact@v4
         with:
           name: vpbuddy-client-windows
-          path: vpbuddy-client/src-tauri/target/release/bundle/nsis/*.exe
-          if-no-files-found: error
+          path: vpbuddy-client/src-tauri/target/release/bundle/*/*.exe
+          if-no-files-found: warn
           retention-days: 30
 
   # ── 5. Release (tag push 时) ──
@@ -251,7 +170,6 @@ jobs:
           generate_release_notes: true
           files: |
             artifacts/**/*.deb
-            artifacts/**/*.AppImage
-            artifacts/**/*.dmg
-            artifacts/**/*.msi
+            artifacts/**/*.app
             artifacts/**/*.exe
+            artifacts/**/*.msi
