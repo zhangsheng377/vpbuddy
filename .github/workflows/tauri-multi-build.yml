@@ -25,8 +25,6 @@ jobs:
   # ── 1. 单元测试 ──
   test:
     name: cargo test + check
-    # 2026-06-26: tag push 只跑 release, 不重跑 build
-    if: github.ref_type == 'branch'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -69,7 +67,6 @@ jobs:
   # ── 2. Linux 构建 (.deb) ──
   build-linux:
     name: Build Linux (.deb)
-    if: github.ref_type == 'branch'
     runs-on: ubuntu-24.04
     needs: test
     steps:
@@ -109,7 +106,6 @@ jobs:
   # ── 3. macOS 构建 (x86_64, --no-bundle) ──
   build-macos:
     name: Build macOS
-    if: github.ref_type == 'branch'
     runs-on: macos-14
     needs: test
     steps:
@@ -144,7 +140,6 @@ jobs:
   # + chocolatey 装 NSIS 出 .exe installer
   build-windows:
     name: Build Windows
-    if: github.ref_type == 'branch'
     runs-on: windows-2022
     needs: test
     steps:
@@ -182,10 +177,9 @@ jobs:
   # ── 5. Release (tag push 时) ──
   release:
     name: GitHub Release
-    # 2026-06-26: tag push 才触发 release, main push 不跑
-    if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     needs: [build-linux, build-macos, build-windows]
+    if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
     steps:

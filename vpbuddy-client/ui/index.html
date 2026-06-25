@@ -98,6 +98,12 @@
       <section id="panel-settings" class="panel">
         <h2>设置</h2>
         <div class="settings-card">
+          <label>GPU 服务器地址</label>
+          <input type="text" id="gpu-url" placeholder="http://192.168.10.63:8765" />
+          <button id="btn-save-url" class="btn-small">保存</button>
+          <p class="settings-note">客户端音频和请求发到这个服务器。重启客户端后从 VPBUDDY_GPU_URL 环境变量读取，不设则用默认值。</p>
+        </div>
+        <div class="settings-card">
           <label>界面语言</label>
           <select id="ui-lang">
             <option value="zh">中文</option>

@@ -329,6 +329,19 @@ document.getElementById("ui-lang").addEventListener("change", (e) => {
   document.getElementById("rec-status").textContent = recording ? t("capturing") : t("idle");
 });
 
+// GPU URL 保存按钮 (2026-06-26)
+document.getElementById("btn-save-url").addEventListener("click", async () => {
+  const url = document.getElementById("gpu-url").value.trim();
+  if (!url) return;
+  try {
+    await a("set_gpu_url", { url });
+    document.getElementById("btn-save-url").textContent = "✓ 已保存";
+    setTimeout(() => { document.getElementById("btn-save-url").textContent = "保存"; }, 2000);
+  } catch (e) {
+    document.getElementById("btn-save-url").textContent = "❌ " + e;
+  }
+});
+
 function t(key) {
   return (i18n[lang] || i18n.zh)[key] || key;
 }

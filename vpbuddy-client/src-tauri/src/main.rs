@@ -23,20 +23,21 @@ pub struct AppState {
     pub capture_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     pub total_bytes: Arc<AtomicU64>,
     pub total_uploads: Arc<AtomicU64>,
-    pub gpu_url: String,
+    /// 2026-06-26: 改 Mutex 支持运行时修改 (设置页 GPU URL 输入)
+    pub gpu_url: Arc<Mutex<String>>,
     pub meeting_id: Arc<Mutex<Option<String>>>,
 }
 
 impl AppState {
     fn new() -> Self {
+        let url = std::env::var("VPBUDDY_GPU_URL")
+            .unwrap_or_else(|_| "http://192.168.10.63:8765".to_string());
         Self {
             capturing: Arc::new(AtomicBool::new(false)),
             capture_handle: Arc::new(Mutex::new(None)),
             total_bytes: Arc::new(AtomicU64::new(0)),
             total_uploads: Arc::new(AtomicU64::new(0)),
-            // 默认 GPU server 端点 (VP 装客户端时改)
-            gpu_url: std::env::var("VPBUDDY_GPU_URL")
-                .unwrap_or_else(|_| "http://192.168.10.63:8765".to_string()),
+            gpu_url: Arc::new(Mutex::new(url)),
             meeting_id: Arc::new(Mutex::new(None)),
         }
     }
@@ -55,7 +56,9 @@ async fn start_capture(
     }
 
     // 1. 在 GPU 端创建会议 + 取 meeting_id
-    let meeting_id = upload::create_meeting(&state.gpu_url)
+    // 2026-06-26: gpu_url 改 Arc<Mutex>, 需要 lock().await
+    let gpu_url = state.gpu_url.lock().await.clone();
+    let meeting_id = upload::create_meeting(&gpu_url)
         .await
         .map_err(|e| format!("创建会议失败: {e}"))?;
     *state.meeting_id.lock().await = Some(meeting_id.clone());
@@ -66,7 +69,7 @@ async fn start_capture(
 
     // 2. 启动音频采集线程 → 30s 切片 → 推 GPU
     // 3. 同时启动 SSE 连接接收实时结果 (2026-06-25 cherry-pick from feature/requirements-architecture-update)
-    let gpu_url = state.gpu_url.clone();
+    let gpu_url = state.gpu_url.lock().await.clone();
     let mid = meeting_id.clone();
     let capturing = state.capturing.clone();
     let bytes = state.total_bytes.clone();
@@ -121,6 +124,20 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
 #[tauri::command]
 async fn list_audio_devices() -> Result<Vec<audio::AudioDeviceInfo>, String> {
     audio::list_input_devices().map_err(|e| format!("获取音频设备失败: {e}"))
+}
+
+/// 2026-06-26: 运行时修改 GPU server 地址 (设置页填)
+#[tauri::command]
+async fn set_gpu_url(state: State<'_, AppState>, url: String) -> Result<(), String> {
+    let trimmed = url.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("地址不能为空".into());
+    }
+    if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+        return Err("地址必须以 http:// 或 https:// 开头".into());
+    }
+    *state.gpu_url.lock().await = trimmed.clone();
+    Ok(())
 }
 
 /// 采集主循环: cpal 流 → 30s 切片 → WAV → multipart POST GPU
@@ -231,7 +248,7 @@ async fn kb_search(
     top_k: u32,
 ) -> Result<Vec<serde_json::Value>, String> {
     let url = format!("{}/api/kb/search?q={}&top_k={}",
-        state.gpu_url,
+        state.gpu_url.lock().await,
         urlencoding::encode(&query),
         top_k);
     let resp = reqwest::get(&url)
@@ -409,6 +426,7 @@ fn main() {
             start_capture,
             stop_capture,
             list_audio_devices,
+            set_gpu_url,
             kb_search,
         ])
         .run(tauri::generate_context!())
