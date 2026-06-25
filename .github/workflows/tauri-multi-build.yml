@@ -211,17 +211,21 @@ jobs:
         working-directory: vpbuddy-client
         run: npm ci || npm install
 
+      - name: Install NSIS (for .exe installer bundling)
+        # 2026-06-25: windows-2022 runner 默认没装 NSIS, 用 chocolatey 装
+        # NSIS 用于 .exe installer 打包 (Tauri 默认 bundler)
+        shell: pwsh
+        run: choco install nsis -y --no-progress
+
       - name: Tauri build (Windows)
-        # 2026-06-25: NSIS 缺 makensis, 改只 build binary (不 bundle installer)
-        # 用户可在本地 cargo tauri build 装 NSIS 后再打 installer
         working-directory: vpbuddy-client/src-tauri
-        run: npx tauri build --no-bundle
+        run: npx tauri build --bundles nsis
 
       - name: Upload .exe artifacts
         uses: actions/upload-artifact@v4
         with:
           name: vpbuddy-client-windows
-          path: vpbuddy-client/src-tauri/target/release/vpbuddy-client.exe
+          path: vpbuddy-client/src-tauri/target/release/bundle/nsis/*.exe
           if-no-files-found: error
           retention-days: 30
 
