@@ -49,8 +49,12 @@ jobs:
             dpkg-dev fakeroot
 
       - name: Install frontend deps + build
+        # 2026-06-25: 仓库没 package-lock.json, 用 npm install (不能 npm ci)
+        # CI runner 每次全新, 缓存只对相同 lockfile 有效
         working-directory: vpbuddy-client
-        run: npm ci || npm install; npm run build
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
 
       - name: cargo check
         working-directory: vpbuddy-client/src-tauri
@@ -87,7 +91,7 @@ jobs:
             dpkg-dev fakeroot
       - name: Install frontend deps
         working-directory: vpbuddy-client
-        run: npm ci || npm install
+        run: npm install --no-audit --no-fund
       - name: Tauri build (Linux)
         working-directory: vpbuddy-client/src-tauri
         run: npx tauri build --bundles deb
@@ -117,7 +121,7 @@ jobs:
           workspaces: vpbuddy-client/src-tauri -> target
       - name: Install frontend deps
         working-directory: vpbuddy-client
-        run: npm ci || npm install
+        run: npm install --no-audit --no-fund
       - name: Add rustup targets
         run: rustup target add x86_64-apple-darwin
       - name: Tauri build (macOS)
@@ -153,7 +157,7 @@ jobs:
           workspaces: vpbuddy-client/src-tauri -> target
       - name: Install frontend deps
         working-directory: vpbuddy-client
-        run: npm ci || npm install
+        run: npm install --no-audit --no-fund
       - name: Install NSIS
         shell: pwsh
         run: choco install nsis -y --no-progress
