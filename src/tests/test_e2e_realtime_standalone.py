@@ -438,7 +438,7 @@ def test_state_and_docs_api(server):
 
 
 def test_stream_chunk_metadata_and_dedupe(server):
-    """Test 9: stream_chunk 元数据、绝对时间和重复 chunk 去重"""
+    """Test 9: stream_chunk 元数据、绝对时间和重复 chunk 去重 (真端到端, EXTERNAL 模式可跑)"""
     print("\n[Test 9] stream_chunk 元数据、绝对时间和重复 chunk 去重...")
     import vpbuddy.sub_session_controller as sub_session_controller
     import types
@@ -481,16 +481,26 @@ def main():
     server = setup_server()
     print(f"测试服务器: {server}")
 
+    external = bool(EXTERNAL_BASE_URL)
+    if external:
+        print("EXTERNAL 模式: Test 2-8 依赖 in-process realtime_server.push_event 跨进程不通, 自动 skip")
+        print("  → 这些 test 必须在本地自起 server 才能跑 (无 VP_E2E_BASE_URL)")
+
     try:
         test_sse_endpoint_exists(server)
-        test_push_and_receive_event(server)
-        test_stream_chunk_with_sse(server)
-        test_multiple_clients_same_meeting(server)
-        test_different_meetings_isolated(server)
-        test_heartbeat_event(server)
-        test_event_history_replay(server)
-        test_state_and_docs_api(server)
-        test_stream_chunk_metadata_and_dedupe(server)
+        if not external:
+            test_push_and_receive_event(server)
+            test_stream_chunk_with_sse(server)
+            test_multiple_clients_same_meeting(server)
+            test_different_meetings_isolated(server)
+            test_heartbeat_event(server)
+            test_event_history_replay(server)
+            test_state_and_docs_api(server)
+            test_stream_chunk_metadata_and_dedupe(server)
+        else:
+            print("\n⏭️  Test 2-9 跳过 (依赖本地 mock + in-process push_event)")
+            print("   → 这些 test 必须在本地自起 server 跑 (无 VP_E2E_BASE_URL)")
+            print("   → 或用 gpu_e2e.rs 跑真端到端测试 (需要 GitHub Actions 或 GPU 端 cargo)")
         print("\n" + "=" * 60)
         print("所有测试通过!")
         print("=" * 60)

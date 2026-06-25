@@ -34,7 +34,7 @@ async fn e2e_stream_chunk_creates_6_docs() {
     };
 
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(120))  // funasr 首次加载模型可能 30-60s, 给 120s buffer
+        .timeout(Duration::from_secs(300))  // 2026-06-25: funasr + 6 docs in-process 首次加载模型可能要 120-200s, 提到 300s buffer
         .build()
         .unwrap();
 
