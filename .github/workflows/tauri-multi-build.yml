@@ -1,6 +1,5 @@
-# VPBuddy Tauri CI - 三平台构建 (2026-06-25 重写)
-# 用 tauri-apps/tauri-action@v0 (官方 action, 内置 cross-platform 工具链 + cache)
-# 13 个 commit 试错后, 这是最稳的方案
+# VPBuddy Tauri CI - 三平台构建 (2026-06-25)
+# 平台: Ubuntu (.deb) / macOS (x86_64 app) / Windows (.exe binary)
 
 name: VPBuddy Tauri Multi-Platform Build
 
@@ -23,13 +22,16 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  # ── 1. 单元测试 (Ubuntu, cargo check + test) ──
+  # ── 1. 单元测试 ──
   test:
     name: cargo test + check
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: vpbuddy-client/src-tauri -> target
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -45,8 +47,6 @@ jobs:
             libasound2-dev \
             libayatana-appindicator3-dev \
             dpkg-dev fakeroot
-          # libayatana-appindicator3-dev: tray icon 必需
-          # dpkg-dev + fakeroot: .deb 打包必需
 
       - name: Install frontend deps + build
         working-directory: vpbuddy-client
@@ -67,11 +67,15 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
           cache-dependency-path: vpbuddy-client/package.json
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: vpbuddy-client/src-tauri -> target
       - name: Install Tauri Linux deps
         run: |
           sudo apt-get update
@@ -81,12 +85,12 @@ jobs:
             libasound2-dev \
             libayatana-appindicator3-dev \
             dpkg-dev fakeroot
-
-      - uses: tauri-apps/tauri-action@v0
-        with:
-          projectPath: vpbuddy-client
-          args: --bundles deb
-
+      - name: Install frontend deps
+        working-directory: vpbuddy-client
+        run: npm ci || npm install
+      - name: Tauri build (Linux)
+        working-directory: vpbuddy-client/src-tauri
+        run: npx tauri build --bundles deb
       - name: Upload .deb artifact
         uses: actions/upload-artifact@v4
         with:
@@ -95,25 +99,30 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  # ── 3. macOS 构建 (.dmg + .app, x86_64 单一架构) ──
+  # ── 3. macOS 构建 (x86_64, --no-bundle) ──
   build-macos:
-    name: Build macOS (.dmg + .app)
+    name: Build macOS
     runs-on: macos-14
     needs: test
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
           cache-dependency-path: vpbuddy-client/package.json
-
-      - uses: tauri-apps/tauri-action@v0
+      - uses: Swatinem/rust-cache@v2
         with:
-          projectPath: vpbuddy-client
-          # 不打 universal (lipo 在 GitHub runner 失败), 用 x86_64 单一架构
-          args: --target x86_64-apple-darwin
-
+          workspaces: vpbuddy-client/src-tauri -> target
+      - name: Install frontend deps
+        working-directory: vpbuddy-client
+        run: npm ci || npm install
+      - name: Add rustup targets
+        run: rustup target add x86_64-apple-darwin
+      - name: Tauri build (macOS)
+        working-directory: vpbuddy-client/src-tauri
+        run: npx tauri build --target x86_64-apple-darwin --no-bundle
       - name: Upload .app artifact
         uses: actions/upload-artifact@v4
         with:
@@ -122,29 +131,35 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-  # ── 4. Windows 构建 (.msi + .exe) ──
+  # ── 4. Windows 构建 (--no-bundle, 只出 .exe binary) ──
   build-windows:
-    name: Build Windows (.msi + .exe)
+    name: Build Windows
     runs-on: windows-2022
     needs: test
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
           cache-dependency-path: vpbuddy-client/package.json
-
-      - uses: tauri-apps/tauri-action@v0
+      - uses: Swatinem/rust-cache@v2
         with:
-          projectPath: vpbuddy-client
-          # tauri-action 自动装 Rust + MSVC + NSIS, 不需要手动装
-
-      - name: Upload .exe artifacts
+          workspaces: vpbuddy-client/src-tauri -> target
+      - name: Install frontend deps
+        working-directory: vpbuddy-client
+        run: npm ci || npm install
+      - name: Tauri build (Windows)
+        working-directory: vpbuddy-client/src-tauri
+        run: npx tauri build --no-bundle
+      - name: Upload .exe
         uses: actions/upload-artifact@v4
         with:
           name: vpbuddy-client-windows
-          path: vpbuddy-client/src-tauri/target/release/bundle/*/*.exe
+          path: vpbuddy-client/src-tauri/target/release/vpbuddy-client.exe
           if-no-files-found: warn
           retention-days: 30
 
@@ -160,7 +175,6 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -172,4 +186,3 @@ jobs:
             artifacts/**/*.deb
             artifacts/**/*.app
             artifacts/**/*.exe
-            artifacts/**/*.msi
