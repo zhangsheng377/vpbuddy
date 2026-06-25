@@ -41,6 +41,34 @@ vpbuddy controller --start
 - 创建本地数据库(`data/knowledge.db`)
 - 初始化 6 种子 session prompts
 
+### 下载预编译客户端安装包
+
+VPBuddy 桌面客户端通过 GitHub Actions 自动编译（三平台），产物保存 30 天：
+
+1. 打开 [Actions → VPBuddy Tauri Multi-Platform Build](https://github.com/zhangsheng377/vpbuddy/actions/workflows/tauri-multi-build.yml)
+2. 点击最新成功的 run（绿色 ✅）
+3. 滚动到底部 "Artifacts" 区域
+4. 下载对应平台：
+
+| 平台 | 下载 | 安装方法 |
+|------|------|----------|
+| **Linux** | `vpbuddy-client-linux` (zip, 内含 .deb) | `sudo dpkg -i vpbuddy-client_*.deb` <br> 或双击安装 |
+| **macOS** | `vpbuddy-client-macos` (zip, 内含 .app) | 解压后拖到 `应用程序` 文件夹 |
+| **Windows** | `vpbuddy-client-windows` (zip, 内含 .exe) | 直接运行 vpbuddy-client.exe |
+
+**启动客户端**（编译或解压后）:
+```bash
+# 命令行: 默认连接内网 GPU server
+./vpbuddy-client
+
+# 指定 GPU server 地址
+VPBUDDY_GPU_URL=http://192.168.10.63:8765 ./vpbuddy-client
+
+# GUI: 直接双击图标即可，Tauri 原生窗口
+```
+
+**注意**：客户端**不调 LLM**，所有语音识别、文档生成和 LLM 流量全走 GPU server 端。客户端只需连得通 server 就能跑。
+
 ### 架构
 
 ```

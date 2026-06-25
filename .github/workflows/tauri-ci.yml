@@ -1,19 +1,13 @@
-# VPBuddy CI - Tauri 客户端测试 + 构建 (2026-06-24)
-#
-# 跑 5 个 cargo test (audio_unit + gpu_e2e magic bytes)
-# + cargo check + cargo build
-# 不跑 gpu_e2e (--ignored, 需 GPU server)
+# 2026-06-25: 旧 Tauri CI 已废弃, 被 tauri-multi-build.yml 替代
+# 保留文件仅作存档, job 全部 disable
+name: VPBuddy Tauri CI (deprecated)
 
-name: VPBuddy Tauri CI
-
-on:
+"on":
+  # 2026-06-25: disable, 用 tauri-multi-build.yml
   push:
-    paths:
-      - 'vpbuddy-client/src-tauri/**'
-      - '.github/workflows/tauri-ci.yml'
+    branches: [never]
   pull_request:
-    paths:
-      - 'vpbuddy-client/src-tauri/**'
+    branches: [never]
 
 jobs:
   test:
