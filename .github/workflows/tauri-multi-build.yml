@@ -56,8 +56,10 @@ jobs:
             libdbus-1-dev pkg-config librsvg2-dev \
             libsoup-3.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
             libasound2-dev \
-            libayatana-appindicator3-dev  # tray icon 必需 (2026-06-25 CI 修复) \
-            dpkg-dev fakeroot  # .deb 打包必需 (2026-06-25)
+            libayatana-appindicator3-dev \
+            dpkg-dev fakeroot
+          # libayatana-appindicator3-dev: tray icon 必需 (2026-06-25)
+          # dpkg-dev + fakeroot: .deb 打包必需 (2026-06-25)
 
       - name: Install frontend deps + build (tauri.conf.json frontendDist 需要 dist 存在)
         working-directory: vpbuddy-client
@@ -108,9 +110,12 @@ jobs:
             libdbus-1-dev pkg-config librsvg2-dev \
             libsoup-3.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
             libasound2-dev \
-            libayatana-appindicator3-dev  # tray icon 必需 (2026-06-25 CI 修复) \
-            dpkg-dev fakeroot  # .deb 打包必需 (2026-06-25) \
-            file wget zip  # AppImage 工具
+            libayatana-appindicator3-dev \
+            dpkg-dev fakeroot \
+            file wget zip
+          # libayatana-appindicator3-dev: tray icon 必需 (2026-06-25)
+          # dpkg-dev + fakeroot: .deb 打包必需 (2026-06-25)
+          # file wget zip: AppImage 工具
 
       - name: Install frontend deps
         working-directory: vpbuddy-client
