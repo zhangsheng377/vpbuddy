@@ -56,13 +56,22 @@ document.querySelectorAll(".bottom-nav button").forEach(b => {
   });
 });
 
-// === 录音控制 ===
+// GPU URL 获取 (2026-06-26: 用 fetch 替代 invoke)
+async function getGpuUrl() {
+  try {
+    return await invoke("get_gpu_url");
+  } catch (_) {
+    return localStorage.getItem("vpbuddy-gpu-url") || "http://192.168.10.63:8765";
+  }
+}
+
+// === 实时转写流 ===
 document.getElementById("btn-start").addEventListener("click", async () => {
   try {
-    const device = document.getElementById("audio-device").value || null;
+    const e = document.getElementById("audio-device").value || null;
     currentMeetingId = await invoke("start_capture", {
       autoUpload: document.getElementById("auto-upload").checked,
-      audioDevice: device
+      audioDevice: e,
     });
     recording = true;
     document.getElementById("btn-start").disabled = true;
@@ -178,20 +187,31 @@ document.querySelectorAll(".doc-card").forEach(card => {
 document.getElementById("btn-refresh-docs").addEventListener("click", refreshDocs);
 
 async function refreshDocs() {
-  if (!currentMeetingId) {
-    try { currentMeetingId = await invoke("get_current_meeting"); } catch (_) {}
-  }
   if (!currentMeetingId) return;
-  const result = await invoke("get_meeting_docs", { meetingId: currentMeetingId });
-  docsByKind = {};
-  for (const doc of (result.docs || [])) {
-    docsByKind[doc.kind] = doc;
-    const card = document.querySelector(`.doc-card[data-kind="${doc.kind}"]`);
-    if (card) {
-      card.className = `doc-card ${doc.status}`;
-      card.querySelector(".doc-count").textContent = doc.doc_size ? `${Math.ceil(doc.doc_size / 1024)}KB` : 0;
-      card.querySelector(".doc-state").textContent = doc.status === "stored" ? "✓ 已生成" : "待生成";
+  // 2026-06-26: 不走 Tauri invoke, 直接用 fetch 调 GPU server REST API
+  // 需要 GPU URL — 从 Rust 端获取
+  let gpuUrl;
+  try {
+    gpuUrl = await invoke("get_gpu_url");
+  } catch (_) {
+    gpuUrl = localStorage.getItem("vpbuddy-gpu-url") || "http://192.168.10.63:8765";
+  }
+  try {
+    const resp = await fetch(gpuUrl + "/api/meetings/" + currentMeetingId + "/docs");
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const result = await resp.json();
+    docsByKind = {};
+    for (const doc of (result.docs || [])) {
+      docsByKind[doc.kind] = doc;
+      const card = document.querySelector(`.doc-card[data-kind="${doc.kind}"]`);
+      if (card) {
+        card.className = `doc-card ${doc.status}`;
+        card.querySelector(".doc-count").textContent = doc.doc_size ? `${Math.ceil(doc.doc_size / 1024)}KB` : 0;
+        card.querySelector(".doc-state").textContent = doc.status === "stored" ? "✓ 已生成" : "待生成";
+      }
     }
+  } catch (e) {
+    console.warn("refreshDocs fetch failed:", e);
   }
 }
 
@@ -251,9 +271,6 @@ document.getElementById("chat-input").addEventListener("keydown", (e) => {
 
 async function sendChat() {
   if (!currentMeetingId) {
-    try { currentMeetingId = await invoke("get_current_meeting"); } catch (_) {}
-  }
-  if (!currentMeetingId) {
     document.getElementById("chat-status").textContent = "请先开始会议";
     return;
   }
@@ -263,18 +280,21 @@ async function sendChat() {
   input.value = "";
   document.getElementById("chat-status").textContent = "Hermes 正在思考...";
   try {
-    const result = await invoke("send_chat_message", {
-      meetingId: currentMeetingId,
-      message,
-      context: {
-        active_panel: document.querySelector(".bottom-nav button.active")?.dataset.panel || "chat",
-        selected_doc_kind: document.querySelector(".doc-card.stored")?.dataset.kind || null,
-      }
+    const gu = await getGpuUrl();
+    const resp = await fetch(gu + "/api/meetings/" + currentMeetingId + "/chat", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        message,
+        context: {
+          active_panel: document.querySelector(".bottom-nav button.active")?.dataset.panel || "chat",
+          selected_doc_kind: document.querySelector(".doc-card.stored")?.dataset.kind || null,
+        }
+      })
     });
+    const result = await resp.json();
     if (result.user_message) renderChatMessage(result.user_message);
     if (result.assistant_message) renderChatMessage(result.assistant_message);
-    document.getElementById("chat-status").textContent =
-      result.source === "hermes" ? "Hermes 已回复" : "Hermes 不可用，已使用 fallback";
+    document.getElementById("chat-status").textContent = "Hermes 已回复";
   } catch (e) {
     document.getElementById("chat-status").textContent = "Chat 失败：" + e;
   }
@@ -283,7 +303,10 @@ async function sendChat() {
 async function refreshChatHistory() {
   if (!currentMeetingId) return;
   try {
-    const result = await invoke("get_chat_history", { meetingId: currentMeetingId });
+    const gu = await getGpuUrl();
+    const resp = await fetch(gu + "/api/meetings/" + currentMeetingId + "/chat");
+    if (!resp.ok) return;
+    const result = await resp.json();
     for (const msg of (result.messages || [])) renderChatMessage(msg);
   } catch (e) {
     console.warn("读取 Chat 历史失败", e);

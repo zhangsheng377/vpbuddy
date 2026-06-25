@@ -140,6 +140,12 @@ async fn set_gpu_url(state: State<'_, AppState>, url: String) -> Result<(), Stri
     Ok(())
 }
 
+/// 2026-06-26: 返回当前 GPU server URL (前端 fetch API 用)
+#[tauri::command]
+async fn get_gpu_url(state: State<'_, AppState>) -> Result<String, String> {
+    Ok(state.gpu_url.lock().await.clone())
+}
+
 /// 采集主循环: cpal 流 → 30s 切片 → WAV → multipart POST GPU
 ///
 /// Phase B (2026-06-24): cpal::Stream 持有 *mut () 不是 Send. 拆架构:
@@ -427,6 +433,7 @@ fn main() {
             stop_capture,
             list_audio_devices,
             set_gpu_url,
+            get_gpu_url,
             kb_search,
         ])
         .run(tauri::generate_context!())
