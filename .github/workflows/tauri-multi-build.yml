@@ -57,6 +57,12 @@ jobs:
             libsoup-3.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
             libasound2-dev
 
+      - name: Install frontend deps + build (tauri.conf.json frontendDist 需要 dist 存在)
+        working-directory: vpbuddy-client
+        run: |
+          npm ci || npm install
+          npm run build
+
       - name: cargo check
         working-directory: vpbuddy-client/src-tauri
         # 2026-06-25: 跟 GPU 端 cargo check 一致 (不传 --all-targets 避免 doc test 之类的额外 target 失败)
