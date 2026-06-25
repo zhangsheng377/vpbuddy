@@ -91,7 +91,8 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: vpbuddy-client/package-lock.json
+          # 2026-06-25: 包仓库没 package-lock.json, 改用 package.json 作 cache key
+          cache-dependency-path: vpbuddy-client/package.json
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -139,7 +140,8 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: vpbuddy-client/package-lock.json
+          # 2026-06-25: 包仓库没 package-lock.json, 改用 package.json 作 cache key
+          cache-dependency-path: vpbuddy-client/package.json
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -180,7 +182,8 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: vpbuddy-client/package-lock.json
+          # 2026-06-25: 包仓库没 package-lock.json, 改用 package.json 作 cache key
+          cache-dependency-path: vpbuddy-client/package.json
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
