@@ -27,16 +27,33 @@
           <button id="btn-start">开始录音</button>
           <button id="btn-stop" disabled>停止</button>
           <label><input type="checkbox" id="auto-upload" checked /> 自动上传</label>
+          <select id="audio-device"><option value="">默认音频设备</option></select>
         </div>
         <div class="stream-info">
-          <span id="seg-count">0 段</span> · <span id="byte-count">0 KB</span> · <span id="up-count">0 上传</span>
+          <span id="seg-count">0 段</span> · <span id="byte-count">0 KB</span> · <span id="up-count">0 上传</span> ·
+          <span id="conn-status">SSE 未连接</span> · <span id="latency">延迟 -</span>
         </div>
         <div id="stream-list" class="stream-list"></div>
       </section>
 
+      <!-- 结构化事实 (5 类) -->
+      <section id="panel-facts" class="panel">
+        <h2>结构化事实 (实时累积)</h2>
+        <div class="fact-stats">
+          <div class="fact-item"><span class="fact-label">需求 REQ</span><span class="fact-count" id="fact-req">0</span></div>
+          <div class="fact-item"><span class="fact-label">目标 GOAL</span><span class="fact-count" id="fact-goal">0</span></div>
+          <div class="fact-item"><span class="fact-label">功能 FEAT</span><span class="fact-count" id="fact-feat">0</span></div>
+          <div class="fact-item"><span class="fact-label">风险 RISK</span><span class="fact-count" id="fact-risk">0</span></div>
+          <div class="fact-item"><span class="fact-label">问题 QUE</span><span class="fact-count" id="fact-que">0</span></div>
+        </div>
+        <div id="fact-list" class="fact-list">
+          <div style="color:var(--text2);padding:20px;text-align:center;">会议开始后自动累积...</div>
+        </div>
+      </section>
+
       <!-- 6 docs 实时状态 -->
       <section id="panel-docs" class="panel">
-        <h2>6 类文档 (实时累积)</h2>
+        <h2>6 类文档 (实时生成)</h2>
         <div id="docs-grid" class="docs-grid">
           <div class="doc-card" data-kind="req"><div class="doc-kind">需求</div><div class="doc-count">0</div><div class="doc-state">待生成</div></div>
           <div class="doc-card" data-kind="arch"><div class="doc-kind">架构</div><div class="doc-count">0</div><div class="doc-state">待生成</div></div>
@@ -44,6 +61,14 @@
           <div class="doc-card" data-kind="api"><div class="doc-kind">API</div><div class="doc-count">0</div><div class="doc-state">待生成</div></div>
           <div class="doc-card" data-kind="risk"><div class="doc-kind">风险</div><div class="doc-count">0</div><div class="doc-state">待生成</div></div>
           <div class="doc-card" data-kind="demo"><div class="doc-kind">演示</div><div class="doc-count">0</div><div class="doc-state">待生成</div></div>
+        </div>
+        <div class="doc-viewer">
+          <div class="doc-toolbar">
+            <span id="doc-title">选择文档查看内容</span>
+            <button id="btn-refresh-docs">刷新文档</button>
+          </div>
+          <pre id="doc-content" class="doc-content"></pre>
+          <iframe id="demo-frame" class="demo-frame" sandbox="allow-scripts allow-forms"></iframe>
         </div>
       </section>
 
@@ -56,12 +81,40 @@
         </div>
         <div id="kb-results"></div>
       </section>
+
+      <!-- VP Chat -->
+      <section id="panel-chat" class="panel">
+        <h2>VP Chat (Hermes)</h2>
+        <div id="chat-list" class="chat-list">
+          <div class="chat-empty">会议开始后，可以在这里向 Hermes 追问、改方向或调度 6 个子 agent。</div>
+        </div>
+        <div class="chat-input-row">
+          <textarea id="chat-input" placeholder="例如：把 Demo 改成面向企业管理员的后台视角"></textarea>
+          <button id="chat-send">发送</button>
+        </div>
+        <div id="chat-status" class="chat-status">Chat 未连接</div>
+      </section>
+
+      <section id="panel-settings" class="panel">
+        <h2>设置</h2>
+        <div class="settings-card">
+          <label>界面语言</label>
+          <select id="ui-lang">
+            <option value="zh">中文</option>
+            <option value="en">English</option>
+          </select>
+          <p class="settings-note">当前实现提供基础界面文案切换；会议内容和文档按服务端生成语言展示。</p>
+        </div>
+      </section>
     </main>
 
     <nav class="bottom-nav">
       <button data-panel="stream" class="active">转写</button>
+      <button data-panel="facts">事实</button>
       <button data-panel="docs">6 文档</button>
       <button data-panel="kb">知识库</button>
+      <button data-panel="chat">Chat</button>
+      <button data-panel="settings">设置</button>
     </nav>
   </div>
 

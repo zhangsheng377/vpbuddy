@@ -1,7 +1,7 @@
 """storage — JSON 持久化(NFS)
 
 设计原则(ADR-0001):
-- 本地存储(NFS),不上云
+- 服务端存储(NFS / 本地磁盘),不依赖云存储
 - 路径:`{data_dir}/meetings/{meeting_id}.json`
 - 每次修改立即落盘(crud 后调用 save)
 - 简单,不要数据库 / 不要锁

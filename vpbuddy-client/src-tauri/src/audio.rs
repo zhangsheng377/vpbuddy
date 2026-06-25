@@ -4,8 +4,16 @@
 
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use serde::Serialize;
 use std::sync::mpsc;
 use std::time::Duration;
+
+#[derive(Debug, Serialize)]
+pub struct AudioDeviceInfo {
+    pub id: String,
+    pub name: String,
+    pub is_default: bool,
+}
 
 pub struct AudioCapture {
     _stream: cpal::Stream,
@@ -14,9 +22,24 @@ pub struct AudioCapture {
 
 impl AudioCapture {
     pub fn new() -> Result<Self> {
+        Self::new_with_device(None)
+    }
+
+    /// 2026-06-25: cherry-pick from feature/requirements-architecture-update
+    /// device_id=None 用系统默认, 否则按 name 匹配
+    pub fn new_with_device(device_id: Option<String>) -> Result<Self> {
         let host = cpal::default_host();
-        let device = host.default_input_device()
-            .context("找不到默认输入设备 (麦克风/loopback)")?;
+        let device = if let Some(id) = device_id {
+            let devices = host.input_devices().context("无法枚举输入设备")?;
+            devices
+                .filter_map(|d| d.name().ok().map(|name| (name, d)))
+                .find(|(name, _)| name == &id)
+                .map(|(_, d)| d)
+                .with_context(|| format!("找不到音频输入设备: {id}"))?
+        } else {
+            host.default_input_device()
+                .context("找不到默认输入设备 (麦克风/loopback)")?
+        };
 
         let config = cpal::StreamConfig {
             channels: 1,
@@ -64,6 +87,22 @@ impl AudioCapture {
         }
         Ok(out)
     }
+}
+
+/// 2026-06-25: 枚举系统音频输入设备 (cherry-pick from feature 分支)
+pub fn list_input_devices() -> Result<Vec<AudioDeviceInfo>> {
+    let host = cpal::default_host();
+    let default_name = host.default_input_device().and_then(|d| d.name().ok());
+    let mut out = Vec::new();
+    for device in host.input_devices().context("无法枚举输入设备")? {
+        let name = device.name().unwrap_or_else(|_| "未知设备".to_string());
+        out.push(AudioDeviceInfo {
+            id: name.clone(),
+            is_default: default_name.as_deref() == Some(name.as_str()),
+            name,
+        });
+    }
+    Ok(out)
 }
 
 /// i16 samples → WAV bytes (16-bit PCM, 16kHz, mono)
