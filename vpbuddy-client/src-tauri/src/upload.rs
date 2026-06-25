@@ -39,9 +39,12 @@ pub async fn upload_chunk(
     chunk_start_sec: f32,
     overlap_sec: f32,
 ) -> Result<Vec<TranscriptSegment>> {
-    let url = format!("{}/api/meetings/{}/stream_chunk", gpu_url, meeting_id);
+    // 2026-06-25: 加 ?sync=false 让 server 立即返回 (不阻塞等 funasr + 6 docs)
+    // 客户端通过 SSE /api/meetings/{id}/events 收 transcript-segment / state-update / doc-update
+    let url = format!("{}/api/meetings/{}/stream_chunk?sync=false", gpu_url, meeting_id);
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
+        // 2026-06-25: ?sync=false 模式 server 立即返回 (毫秒级), client 30s 够用
+        .timeout(std::time::Duration::from_secs(30))
         .build()?;
 
     let mut last_err: Option<anyhow::Error> = None;

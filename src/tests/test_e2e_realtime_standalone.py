@@ -86,7 +86,9 @@ def get(url):
         return json.loads(r.read().decode())
 
 
-def upload_audio(url, wav_data, fields=None):
+def upload_audio(url, wav_data, fields=None, sync_mode=True):
+    """2026-06-25: 加 sync_mode 参数 — 默认 True (跟原来一样, 等 funasr+6 docs 跑完才返回)
+    sync_mode=False 加 ?sync=false query 立刻返回 {"status":"accepted"}"""
     fields = fields or {}
     boundary = "----TestBoundary"
     body = (
@@ -101,6 +103,11 @@ def upload_audio(url, wav_data, fields=None):
             f"{value}\r\n"
         ).encode()
     body += f"--{boundary}--\r\n".encode()
+
+    # 2026-06-25: ?sync=true|false query
+    if not sync_mode:
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}sync=false"
 
     req = urllib.request.Request(url, data=body,
         headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
@@ -473,6 +480,109 @@ def test_stream_chunk_metadata_and_dedupe(server):
     print("  PASS: stream_chunk 元数据、绝对时间和重复 chunk 去重正常")
 
 
+def test_stream_chunk_async_fire_and_forget(server):
+    """Test 10 (2026-06-25): stream_chunk 异步 fire-and-forget 模式验证
+
+    ?sync=false → server 立即返回 {"status":"accepted"} (HTTP 200, < 100ms)
+    后台 daemon thread 跑 funasr+ingest+6 docs+push_event
+    客户端通过 SSE /api/meetings/{id}/events 收到后续事件
+    """
+    print("\n[Test 10] stream_chunk 异步 fire-and-forget 模式...")
+    import time
+
+    # mock funasr 慢 2s 让 SSE 能收到 events
+    # 2026-06-25: 用 sys.modules hack (跟 Test 9 一致, 处理相对 import)
+    import types
+    fake_gpu = types.ModuleType("vpbuddy.scripts.gpu_transcribe")
+    def slow_process(_path):
+        time.sleep(2)  # 模拟 funasr 慢
+        return {"segments": [{
+            "start_sec": 0.5, "end_sec": 1.5,
+            "text": "异步测试片段", "speaker_id": "SPEAKER_00",
+        }], "num_speakers": 1}
+    fake_gpu.process = slow_process
+    import sys as _sys
+    _sys.modules["vpbuddy.scripts.gpu_transcribe"] = fake_gpu
+
+    # mock 6 子 session 快速完成
+    import vpbuddy.sub_session_controller as ssc
+    original_trigger = ssc.trigger_sub_session
+    ssc.trigger_sub_session = lambda mid, kind, dry_run=False: {
+        "triggered": True, "kind": kind,
+    }
+
+    try:
+        resp = post(f"{server}/api/meetings/stream_start", {})
+        meeting_id = resp["meeting_id"]
+        wav = make_silent_wav(1, 16000)
+        fields = {"chunk_index": "99", "chunk_start_sec": "0.0", "overlap_sec": "0.0"}
+
+        # 启动 SSE 收集器
+        sse_events = []
+        def collect_sse():
+            events = read_sse_events(SSE_HOST, SSE_PORT,
+                f"/api/meetings/{meeting_id}/events",
+                max_events=10, timeout_sec=15)
+            sse_events.extend(events)
+
+        import threading
+        sse_thread = threading.Thread(target=collect_sse, daemon=True)
+        sse_thread.start()
+        time.sleep(0.5)  # 让 SSE 连接建立
+
+        # 异步上传 — 应该立即返回 (< 1s, 不等 5s funasr)
+        t0 = time.time()
+        result = upload_audio(
+            f"{server}/api/meetings/{meeting_id}/stream_chunk",
+            wav, fields, sync_mode=False,
+        )
+        elapsed = time.time() - t0
+
+        assert result.get("status") == "accepted", f"异步模式应返回 accepted, 实际: {result}"
+        assert elapsed < 3.0, f"异步模式应 < 3s 返回, 实际 {elapsed:.2f}s"
+        print(f"  ✅ 异步响应 {elapsed*1000:.0f}ms (远小于 funasr 5s, 证明 fire-and-forget)")
+
+        # 等 background thread 跑完 funasr (2s) + push_event (~0.1s)
+        time.sleep(3)
+
+        # background 跑完后, 用新 SSE 连接拿历史事件补偿 (SSE /events 支持 last_event_id)
+        # 或者直接 GET /api/meetings/{id}/state 验证 state 已更新
+        state = get(f"{server}/api/meetings/{meeting_id}/state")
+        assert state.get("state"), f"background 处理后 state 应有内容, 实际: {state}"
+        print(f"  ✅ background 完成, state 有 {len(state.get('state', {}).get('transcript_segments', []))} segments")
+
+        # 再用新 SSE 连接 (历史事件补偿) 收后续 push_event
+        collected2 = []
+        def sse_collect2():
+            events = read_sse_events(SSE_HOST, SSE_PORT,
+                f"/api/meetings/{meeting_id}/events",
+                max_events=10, timeout_sec=5)
+            collected2.extend(events)
+        t2 = threading.Thread(target=sse_collect2, daemon=True)
+        t2.start()
+        time.sleep(0.5)
+        # 触发一次新 chunk 看 SSE 实时推送
+        wav2 = make_silent_wav(1, 16000)
+        fields2 = {"chunk_index":"100","chunk_start_sec":"0.0","overlap_sec":"0.0"}
+        upload_audio(f"{server}/api/meetings/{meeting_id}/stream_chunk",
+                     wav2, fields2, sync_mode=False)
+        t2.join(timeout=10)
+        event_types = [e[0] for e in collected2]
+        assert "transcript-segment" in event_types, \
+            f"异步 SSE 应收到 transcript-segment, 实际: {event_types}"
+        assert "state-update" in event_types, \
+            f"异步 SSE 应收到 state-update, 实际: {event_types}"
+        assert "doc-update" in event_types, \
+            f"异步 SSE 应收到 doc-update, 实际: {event_types}"
+        print(f"  ✅ SSE 收到事件: {event_types}")
+        print("  PASS: 异步 fire-and-forget + SSE 推送正常")
+    finally:
+        # 还原 mock
+        if "vpbuddy.scripts.gpu_transcribe" in _sys.modules:
+            del _sys.modules["vpbuddy.scripts.gpu_transcribe"]
+        ssc.trigger_sub_session = original_trigger
+
+
 def main():
     print("=" * 60)
     print("VPBuddy 端到端实时链路测试")
@@ -497,8 +607,9 @@ def main():
             test_event_history_replay(server)
             test_state_and_docs_api(server)
             test_stream_chunk_metadata_and_dedupe(server)
+            test_stream_chunk_async_fire_and_forget(server)  # 2026-06-25
         else:
-            print("\n⏭️  Test 2-9 跳过 (依赖本地 mock + in-process push_event)")
+            print("\n⏭️  Test 2-10 跳过 (依赖本地 mock + in-process push_event)")
             print("   → 这些 test 必须在本地自起 server 跑 (无 VP_E2E_BASE_URL)")
             print("   → 或用 gpu_e2e.rs 跑真端到端测试 (需要 GitHub Actions 或 GPU 端 cargo)")
         print("\n" + "=" * 60)

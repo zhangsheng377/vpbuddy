@@ -584,9 +584,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._handle_stream_start()
 
         # API: 流式 chunk — 接收 30s 切片 + 立即触发 6 docs
+        # 2026-06-25: 默认走原同步模式 (向后兼容). 加 ?sync=false 走异步 fire-and-forget,
+        # 立即返回 {"status":"accepted"}, 后台 daemon thread 跑 funasr+ingest+6 docs+push_event,
+        # 客户端通过 SSE /api/meetings/{id}/events 收结果. (Tauri client 改用 ?sync=false)
         if path.startswith("/api/meetings/") and path.endswith("/stream_chunk"):
             meeting_id = path.split("/")[3]  # /api/meetings/{id}/stream_chunk
-            return self._handle_stream_chunk(meeting_id)
+            # 解析 ?sync=true|false query (urlparse 在文件顶部已 import)
+            parsed = urlparse(self.path)
+            qs = parse_qs(parsed.query)
+            sync_mode = qs.get("sync", ["true"])[0].lower() != "false"  # 默认同步 (兼容)
+            return self._handle_stream_chunk(meeting_id, sync_mode=sync_mode)
 
         # API: VP Chat — VP 自由输入接 Hermes 主控 agent
         if path.startswith("/api/meetings/") and path.endswith("/chat"):
@@ -710,8 +717,15 @@ class Handler(BaseHTTPRequestHandler):
             "message": "Stream started, send 30s WAV chunks to /api/meetings/{id}/stream_chunk",
         })
 
-    def _handle_stream_chunk(self, meeting_id: str):
-        """Tauri 客户端调: 接收 30s WAV → funasr 转写 → ingest 累加 → 触发 controller"""
+    def _handle_stream_chunk(self, meeting_id: str, sync_mode: bool = False):
+        """Tauri 客户端调: 接收 30s WAV → funasr 转写 → ingest 累加 → 触发 controller
+
+        2026-06-25: 加 sync_mode 参数
+        - sync_mode=False (默认, client 实际用): multipart 解析 + duplicate 检查立即返回
+          {"status":"accepted", "chunk_index":X}; 后续 funasr/ingest/6 docs/push_event
+          全部后台 daemon thread 跑完。客户端通过 SSE /api/meetings/{id}/events 实时收
+        - sync_mode=True (E2E test 用): 跟原来一样阻塞跑完返回完整 new_segments + state_items
+        """
         content_type = self.headers.get("Content-Type", "")
         if not content_type.startswith("multipart/form-data"):
             return self._json({"error": "Content-Type must be multipart/form-data"}, 400)
@@ -746,6 +760,31 @@ class Handler(BaseHTTPRequestHandler):
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             tmp.write(file_data)
             tmp_path = tmp.name
+
+        if not sync_mode:
+            # 异步模式 (2026-06-25): 后台 daemon thread 跑 funasr/ingest/docs/push_event
+            # 立即返回 accepted, client 通过 SSE /events 收结果
+            import threading
+            threading.Thread(
+                target=self._process_chunk_background,
+                args=(meeting_id, tmp_path, chunk_index, chunk_start_sec,
+                      overlap_sec, client_sent_at),
+                daemon=True,
+            ).start()
+            # 标记 chunk_index 已 accepted (重复检查时不重入)
+            meta.setdefault("processed_chunks", []).append(chunk_index)
+            meta["processed_chunks"] = sorted(set(meta["processed_chunks"]))
+            _save_stream_meta(meeting_id, meta)
+            # ⚠️ async_mode 不删 tmp_path, 由后台线程自己读 + 自己 unlink
+            # 同步模式才走下面的 try / finally (会 unlink)
+            return self._json({
+                "meeting_id": meeting_id,
+                "chunk_index": chunk_index,
+                "status": "accepted",
+                "message": "Chunk accepted, processing in background. Subscribe to /api/meetings/{id}/events for results.",
+                "duplicate_chunk": False,
+                "docs_triggered": True,
+            })
 
         try:
             started = time.time()
@@ -910,6 +949,162 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             import traceback
             return self._json({"error": f"Stream chunk failed: {e}", "trace": traceback.format_exc()}, 500)
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+
+    def _process_chunk_background(self, meeting_id: str, tmp_path: str,
+                                   chunk_index: int, chunk_start_sec: float,
+                                   overlap_sec: float, client_sent_at: float):
+        """2026-06-25: 后台 daemon thread 跑 funasr ASR + ingest + 6 docs + push_event.
+        跑完 unlink tmp_path. 异常仅记日志, 不抛回主线程.
+        逻辑跟 _handle_stream_chunk 同步模式 try 块完全一致, 抽出来共用.
+        """
+        try:
+            started = time.time()
+            from .scripts.gpu_transcribe import process
+            transcript = process(tmp_path)
+            raw_segs = transcript.get("segments", [])
+            meta = _load_stream_meta(meeting_id)
+            seen_segments = meta.get("transcript_segments", [])
+            new_segs = []
+            for s in raw_segs:
+                abs_seg = dict(s)
+                abs_seg["start_sec"] = round(float(s.get("start_sec", 0)) + chunk_start_sec, 3)
+                abs_seg["end_sec"] = round(float(s.get("end_sec", 0)) + chunk_start_sec, 3)
+                abs_seg["chunk_index"] = chunk_index
+                if not _is_duplicate_segment(abs_seg, seen_segments + new_segs):
+                    new_segs.append(abs_seg)
+
+            from .storage import MeetingStorage
+            from .state import MeetingState, Platform, Priority
+            from .ingest import _classify, infer_speaker_map
+            storage = MeetingStorage(DATA_DIR)
+            if storage.exists(meeting_id):
+                state = storage.load(meeting_id)
+            else:
+                state = MeetingState(
+                    meeting_id=meeting_id,
+                    platform=Platform.LOCAL,
+                    project_name=f"长连接会议 {meeting_id}",
+                )
+
+            spk_map = state.speaker_map
+            if new_segs:
+                inferred = infer_speaker_map(new_segs)
+                spk_map = dict(state.speaker_map or {})
+                for spk_id, spk_name in inferred.items():
+                    spk_map.setdefault(spk_id, spk_name)
+                for spk_id, spk_name in spk_map.items():
+                    state.register_speaker(spk_id, spk_name)
+                existing_texts = {_norm_text(getattr(item, "text", "")) for item in (
+                    state.requirements + state.goals + state.features + state.risks + state.open_questions
+                )}
+                for s in new_segs:
+                    text = s["text"]
+                    norm = _norm_text(text)
+                    if not norm or norm in existing_texts:
+                        continue
+                    existing_texts.add(norm)
+                    spk_name = spk_map.get(s["speaker_id"], "UNKNOWN")
+                    kind, prio = _classify(text)
+                    if kind == "requirement":
+                        state.add_requirement(text, priority=prio, speaker_id=spk_name)
+                    elif any(k in text for k in ["目标", "希望", "为了", "达成"]):
+                        state.add_goal(text, speaker_id=spk_name)
+                    elif any(k in text for k in ["功能", "支持", "能力", "可以"]):
+                        state.add_feature(text, speaker_id=spk_name)
+                    elif kind == "risk":
+                        state.add_risk(text, priority=prio, speaker_id=spk_name)
+                    elif kind == "question":
+                        state.add_question(text, is_urgent=(prio == Priority.HIGH), speaker_id=spk_name)
+            storage.save(state)
+
+            meta.setdefault("transcript_segments", []).extend(new_segs)
+            processing_ms = int((time.time() - started) * 1000)
+            end_to_end_ms = int((time.time() - client_sent_at) * 1000) if client_sent_at else None
+            meta.setdefault("metrics", []).append({
+                "chunk_index": chunk_index,
+                "chunk_start_sec": chunk_start_sec,
+                "overlap_sec": overlap_sec,
+                "raw_segments": len(raw_segs),
+                "new_segments": len(new_segs),
+                "processing_ms": processing_ms,
+                "end_to_end_ms": end_to_end_ms,
+                "received_at": datetime.now().isoformat(),
+            })
+            _save_stream_meta(meeting_id, meta)
+
+            # 6 子 session (同 _handle_stream_chunk 同步逻辑)
+            from concurrent.futures import ThreadPoolExecutor
+            from .sub_session_controller import trigger_sub_session
+            doc_kinds = DOC_KINDS
+
+            def _run_sub(mid, kind):
+                try:
+                    r = trigger_sub_session(mid, kind, False)
+                    return (kind, r.get("triggered"), r.get("error"))
+                except Exception as e:
+                    return (kind, False, str(e))
+
+            with ThreadPoolExecutor(max_workers=3) as ex:
+                futures = [ex.submit(_run_sub, meeting_id, k) for k in doc_kinds]
+                def _log_done(fut):
+                    try:
+                        kind, triggered, err = fut.result(timeout=1)
+                        msg = f"[stream_chunk/bg] {kind} triggered={triggered}"
+                        if err:
+                            msg += f" err={err[:200]}"
+                        print(msg)
+                    except Exception as e:
+                        print(f"[stream_chunk/bg] callback err: {e}")
+                for f in futures:
+                    f.add_done_callback(_log_done)
+
+            # push_event SSE
+            try:
+                from .realtime_server import push_event
+                for s in new_segs:
+                    push_event(meeting_id, "transcript-segment", {
+                        "start_sec": s["start_sec"],
+                        "end_sec": s["end_sec"],
+                        "text": s["text"],
+                        "speaker_id": s["speaker_id"],
+                        "chunk_index": chunk_index,
+                        "speaker_name": spk_map.get(s["speaker_id"], "UNKNOWN"),
+                    })
+                push_event(meeting_id, "state-update", _state_payload(state, include_items=True))
+                push_event(meeting_id, "metrics-update", {
+                    "chunk_index": chunk_index,
+                    "processing_ms": processing_ms,
+                    "end_to_end_ms": end_to_end_ms,
+                    "raw_segments": len(raw_segs),
+                    "new_segments": len(new_segs),
+                })
+                push_event(meeting_id, "doc-update", {
+                    "status": "triggered",
+                    "kinds": doc_kinds,
+                    "message": "6 docs generation triggered",
+                })
+            except Exception as e:
+                print(f"[stream_chunk/bg] push_event error: {e}")
+            print(f"[stream_chunk/bg] {meeting_id}/{chunk_index} done in {processing_ms}ms, {len(new_segs)} new segments")
+        except Exception as e:
+            import traceback
+            print(f"[stream_chunk/bg] ERROR chunk_index={chunk_index}: {e}")
+            print(traceback.format_exc())
+            # 失败也要推 SSE event, 客户端能感知
+            try:
+                from .realtime_server import push_event
+                push_event(meeting_id, "doc-update", {
+                    "status": "failed",
+                    "chunk_index": chunk_index,
+                    "error": str(e)[:500],
+                })
+            except Exception:
+                pass
         finally:
             try:
                 os.unlink(tmp_path)
