@@ -54,10 +54,11 @@ pip install --quiet --upgrade pip
 # 国内 pip 镜像
 pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ 2>/dev/null || true
 
-# ===== 3. 装 hermes-agent + vpbuddy[audio] =====
-echo "[3/6] 装 hermes-agent + vpbuddy[audio]..."
-# hermes-agent 仍是依赖 (vpbuddy cli 调它), 2026-06-22 决定
-pip install --quiet "hermes-agent>=0.16.0,<1.0"
+# ===== 3. 装 vpbuddy[audio] =====
+echo "[3/6] 装 vpbuddy[audio]..."
+# 2026-06-25 简化: VPBuddy 客户端本身不调 LLM, 不装 hermes-agent
+# LLM 流量全在 GPU server 端 vpbuddy-gpu conda env 跑
+# 用户若要 VP Chat, 直接在 GPU server 上用 hermes-agent 即可
 
 # vpbuddy 装当前目录(用户要先 git clone)
 # 兼容两种情况:(a) 从 github clone 的标准目录 (b) 开发时已 cd 进来
@@ -86,96 +87,40 @@ except Exception as e:
     print(f"  如需跨会议 KB 检索, 设 HF_ENDPOINT=https://hf-mirror.com 后重跑本步骤")
 PYEOF
 
-# ===== 6. Hermes 配置 (最小化, 不预设 LLM provider) =====
-echo "[6/6] Hermes 配置 (最小化)..."
-mkdir -p "$HOME/.hermes"
+# ===== 6. 客户端配置 (无 LLM, 无 hermes) =====
+echo "[6/6] 客户端配置..."
+# 2026-06-25 简化: VPBuddy 客户端不调 LLM, 不装 hermes-agent, 不写 ~/.hermes/{config.yaml,.env}
+# 客户端只做音频采集 + 上传 + SSE 订阅, LLM 全在 GPU server 端
 
-# 🔒 信息隔离铁律 (ADR-0010):
-# 1. config.yaml / .env 都用占位符, 真实 key 由用户手动 vim 填 (VP Chat 才用)
-# 2. 已存在的文件绝不覆盖 (开发机 / 之前的部署)
-# 3. install 脚本本身不接触真实 API key
+# 写一个轻量 client.yaml 记录 GPU server 地址 (供 Tauri 客户端读)
+VPBUDDY_CLIENT_CONFIG="$HOME/.vpbuddy-client.yaml"
+if [[ ! -f "$VPBUDDY_CLIENT_CONFIG" ]]; then
+    cat > "$VPBUDDY_CLIENT_CONFIG" <<'EOF'
+# VPBuddy 客户端配置 (2026-06-25 简化版)
+# 客户端不调 LLM, 仅记录 GPU server 地址
 
-if [[ ! -f "$HOME/.hermes/config.yaml" ]]; then
-    echo "  Hermes config 不存在, 创建干净模板..."
-    cat > "$HOME/.hermes/config.yaml" <<'EOF'
-# Hermes Agent Configuration - CLEAN INSTALL TEMPLATE (2026-06-25)
-# 2026-06-25 简化: 不预设 LLM provider, VPBuddy 客户端本身不调 LLM (server 端调)
-# 仅 VP Chat 功能需要 LLM, 用 .env 填 key 后才能用
+gpu_server_url: http://192.168.10.63:8765  # 默认连开发 GPU server, VP 笔记本改成自己服务器地址
 
-model:
-  default: MiniMax-M3
-  provider: mini_max
+# 音频采集参数
+audio:
+  sample_rate: 16000
+  chunk_seconds: 30
+  overlap_seconds: 0
 
-providers:
-  # VP Chat 用 — 可选, 不填不影响音频采集和 UI 实时显示
-  mini_max:
-    api_key: ${MINIMAX_CN_API_KEY:-}
-    base_url: https://api.minimaxi.com/v1
-    default_model: MiniMax-M3
-    thinking: true
-  openrouter:
-    api_key: ${OPENROUTER_API_KEY:-}
-    base_url: https://openrouter.ai/api/v1
-    thinking: true
-
-fallback_providers:
-  - provider: openrouter
-    model: openrouter/free
-    base_url: https://openrouter.ai/api/v1
-    api_mode: chat_completions
-
-credential_pool_strategies: {}
-toolsets:
-  - hermes-cli
-max_concurrent_sessions: null
-
-agent:
-  max_turns: 90
-  gateway_timeout: 1800
-  reasoning_effort: xhigh
-  task_completion_guidance: true
-  environment_probe: true
-  image_input_mode: auto
-
-terminal:
-  backend: local
-  modal_mode: auto
-  cwd: .
-  timeout: 180
-
-logging:
-  level: INFO
-  redact_secrets: true
+# SSE 客户端
+sse:
+  reconnect: true
+  max_events_per_chunk: 50
 EOF
-    chmod 600 "$HOME/.hermes/config.yaml"
-fi
-
-if [[ ! -f "$HOME/.hermes/.env" ]]; then
-    echo "  Hermes .env 不存在, 创建空模板 (VP Chat 才会用 LLM)..."
-    cat > "$HOME/.hermes/.env" <<'EOF'
-# Hermes Agent Environment - CLEAN INSTALL TEMPLATE (2026-06-25)
-# 2026-06-25 简化: .env 可为空, VPBuddy 客户端不调 LLM
-# 仅 VP Chat (需要本地 LLM 兜底时) 才填:
-#   MINIMAX_CN_API_KEY=sk-xxx
-#   OPENROUTER_API_KEY=sk-or-xxx
-
-# ===== 可选: LLM Provider (仅 VP Chat 用) =====
-# MINIMAX_CN_API_KEY=
-# OPENROUTER_API_KEY=
-
-# ===== KB embedding 模型 (国内环境走镜像站) =====
-HF_ENDPOINT=https://hf-mirror.com
-EOF
-    chmod 600 "$HOME/.hermes/.env"
-    echo "  ✅ .env 已创建 (空 LLM key, 不影响主功能)"
+    echo "  ✅ 客户端配置已写: $VPBUDDY_CLIENT_CONFIG"
 else
-    echo "  ✅ ~/.hermes/.env 已存在(不动用户填好的 key)"
+    echo "  ✅ 客户端配置已存在(不动): $VPBUDDY_CLIENT_CONFIG"
 fi
 
 # ===== 收尾 =====
 echo ""
 echo "=================================================="
-echo "  ✅ VP 桌面客户端安装完成"
+echo "  ✅ VP 桌面客户端安装完成 (无 LLM 依赖)"
 echo "=================================================="
 echo ""
 echo "下一步 (任选, 看你用 Python 客户端还是 Tauri 客户端):"
@@ -188,11 +133,11 @@ echo ""
 echo "  📌 Tauri 路径 2 (桌面客户端, 推荐):"
 echo "    1. 编译:             cd vpbuddy-client && npm install && cd src-tauri && cargo build --release"
 echo "    2. 启动:             ./target/release/vpbuddy-client"
-echo "    3. 改 GPU server:    export VPBUDDY_GPU_URL=http://your-server:8765"
+echo "    3. 改 GPU server:    编辑 $VPBUDDY_CLIENT_CONFIG 或设 VPBUDDY_GPU_URL 环境变量"
 echo "       (或从 GitHub Releases 下载预编译的 .msi / .dmg / .AppImage)"
 echo ""
-echo "  📌 (可选) VP Chat 用 LLM:"
-echo "    vim ~/.hermes/.env"
-echo "    # 填 MINIMAX_CN_API_KEY=sk-xxx  (不填 VP Chat 报 'no api key' 错误, 其他功能正常)"
+echo "  📌 LLM 流量 (VP Chat 等):"
+echo "    全在 GPU server 端 vpbuddy-gpu conda env 跑, 客户端不需要"
+echo "    想跑 VP Chat: 在 GPU server 上 hermes chat 即可"
 echo ""
 echo "详见 docs/部署/INSTALL.md §角色 B"
