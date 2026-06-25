@@ -162,8 +162,10 @@ jobs:
         shell: pwsh
         run: choco install nsis -y --no-progress
       - name: Tauri build (Windows)
+        # 2026-06-25: 不传 --bundles, 让 tauri.conf.json bundle.targets 决定
+        # 上一版传 --bundles nsis 在 bundle.targets="all" 下与 msi 冲突
         working-directory: vpbuddy-client/src-tauri
-        run: npx tauri build --bundles nsis
+        run: npx tauri build
       - name: Upload .exe artifacts
         uses: actions/upload-artifact@v4
         with:
