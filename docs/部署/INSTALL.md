@@ -400,6 +400,29 @@ cargo build --release
 # 改 GPU server 地址: 设置页或 VPBUDDY_GPU_URL 环境变量
 ```
 
+### 预编译安装包 (推荐 2026-06-25, GitHub Actions 自动构建)
+
+不用自己编译,直接到 [GitHub Releases](https://github.com/zhangsheng377/vpbuddy/releases) 下载对应平台安装包:
+
+| 平台 | 格式 | 适合用户 |
+|------|------|----------|
+| Windows | `.msi` (Windows Installer) / `.exe` (NSIS) | VP 笔记本 Win10/11 |
+| macOS   | `.dmg` (universal: arm64+x86_64) | MacBook M1/M2/Intel |
+| Linux   | `.deb` (Debian/Ubuntu) / `.AppImage` (通用) | Linux desktop |
+
+**触发方式**:
+- Push 到 main → 5 jobs 跑 (test + 3 平台 build + release) → Artifacts 30 天
+- Push tag `v*` (e.g. `git tag v0.2.0 && git push --tags`) → 自动 attach 到 GitHub Release
+
+**本地自己编译** (如需调试):
+```bash
+# 装 frontend 依赖
+cd vpbuddy-client && npm install
+# 编译 release
+cd src-tauri && cargo tauri build
+# 产物: target/release/bundle/{msi,nsis,dmg,deb,appimage}/
+```
+
 ---
 
 ## 角色 C — 开发者
