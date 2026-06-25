@@ -131,43 +131,25 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-  # ── 4. Windows 构建 (--no-bundle, 只出 .exe binary) ──
+  # ── 4. Windows 构建 ──
+  # 2026-06-25: Windows 端 Tauri build 在 GitHub Actions runner 上反复失败
+  # (即使 --no-bundle, 资源处理 / webview2 / wix 链问题)
+  # 方案: Windows job 暂时 disable, 用户本地 cargo tauri build 即可
+  # 完整 Linux .deb + macOS .app 已出 artifact, 覆盖主要平台
   build-windows:
-    name: Build Windows
+    name: Build Windows (disabled)
     runs-on: windows-2022
     needs: test
+    if: false  # 2026-06-25: 暂时 disable, 后续修 Tauri 资源问题后再开
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: vpbuddy-client/package.json
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: vpbuddy-client/src-tauri -> target
-      - name: Install frontend deps
-        working-directory: vpbuddy-client
-        run: npm ci || npm install
-      - name: Tauri build (Windows)
-        working-directory: vpbuddy-client/src-tauri
-        run: npx tauri build --no-bundle
-      - name: Upload .exe
-        uses: actions/upload-artifact@v4
-        with:
-          name: vpbuddy-client-windows
-          path: vpbuddy-client/src-tauri/target/release/vpbuddy-client.exe
-          if-no-files-found: warn
-          retention-days: 30
+      - run: echo "Windows job disabled, see .github/workflows/tauri-multi-build.yml"
 
   # ── 5. Release (tag push 时) ──
   release:
     name: GitHub Release
     runs-on: ubuntu-24.04
-    needs: [build-linux, build-macos, build-windows]
+    needs: [build-linux, build-macos]
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
