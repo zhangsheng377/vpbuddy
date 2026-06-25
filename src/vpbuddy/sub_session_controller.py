@@ -490,6 +490,21 @@ def trigger_sub_session(meeting_id: str, doc_kind: str, dry_run: bool = False) -
             return result
     if result.get("triggered") and doc_path.exists():
         result["doc_size"] = doc_path.stat().st_size
+        content = doc_path.read_text(encoding="utf-8", errors="replace")
+        # 推送 SSE: 文档生成完成
+        try:
+            from .realtime_server import push_event
+            push_event(meeting_id, "doc-update", {
+                "kind": doc_kind,
+                "status": "stored",
+                "doc_size": result["doc_size"],
+                "meeting_id": meeting_id,
+                "content": content,
+                "updated_at": datetime.now().isoformat(),
+                "is_demo": doc_kind == "demo",
+            })
+        except Exception as e:
+            logger.warning(f"[{meeting_id}/{doc_kind}] push SSE doc-update failed: {e}")
 
     # 7. 写完文档后,自动存进知识库(2026-06-22 增强:kb_status + 3 次 retry)
     if result.get("triggered") and doc_path.exists():
@@ -524,6 +539,18 @@ def trigger_sub_session(meeting_id: str, doc_kind: str, dry_run: bool = False) -
                             "doc_id": doc_id,
                             "error": None,
                         }
+                    # 推送 SSE: KB 入库完成
+                    try:
+                        from .realtime_server import push_event
+                        push_event(meeting_id, "doc-update", {
+                            "kind": doc_kind,
+                            "status": "stored",
+                            "meeting_id": meeting_id,
+                            "doc_id": doc_id,
+                            "kb_stored": True,
+                        })
+                    except Exception as e:
+                        logger.warning(f"[{meeting_id}/{doc_kind}] push SSE kb-stored failed: {e}")
                     logger.info(f"[{meeting_id}/{doc_kind}] KB stored (doc_id={doc_id}, attempt {attempt})")
                     return
                 except Exception as e:

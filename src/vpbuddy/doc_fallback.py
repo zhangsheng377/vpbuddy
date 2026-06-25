@@ -56,16 +56,17 @@ def _gen_arch(state: Dict[str, Any]) -> str:
 
 ## 数据流
 
-1. VP 客户端启动音频 loopback 采集
-2. 会议结束触发 ASR(中文:funasr paraformer-zh)
-3. 转写结果写入 meeting state JSON
-4. 6 个子 session 并行生成文档(本会议)
+1. VP 桌面客户端启动音频 loopback 采集，音频流上传服务端
+2. 服务端实时 ASR 转写(中文:funasr paraformer-zh)
+3. 转写结果实时写入 meeting state JSON
+4. 6 个子 session 并行生成文档(本会议,持续更新)
 5. 文档自动入知识库,后续检索用 sqlite-vec 余弦相似度
 
 ## 关键决策
 
-- 单租户:数据全在 VP 本地,不上云
-- 存储:本地 SQLite + sqlite-vec(零依赖向量索引)
+- 客户端-服务端架构:客户端采集展示,服务端计算存储
+- 单租户:数据隔离,支持私有化部署
+- 存储:服务端 SQLite + sqlite-vec(零依赖向量索引)
 - 嵌入模型:paraphrase-multilingual-MiniLM-L12-v2 (384 维)
 - 冷启动:首次安装预下载 256MB 模型
 
@@ -199,20 +200,20 @@ def _gen_demo(state: Dict[str, Any]) -> str:
 
   <h2>工作流</h2>
   <ol>
-    <li>VP 桌面客户端启动 → 音频 loopback 采集</li>
-    <li>会议结束 → ASR 转写(本地 funasr)</li>
-    <li>事实累积 → Meeting State JSON</li>
-    <li>6 文档自动生成(本页面是 demo 之一)</li>
+    <li>VP 桌面客户端启动 → 音频 loopback 采集 → 上传服务端</li>
+    <li>服务端实时 ASR 转写(funasr paraformer-zh)</li>
+    <li>事实累积 → Meeting State JSON(实时更新)</li>
+    <li>6 文档实时生成(本页面是 demo 之一)</li>
     <li>知识库入库,后续检索用 sqlite-vec</li>
   </ol>
 
-  <h2>本机部署</h2>
-  <pre><code># 一键安装
+  <h2>部署</h2>
+  <pre><code># 服务端一键安装
 curl -fsSL install.sh | bash
 
-# 启动
+# 启动服务端
 vpbuddy start
-# → Web UI: http://localhost:8765</code></pre>
+# → 客户端连接服务端地址即可使用</code></pre>
 
   <p class="meta">v1 · 最后更新:{datetime.now().isoformat()}</p>
 </body>
