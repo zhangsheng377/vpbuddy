@@ -35,11 +35,6 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "windows": {
-      "wix": {
-        "skipWebviewInstall": true
-      }
-    },
     "linux": {
       "deb": {
         "depends": [
