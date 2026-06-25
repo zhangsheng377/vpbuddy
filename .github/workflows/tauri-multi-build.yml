@@ -113,8 +113,9 @@ jobs:
         run: npm ci || npm install
 
       - name: Tauri build (Linux)
+        # 2026-06-25: cargo tauri 不是 cargo subcommand, 用 npx 调 npm 包
         working-directory: vpbuddy-client/src-tauri
-        run: cargo tauri build --bundles deb,appimage
+        run: npx tauri build --bundles deb,appimage
 
       - name: Upload .deb + .AppImage artifacts
         uses: actions/upload-artifact@v4
@@ -154,7 +155,7 @@ jobs:
 
       - name: Tauri build (macOS universal arm64 and x86_64)
         working-directory: vpbuddy-client/src-tauri
-        run: cargo tauri build --bundles app,dmg --target universal-apple-darwin
+        run: npx tauri build --bundles app,dmg --target universal-apple-darwin
 
       - name: Upload .dmg + .app artifacts
         uses: actions/upload-artifact@v4
@@ -201,7 +202,7 @@ jobs:
 
       - name: Tauri build (Windows)
         working-directory: vpbuddy-client/src-tauri
-        run: cargo tauri build --bundles msi,nsis
+        run: npx tauri build --bundles msi,nsis
 
       - name: Upload .msi + .exe artifacts
         uses: actions/upload-artifact@v4
