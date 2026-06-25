@@ -1,9 +1,29 @@
 // VPBuddy Desktop Client — Tauri 前端
 // 设计: 不依赖浏览器, 直接调 Tauri Rust 后端 (invoke)
 //       后端持续抓系统音频 + 推到 GPU server + 通过 SSE 回流 UI
+//
+// 2026-06-26: Tauri 2.6.3 稳定版去掉 window.__TAURI__,
+// 必须用 ESM import 从 @tauri-apps/api 导入.
+// Vite 构建时把 node_modules 里的包打进 bundle.
 
-const { invoke } = window.__TAURI__.core;
-const { listen } = window.__TAURI__.event;
+import { invoke as _invoke, convertFileSrc } from '@tauri-apps/api/core';
+import { listen as _listen } from '@tauri-apps/api/event';
+
+// 2026-06-26: Tauri 2.6.3 的 import 在 Vite 构建后正常工作.
+// 如果因为是直接加载 index.html (非 Vite 构建) 失败,
+// 尝试回退到 window.__TAURI__.
+let invoke = typeof _invoke === 'function' ? _invoke : undefined;
+let listen = typeof _listen === 'function' ? _listen : undefined;
+
+if (!invoke && window.__TAURI__ && window.__TAURI__.core) {
+  invoke = window.__TAURI__.core.invoke;
+  listen = window.__TAURI__.event.listen;
+  console.warn("Tauri API: 使用 window.__TAURI__ 回退模式");
+} else if (!invoke) {
+  console.warn("Tauri API 不可用 — 模拟模式 (UI 调试)");
+  invoke = () => Promise.reject(new Error("Tauri 未连接"));
+  listen = () => Promise.reject(new Error("Tauri 未连接"));
+}
 
 // === 状态 ===
 let recording = false;
