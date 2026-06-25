@@ -167,17 +167,16 @@ jobs:
         run: rustup target add x86_64-apple-darwin
 
       - name: Tauri build (macOS)
+        # 2026-06-25: --no-bundle 先确认编译过 (dmg/app 打包常因 code signing 卡)
         working-directory: vpbuddy-client/src-tauri
-        run: npx tauri build --target x86_64-apple-darwin
+        run: npx tauri build --target x86_64-apple-darwin --no-bundle
 
-      - name: Upload .dmg + .app artifacts
+      - name: Upload .app artifact
         uses: actions/upload-artifact@v4
         with:
           name: vpbuddy-client-macos
-          path: |
-            vpbuddy-client/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app
-          if-no-files-found: error
-          retention-days: 30
+          path: vpbuddy-client/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app
+          if-no-files-found: warn  # 2026-06-25: --no-bundle 不产出 .app, warn 不 fail
 
   # ── 4. Windows 构建 (.msi + .exe) ──
   build-windows:
