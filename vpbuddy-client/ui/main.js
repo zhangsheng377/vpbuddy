@@ -172,41 +172,40 @@ setInterval(() => {
 }, 3000);
 
 // 2026-06-27: doc-status SSE 事件直接写入对应 doc-block, 不再走单 viewer
+// 2026-06-27 v2: demo 走独立的 panel-demo iframe (不再 inline 替换 pre)
 listen("doc-status", (e) => {
   const { meeting_id, kind, state, status, count, content, doc_size, is_demo } = e.payload;
   if (meeting_id) currentMeetingId = meeting_id;
   const docState = state || status || "queued";
   const block = document.querySelector(`.doc-block[data-kind="${kind}"]`);
-  if (!block) return;
-  block.className = `doc-block ${docState}`;
-  const countEl = block.querySelector(".doc-count");
-  const stateEl = block.querySelector(".doc-state");
-  if (countEl) countEl.textContent = doc_size ? `${Math.ceil(doc_size / 1024)}KB` : (count || 0);
-  if (stateEl) {
-    stateEl.textContent =
-      docState === "stored" ? "✓ 已生成" :
-      docState === "queued" || docState === "triggered" ? "生成中…" :
-      docState === "failed" ? "✗ 失败" :
-      "待生成";
+  if (block) {
+    block.className = `doc-block ${docState}${kind === "demo" ? " doc-block-stub" : ""}`;
+    const countEl = block.querySelector(".doc-count");
+    const stateEl = block.querySelector(".doc-state");
+    if (countEl) {
+      countEl.textContent = kind === "demo" ? "-" :
+        (doc_size ? `${Math.ceil(doc_size / 1024)}KB` : (count || 0));
+    }
+    if (stateEl) {
+      stateEl.textContent =
+        kind === "demo" ? "已抽到独立页签" :
+        docState === "stored" ? "✓ 已生成" :
+        docState === "queued" || docState === "triggered" ? "生成中…" :
+        docState === "failed" ? "✗ 失败" :
+        "待生成";
+    }
   }
   if (kind && content) {
     docsByKind[kind] = { kind, status: docState, content, is_demo };
-    const body = block.querySelector(".doc-body");
-    if (body) {
-      if (kind === "demo" && is_demo) {
-        // demo 用 iframe 沙盒渲染 (保留 v0.2.1 行为)
-        let frame = block.querySelector(".demo-frame");
-        if (!frame) {
-          frame = document.createElement("iframe");
-          frame.className = "demo-frame";
-          frame.setAttribute("sandbox", "allow-scripts allow-forms");
-          body.replaceWith(frame);
-        }
-        frame.srcdoc = content;
-      } else {
-        body.textContent = content;
-      }
+    // 2026-06-27: demo 写到独立 panel-demo 的 iframe (全屏)
+    if (kind === "demo" && is_demo) {
+      const frame = document.getElementById("demo-iframe");
+      if (frame) frame.srcdoc = content;
+      return;
     }
+    // 其他 5 类写到自己 doc-block 的 body
+    const body = block?.querySelector(".doc-body");
+    if (body) body.textContent = content;
   }
 });
 
@@ -258,7 +257,7 @@ listen("gpu-connection", (e) => {
 // 实时结构化事实更新 (REQ/GOAL/FEAT/RISK/QUE)
 listen("state-update", (e) => {
   const stats = e.payload;
-  // 更新统计数字
+  // 2026-06-27: 5 类结构化事实降级到 stream 顶部 pill, 不再有 fact-list
   const reqEl = document.getElementById("fact-req");
   const goalEl = document.getElementById("fact-goal");
   const featEl = document.getElementById("fact-feat");
@@ -269,17 +268,6 @@ listen("state-update", (e) => {
   if (featEl) featEl.textContent = stats.features || 0;
   if (riskEl) riskEl.textContent = stats.risks || 0;
   if (queEl) queEl.textContent = stats.questions || 0;
-
-  // 如果有 items 详情，更新列表
-  const listEl = document.getElementById("fact-list");
-  if (listEl && stats.items && stats.items.length > 0) {
-    listEl.innerHTML = stats.items.map(item => `
-      <div class="fact-item-card">
-        <span class="fact-tag fact-tag-${item.type}">${item.type.toUpperCase()}</span>
-        <span class="fact-text">${escapeHtml(item.text)}</span>
-      </div>
-    `).join("");
-  }
 });
 
 // 2026-06-27: 6 文档改并列展示, 删除 click 切换 + refreshDocs + renderDoc 单 viewer

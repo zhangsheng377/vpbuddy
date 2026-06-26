@@ -26,6 +26,7 @@ urlencoding = "2"
 anyhow = "1"
 log = "0.4"
 env_logger = "0.11"
+chrono = "0.4"  # 客户端日志时间戳 (2026-06-27)
 
 [features]
 default = ["custom-protocol"]

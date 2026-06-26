@@ -40,6 +40,21 @@ html, body { font-family: -apple-system, "Segoe UI", sans-serif; background: var
 .rec-controls select { background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; padding: 6px 10px; font-size: 13px; }
 /* 2026-06-27: 实时波形图 — 60 帧历史, 绿柱=有声音, 平线=静音 */
 .waveform { display: block; width: 100%; height: 60px; background: var(--bg-panel); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 12px; }
+
+/* 2026-06-27: 5 类结构化事实降级为 stream 顶部的 pill */
+.fact-pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; background: var(--bg-surface); color: var(--text2); font-size: 11px; }
+.fact-pill .fact-label { font-weight: 500; }
+.fact-pill #fact-req,
+.fact-pill #fact-goal,
+.fact-pill #fact-feat,
+.fact-pill #fact-risk,
+.fact-pill #fact-que { color: var(--accent); font-weight: 600; min-width: 14px; text-align: center; }
+
+/* 2026-06-27: 演示页签独立 — 全屏 iframe */
+.demo-iframe-full { width: 100%; height: calc(100vh - 200px); min-height: 500px; border: 1px solid var(--border); border-radius: 8px; background: white; }
+
+/* 2026-06-27: doc-block 占位 (demo 已独立) */
+.doc-block-stub { opacity: 0.5; cursor: default; }
 .stream-info { font-size: 11px; color: var(--text2); font-family: ui-monospace, monospace; margin-bottom: 10px; }
 .stream-list { display: flex; flex-direction: column; gap: 6px; }
 .stream-item { background: var(--bg2); border: 1px solid var(--border); border-radius: 5px; padding: 8px 12px; font-size: 12px; }
@@ -87,20 +102,7 @@ html, body { font-family: -apple-system, "Segoe UI", sans-serif; background: var
 .bottom-nav button { flex: 1; padding: 12px; background: transparent; border: none; color: var(--text2); font-size: 12px; cursor: pointer; }
 .bottom-nav button.active { color: var(--accent); border-top: 2px solid var(--accent); }
 
-/* 结构化事实面板 */
-.fact-stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 16px; }
-.fact-item { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 12px 8px; text-align: center; }
-.fact-label { display: block; font-size: 10px; color: var(--text2); text-transform: uppercase; margin-bottom: 4px; }
-.fact-count { font-size: 24px; font-weight: 600; color: var(--text); }
-.fact-list { display: flex; flex-direction: column; gap: 6px; }
-.fact-item-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 5px; padding: 8px 12px; font-size: 12px; display: flex; gap: 8px; align-items: flex-start; }
-.fact-tag { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; flex-shrink: 0; }
-.fact-tag-req { background: rgba(94,106,210,0.2); color: #a8a8ff; }
-.fact-tag-goal { background: rgba(16,185,129,0.2); color: #6ee7b7; }
-.fact-tag-feat { background: rgba(245,158,11,0.2); color: #fbbf24; }
-.fact-tag-risk { background: rgba(239,68,68,0.2); color: #fca5a5; }
-.fact-tag-que { background: rgba(139,92,246,0.2); color: #c4b5fd; }
-.fact-text { color: var(--text); line-height: 1.5; }
+/* 2026-06-27: 删 .fact-stats/.fact-item/.fact-list/.fact-tag/* 等事实面板 dead CSS (改用 .fact-pill) */
 .settings-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 16px; max-width: 520px; display: flex; flex-direction: column; gap: 10px; }
 .settings-card label { color: var(--text2); font-size: 12px; }
 .settings-note { color: var(--text2); font-size: 12px; line-height: 1.6; }

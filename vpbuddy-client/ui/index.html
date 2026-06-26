@@ -41,27 +41,20 @@
           <span id="seg-count">0 段</span> · <span id="byte-count">0 KB</span> · <span id="up-count">0 上传</span> ·
           <span id="conn-status">SSE 未连接</span> · <span id="latency">延迟 -</span>
         </div>
+        <!-- 2026-06-27: 5 类结构化事实降级到 stream 面板顶部 summary (删 facts 独立页签) -->
+        <div class="stream-info" id="facts-summary">
+          <span class="fact-pill"><span class="fact-label">需求</span><span id="fact-req">0</span></span> ·
+          <span class="fact-pill"><span class="fact-label">目标</span><span id="fact-goal">0</span></span> ·
+          <span class="fact-pill"><span class="fact-label">功能</span><span id="fact-feat">0</span></span> ·
+          <span class="fact-pill"><span class="fact-label">风险</span><span id="fact-risk">0</span></span> ·
+          <span class="fact-pill"><span class="fact-label">问题</span><span id="fact-que">0</span></span>
+        </div>
         <div id="stream-list" class="stream-list"></div>
       </section>
 
-      <!-- 结构化事实 (5 类) -->
-      <section id="panel-facts" class="panel">
-        <h2>结构化事实 (实时累积)</h2>
-        <div class="fact-stats">
-          <div class="fact-item"><span class="fact-label">需求 REQ</span><span class="fact-count" id="fact-req">0</span></div>
-          <div class="fact-item"><span class="fact-label">目标 GOAL</span><span class="fact-count" id="fact-goal">0</span></div>
-          <div class="fact-item"><span class="fact-label">功能 FEAT</span><span class="fact-count" id="fact-feat">0</span></div>
-          <div class="fact-item"><span class="fact-label">风险 RISK</span><span class="fact-count" id="fact-risk">0</span></div>
-          <div class="fact-item"><span class="fact-label">问题 QUE</span><span class="fact-count" id="fact-que">0</span></div>
-        </div>
-        <div id="fact-list" class="fact-list">
-          <div style="color:var(--text2);padding:20px;text-align:center;">会议开始后自动累积...</div>
-        </div>
-      </section>
-
-      <!-- 6 docs 实时状态 (2026-06-27: 6 块并列展示, SSE 自动推流, 不需点击) -->
+      <!-- 会议产物 (2026-06-27: 6 文档 6 块并列, SSE 自动推流; 原 "6 docs") -->
       <section id="panel-docs" class="panel">
-        <h2>6 类文档 (实时生成 · SSE 自动刷新)</h2>
+        <h2>会议产物 (6 类文档 · SSE 自动刷新)</h2>
         <div id="docs-grid" class="docs-grid">
           <div class="doc-block" data-kind="req">
             <div class="doc-head"><span class="doc-kind">需求</span><span class="doc-count">0</span><span class="doc-state">待生成</span></div>
@@ -83,11 +76,18 @@
             <div class="doc-head"><span class="doc-kind">风险</span><span class="doc-count">0</span><span class="doc-state">待生成</span></div>
             <pre class="doc-body">等待 GPU 生成…</pre>
           </div>
-          <div class="doc-block" data-kind="demo">
-            <div class="doc-head"><span class="doc-kind">演示</span><span class="doc-count">0</span><span class="doc-state">待生成</span></div>
-            <pre class="doc-body">等待 GPU 生成…</pre>
+          <!-- 2026-06-27: demo 块独立成 panel, 此处只占位 -->
+          <div class="doc-block doc-block-stub" data-kind="demo">
+            <div class="doc-head"><span class="doc-kind">演示</span><span class="doc-count">-</span><span class="doc-state">已抽到独立页签</span></div>
+            <pre class="doc-body">点击底部 "演示" 页签查看</pre>
           </div>
         </div>
+      </section>
+
+      <!-- 演示 (2026-06-27: 独立页签, 全屏 iframe 展示) -->
+      <section id="panel-demo" class="panel">
+        <h2>演示 (SSE 自动推流)</h2>
+        <iframe id="demo-iframe" class="demo-iframe-full" sandbox="allow-scripts allow-forms"></iframe>
       </section>
 
       <!-- 知识库检索 -->
@@ -134,8 +134,8 @@
 
     <nav class="bottom-nav">
       <button data-panel="stream" class="active">转写</button>
-      <button data-panel="facts">事实</button>
-      <button data-panel="docs">6 文档</button>
+      <button data-panel="docs">产物</button>
+      <button data-panel="demo">演示</button>
       <button data-panel="kb">知识库</button>
       <button data-panel="chat">Chat</button>
       <button data-panel="settings">设置</button>

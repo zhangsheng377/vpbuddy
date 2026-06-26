@@ -54,13 +54,21 @@ async fn start_capture(
     if state.capturing.load(Ordering::SeqCst) {
         return Err("已在采集中".into());
     }
+    log::info!("=== start_capture 触发 ===");
+    log::info!("  audio_device: {:?}", audio_device);
+    log::info!("  auto_upload: {}", auto_upload);
 
     // 1. 在 GPU 端创建会议 + 取 meeting_id
     // 2026-06-26: gpu_url 改 Arc<Mutex>, 需要 lock().await
     let gpu_url = state.gpu_url.lock().await.clone();
+    log::info!("  POST {}/api/meetings/stream_start", gpu_url);
     let meeting_id = upload::create_meeting(&gpu_url)
         .await
-        .map_err(|e| format!("创建会议失败: {e}"))?;
+        .map_err(|e| {
+            log::error!("创建会议失败: {e}");
+            format!("创建会议失败: {e}")
+        })?;
+    log::info!("  ✓ meeting_id: {meeting_id}");
     *state.meeting_id.lock().await = Some(meeting_id.clone());
 
     state.capturing.store(true, Ordering::SeqCst);
@@ -113,9 +121,13 @@ async fn start_capture(
 /// 停止采集
 #[tauri::command]
 async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
+    log::info!("=== stop_capture 触发 ===");
     state.capturing.store(false, Ordering::SeqCst);
     if let Some(h) = state.capture_handle.lock().await.take() {
         h.abort();
+        log::info!("  采集 task 已 abort");
+    } else {
+        log::warn!("  capture_handle 为空, 没在跑采集?");
     }
     Ok(())
 }
@@ -123,7 +135,18 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
 /// 2026-06-25: 枚举系统音频输入设备 (cherry-pick from feature 分支)
 #[tauri::command]
 async fn list_audio_devices() -> Result<Vec<audio::AudioDeviceInfo>, String> {
-    audio::list_input_devices().map_err(|e| format!("获取音频设备失败: {e}"))
+    log::info!("list_audio_devices 调用");
+    let r = audio::list_input_devices().map_err(|e| {
+        log::error!("枚举音频设备失败: {e}");
+        format!("获取音频设备失败: {e}")
+    });
+    if let Ok(ref devs) = r {
+        log::info!("  找到 {} 个输入设备:", devs.len());
+        for d in devs {
+            log::info!("    - {} {}{}", d.name, d.id, if d.is_default { " [默认]" } else { "" });
+        }
+    }
+    r
 }
 
 /// 2026-06-26: 运行时修改 GPU server 地址 (设置页填)
@@ -173,17 +196,37 @@ async fn run_capture_loop(
     let capturing_bg = capturing.clone();
     let _capture_handle = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
         // 2026-06-25: 用 new_with_device 支持指定输入设备 (cherry-pick from feature 分支)
-        let mut capture = AudioCapture::new_with_device(audio_device)?;
+        log::info!("cpal: new_with_device({:?})", audio_device);
+        let mut capture = match AudioCapture::new_with_device(audio_device) {
+            Ok(c) => {
+                log::info!("  ✓ AudioCapture 初始化成功 (host={:?})", cpal::default_host().id());
+                c
+            }
+            Err(e) => {
+                log::error!("  ✗ AudioCapture 初始化失败: {e}");
+                log::error!("  → 检查: 麦克风权限 / PulseAudio/PipeWire / 其他进程独占");
+                return Err(e);
+            }
+        };
         let sample_rate = 16000u32;
+        let mut chunk_count: u64 = 0;
         while capturing_bg.load(Ordering::SeqCst) {
             // 0.5s blocking read — cpal 流在 std context (不需要 Send)
             let samples = capture.read_chunk_blocking(0.5, sample_rate)?;
+            chunk_count += 1;
+            if chunk_count == 1 {
+                log::info!("cpal: 第一个 chunk 收到 {} samples ({:.1}s @ {}Hz)",
+                    samples.len(), samples.len() as f32 / sample_rate as f32, sample_rate);
+            } else if chunk_count % 60 == 0 {
+                log::debug!("cpal: 已读 {} chunks ({}s 音频)", chunk_count, chunk_count as f32 * 0.5);
+            }
             // send 是 async 的, 但我们在 blocking context → 用 blocking_send
             if let Err(e) = tx.blocking_send(samples) {
                 log::warn!("audio channel closed: {e}");
                 break;
             }
         }
+        log::info!("cpal: 退出采集循环, 共读 {} chunks", chunk_count);
         Ok(())
     });
 
@@ -194,6 +237,8 @@ async fn run_capture_loop(
     // 2026-06-25: 切片序号 (TRAE upload_chunk API 需要)
     let mut chunk_index: u64 = 0;
     let mut total_elapsed_sec: f32 = 0.0;
+    // 2026-06-27: 累计 0-RMS 帧数, 30s 内全是 0 (即 60 帧) 就 warn 一次
+    let mut silence_streak: u32 = 0;
 
     // 2. tokio task 拼切片 + POST
     while capturing.load(Ordering::SeqCst) {
@@ -210,6 +255,10 @@ async fn run_capture_loop(
             "bytes": n,
             "uploads": ups.load(Ordering::SeqCst),
         }));
+        if n > 0 && chunk_index == 0 && buffer.len() < chunk_samples {
+            log::info!("buffering: {} / {} samples ({:.0}%)",
+                buffer.len(), chunk_samples, buffer.len() as f32 / chunk_samples as f32 * 100.0);
+        }
 
         // 2026-06-27: 算 RMS (均方根) 当波形图高度, emit 给前端画 canvas
         // 范围 0.0-1.0: 静音≈0, 正常说话 0.05-0.3, 大声 0.5+
@@ -224,6 +273,23 @@ async fn run_capture_loop(
             "rms": rms.min(1.0),
             "samples": samples.len(),
         }));
+
+        // 30s 内一直静音 → 提示用户 (麦克风没声音最常见征兆)
+        if rms < 0.001 {
+            silence_streak += 1;
+            if silence_streak == 30 {
+                log::warn!("⚠️ 已连续 {}s 采集到静音 (RMS≈0)", silence_streak as f32 * 0.5);
+                log::warn!("   可能原因: 1) 麦克风没启用 2) 选了错的设备 3) 系统静音/物理静音");
+                log::warn!("   建议: 切右上角下拉选其他设备, 或在 '设置' 里确认");
+            } else if silence_streak == 120 {
+                log::warn!("⚠️ 已连续 {}s 静音, 用户可能没注意到", silence_streak as f32 * 0.5);
+            }
+        } else {
+            if silence_streak >= 30 {
+                log::info!("✓ 恢复声音 (静默 {}s 后)", silence_streak as f32 * 0.5);
+            }
+            silence_streak = 0;
+        }
 
         // 满 30s 就切片上传
         if buffer.len() >= chunk_samples && auto_upload {
@@ -482,7 +548,45 @@ fn handle_sse_event(app: &AppHandle, event_str: &str, last_event_id: &mut Option
 }
 
 fn main() {
-    env_logger::init();
+    // 2026-06-27: 客户端日志写文件 ~/.vpbuddy-client.log (排查 "采集不到声音" 等问题)
+    // - 同时输出到 stderr (开发可见)
+    // - 文件追加模式, 每次启动分隔一行 banner
+    let log_path = std::env::var("VPBUDDY_CLIENT_LOG")
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+            format!("{home}/.vpbuddy-client.log")
+        });
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .ok();
+    // 拼 stderr + 可选文件 双输出
+    let mut builder = env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("info,reqwest=warn,ureq=warn,h2=warn"),
+    );
+    builder.format(|buf, record| {
+        use std::io::Write;
+        writeln!(
+            buf,
+            "[{}] [{}] [{}:{}] {}",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+            record.level(),
+            record.module_path().unwrap_or("?"),
+            record.line().unwrap_or(0),
+            record.args()
+        )
+    });
+    if let Some(file) = log_file {
+        builder.target(env_logger::Target::Pipe(Box::new(file)));
+    }
+    builder.init();
+    log::info!("=== VPBuddy client 启动 (Tauri 2) ===");
+    log::info!("日志文件: {}", log_path);
+    log::info!("GPU server URL: {}", std::env::var("VPBUDDY_GPU_URL").unwrap_or_else(|_| "http://192.168.10.63:8765 (默认)".into()));
+    log::info!("音频 host: {:?}, 默认输出设备: 待采集时打印",
+        cpal::default_host().id());
+
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .manage(AppState::new())
