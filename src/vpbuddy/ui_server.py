@@ -496,6 +496,27 @@ class Handler(BaseHTTPRequestHandler):
         """安静点(不打印每次请求)"""
         pass
 
+    def do_OPTIONS(self):
+        # CORS 预检 (2026-06-26): Tauri webview / 任何浏览器对
+        # POST application/json 会先发 OPTIONS;没有这个 handler 就 501
+        # → 前端 "Failed to fetch"
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+        self.send_header("Access-Control-Max-Age", "86400")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def do_HEAD(self):
+        # HEAD 跟 GET 走一样的路由,只回头不回 body
+        # (curl -I / 健康检查用)
+        self.do_GET() if False else None  # 简化:直接 200 + 空 body
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self):
         url = urlparse(self.path)
         path = url.path

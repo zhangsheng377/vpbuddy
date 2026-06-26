@@ -266,6 +266,80 @@ async fn kb_search(
     Ok(body["results"].as_array().cloned().unwrap_or_default())
 }
 
+/// 2026-06-26: fetch 改 invoke 系列 — 解决 Tauri webview 跨域 + CORS 预检
+/// 之前前端用 `fetch(gpu_url + /api/meetings/.../chat)` 在 webview 里
+/// 会因为 (a) 跨域 fetch 受限 (b) POST application/json 触发 OPTIONS 预检
+/// → "Failed to fetch"。全部走 Rust reqwest 经 Tauri IPC 转发。
+
+#[tauri::command]
+async fn fetch_meeting_docs(
+    state: State<'_, AppState>,
+    meeting_id: String,
+) -> Result<serde_json::Value, String> {
+    let url = format!(
+        "{}/api/meetings/{}/docs",
+        state.gpu_url.lock().await,
+        urlencoding::encode(&meeting_id)
+    );
+    let resp = reqwest::get(&url)
+        .await
+        .map_err(|e| format!("Docs 请求失败: {e}"))?;
+    let body: serde_json::Value = resp.json()
+        .await
+        .map_err(|e| format!("Docs 解析失败: {e}"))?;
+    Ok(body)
+}
+
+#[tauri::command]
+async fn fetch_meeting_chat_history(
+    state: State<'_, AppState>,
+    meeting_id: String,
+) -> Result<serde_json::Value, String> {
+    let url = format!(
+        "{}/api/meetings/{}/chat",
+        state.gpu_url.lock().await,
+        urlencoding::encode(&meeting_id)
+    );
+    let resp = reqwest::get(&url)
+        .await
+        .map_err(|e| format!("Chat 历史请求失败: {e}"))?;
+    let body: serde_json::Value = resp.json()
+        .await
+        .map_err(|e| format!("Chat 历史解析失败: {e}"))?;
+    Ok(body)
+}
+
+#[tauri::command]
+async fn post_meeting_chat(
+    state: State<'_, AppState>,
+    meeting_id: String,
+    message: String,
+    context: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let url = format!(
+        "{}/api/meetings/{}/chat",
+        state.gpu_url.lock().await,
+        urlencoding::encode(&meeting_id)
+    );
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(150))
+        .build()
+        .map_err(|e| format!("Client 构建失败: {e}"))?;
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({
+            "message": message,
+            "context": context,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("Chat 发送失败: {e}"))?;
+    let body: serde_json::Value = resp.json()
+        .await
+        .map_err(|e| format!("Chat 响应解析失败: {e}"))?;
+    Ok(body)
+}
+
 /// SSE 接收主循环: 连接服务端事件流, 自动重连, 实时推送给前端
 /// (2026-06-25 cherry-pick from feature/requirements-architecture-update 9bf5e18)
 async fn run_sse_loop(
@@ -435,6 +509,9 @@ fn main() {
             set_gpu_url,
             get_gpu_url,
             kb_search,
+            fetch_meeting_docs,
+            fetch_meeting_chat_history,
+            post_meeting_chat,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

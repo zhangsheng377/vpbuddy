@@ -188,18 +188,10 @@ document.getElementById("btn-refresh-docs").addEventListener("click", refreshDoc
 
 async function refreshDocs() {
   if (!currentMeetingId) return;
-  // 2026-06-26: 不走 Tauri invoke, 直接用 fetch 调 GPU server REST API
-  // 需要 GPU URL — 从 Rust 端获取
-  let gpuUrl;
+  // 2026-06-26: 走 Tauri invoke (Rust reqwest), 不再 webview fetch
+  // 原因: webview fetch 跨域受限 + POST application/json 触发 OPTIONS 预检 → Failed to fetch
   try {
-    gpuUrl = await invoke("get_gpu_url");
-  } catch (_) {
-    gpuUrl = localStorage.getItem("vpbuddy-gpu-url") || "http://192.168.10.63:8765";
-  }
-  try {
-    const resp = await fetch(gpuUrl + "/api/meetings/" + currentMeetingId + "/docs");
-    if (!resp.ok) throw new Error("HTTP " + resp.status);
-    const result = await resp.json();
+    const result = await invoke("fetch_meeting_docs", { meetingId: currentMeetingId });
     docsByKind = {};
     for (const doc of (result.docs || [])) {
       docsByKind[doc.kind] = doc;
@@ -280,18 +272,15 @@ async function sendChat() {
   input.value = "";
   document.getElementById("chat-status").textContent = "Hermes 正在思考...";
   try {
-    const gu = await getGpuUrl();
-    const resp = await fetch(gu + "/api/meetings/" + currentMeetingId + "/chat", {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({
-        message,
-        context: {
-          active_panel: document.querySelector(".bottom-nav button.active")?.dataset.panel || "chat",
-          selected_doc_kind: document.querySelector(".doc-card.stored")?.dataset.kind || null,
-        }
-      })
+    // 2026-06-26: 走 invoke (Rust reqwest), 不再 webview fetch
+    const result = await invoke("post_meeting_chat", {
+      meetingId: currentMeetingId,
+      message,
+      context: {
+        active_panel: document.querySelector(".bottom-nav button.active")?.dataset.panel || "chat",
+        selected_doc_kind: document.querySelector(".doc-card.stored")?.dataset.kind || null,
+      },
     });
-    const result = await resp.json();
     if (result.user_message) renderChatMessage(result.user_message);
     if (result.assistant_message) renderChatMessage(result.assistant_message);
     document.getElementById("chat-status").textContent = "Hermes 已回复";
@@ -303,10 +292,8 @@ async function sendChat() {
 async function refreshChatHistory() {
   if (!currentMeetingId) return;
   try {
-    const gu = await getGpuUrl();
-    const resp = await fetch(gu + "/api/meetings/" + currentMeetingId + "/chat");
-    if (!resp.ok) return;
-    const result = await resp.json();
+    // 2026-06-26: 走 invoke (Rust reqwest), 不再 webview fetch
+    const result = await invoke("fetch_meeting_chat_history", { meetingId: currentMeetingId });
     for (const msg of (result.messages || [])) renderChatMessage(msg);
   } catch (e) {
     console.warn("读取 Chat 历史失败", e);
