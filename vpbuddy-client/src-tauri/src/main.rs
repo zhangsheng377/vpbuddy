@@ -23,11 +23,13 @@ pub struct AppState {
     pub capture_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     pub total_bytes: Arc<AtomicU64>,
     pub total_uploads: Arc<AtomicU64>,
-    /// 2026-06-26: 改 Mutex 支持运行时修改 (设置页 GPU URL 输入)
+    /// 2026-06-27: 改 Mutex 支持运行时修改 (设置页 GPU URL 输入)
     pub gpu_url: Arc<Mutex<String>>,
     pub meeting_id: Arc<Mutex<Option<String>>>,
     /// 2026-06-27: 客户端日志路径 (init 时填, 设置页 invoke get_log_path 读)
     pub log_path: Arc<Mutex<String>>,
+    /// 2026-06-27: 设备原生采样率 (capture 创建时填), 主循环用来 resample 16kHz
+    pub native_sample_rate: Arc<AtomicU32>,
 }
 
 /// 2026-06-27: 全局日志路径, get_log_path invoke 命令读这里
@@ -49,6 +51,8 @@ impl AppState {
             gpu_url: Arc::new(Mutex::new(url)),
             meeting_id: Arc::new(Mutex::new(None)),
             log_path: Arc::new(Mutex::new(String::new())),
+            // 2026-06-27: 初始 16000 (假设 16kHz native), capture 创建时更新到设备实际值
+            native_sample_rate: Arc::new(AtomicU32::new(16000)),
         }
     }
 }
@@ -92,6 +96,8 @@ async fn start_capture(
     let capturing = state.capturing.clone();
     let bytes = state.total_bytes.clone();
     let ups = state.total_uploads.clone();
+    // 2026-06-27: 共享 native 采样率, spawn_blocking 写, 主循环读 + resample
+    let native_rate = state.native_sample_rate.clone();
     let app_clone = app.clone();
 
     let handle = tokio::spawn(async move {
@@ -114,6 +120,7 @@ async fn start_capture(
             ups,
             auto_upload,
             audio_device,
+            native_rate,
         )
         .await
         {
@@ -219,6 +226,8 @@ async fn run_capture_loop(
     ups: Arc<AtomicU64>,
     auto_upload: bool,
     audio_device: Option<String>,
+    /// 2026-06-27: 共享 capture 设备原生采样率, 主循环 resample 用
+    native_rate: Arc<AtomicU32>,
 ) -> anyhow::Result<()> {
     use tokio::sync::mpsc as tmpsc;
     let (tx, mut rx) = tmpsc::channel::<Vec<i16>>(64);
@@ -231,6 +240,9 @@ async fn run_capture_loop(
         let mut capture = match AudioCapture::new_with_device(audio_device) {
             Ok(c) => {
                 log::info!("  ✓ AudioCapture 初始化成功 (host={:?})", cpal::default_host().id());
+                // 2026-06-27: 把设备 native 采样率写到共享 atomic, 主循环 resample 用
+                native_rate.store(c.native_sample_rate(), Ordering::SeqCst);
+                log::info!("  → native_sample_rate = {}", c.native_sample_rate());
                 c
             }
             Err(e) => {
@@ -243,7 +255,8 @@ async fn run_capture_loop(
         let mut chunk_count: u64 = 0;
         while capturing_bg.load(Ordering::SeqCst) {
             // 0.5s blocking read — cpal 流在 std context (不需要 Send)
-            let samples = capture.read_chunk_blocking(0.5, sample_rate)?;
+            // 2026-06-27: read_chunk_blocking 现在内部用 capture.native_sample_rate (设备原生)
+            let samples = capture.read_chunk_blocking(0.5)?;
             chunk_count += 1;
             if chunk_count == 1 {
                 log::info!("cpal: 第一个 chunk 收到 {} samples ({:.1}s @ {}Hz)",
@@ -277,7 +290,15 @@ async fn run_capture_loop(
             Some(s) => s,
             None => break,  // channel 关闭 (cpal 异常退出)
         };
-        buffer.extend(samples.iter().copied());
+        // 2026-06-27: 设备 native 采样率 != 16kHz 时, 软件重采样到 16kHz
+        // (cpal 用设备原生采样率避免 WASAPI 拒 16kHz, 主循环做重采样)
+        let native = native_rate.load(Ordering::SeqCst);
+        if native == sample_rate || native == 0 {
+            buffer.extend(samples.iter().copied());
+        } else {
+            let resampled = audio::resample_linear(&samples, native, sample_rate);
+            buffer.extend(resampled);
+        }
 
         // 累计字节数
         let n = (buffer.len() * 2) as u64;

@@ -18,6 +18,8 @@ pub struct AudioDeviceInfo {
 pub struct AudioCapture {
     _stream: cpal::Stream,
     rx: mpsc::Receiver<Vec<i16>>,
+    /// 2026-06-27: 设备原生采样率, read_chunk_blocking 用来重采样到目标 16kHz
+    native_sample_rate: u32,
 }
 
 impl AudioCapture {
@@ -27,6 +29,8 @@ impl AudioCapture {
 
     /// 2026-06-25: cherry-pick from feature/requirements-architecture-update
     /// device_id=None 用系统默认, 否则按 name 匹配
+    /// 2026-06-27: 用设备原生采样率 (不写死 16kHz, Realtek/WASAPI 不支持会 fail)
+    ///            然后在 read_chunk_blocking 重采样到目标 16kHz
     pub fn new_with_device(device_id: Option<String>) -> Result<Self> {
         let host = cpal::default_host();
         let device = if let Some(id) = device_id {
@@ -41,33 +45,71 @@ impl AudioCapture {
                 .context("找不到默认输入设备 (麦克风/loopback)")?
         };
 
+        // 2026-06-27 修: 取设备支持的默认采样率 (而不是写死 16kHz)
+        // supported_input_configs 第一个 = 设备偏好的默认配置
+        let supported = device
+            .supported_input_configs()
+            .context("无法读取设备支持的输入配置")?;
+        let cfg = supported
+            .find(|c| c.channels() == 1)
+            .or_else(|| supported.max_by_key(|c| c.channels()))
+            .context("设备没有任何支持的输入配置")?;
+        let native_sample_rate = cfg.max_sample_rate().0;
+        log::info!(
+            "cpal: 设备 {:?} 原生采样率 {}Hz, {} ch, format {:?}",
+            device.name().unwrap_or_default(),
+            native_sample_rate,
+            cfg.channels(),
+            cfg.sample_format()
+        );
+
         let config = cpal::StreamConfig {
-            channels: 1,
-            sample_rate: cpal::SampleRate(16000),
+            channels: cfg.channels(),
+            sample_rate: cpal::SampleRate(native_sample_rate),
             buffer_size: cpal::BufferSize::Default,
         };
+        let channels = cfg.channels() as usize;
 
         let (tx, rx) = mpsc::sync_channel::<Vec<i16>>(64);
         let stream = device.build_input_stream(
             &config,
             move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                // 复制到 channel (小批量)
-                let _ = tx.try_send(data.to_vec());
+                // 多声道 → 单声道 downmix
+                let mono: Vec<i16> = if channels == 1 {
+                    data.to_vec()
+                } else {
+                    data.chunks(channels)
+                        .map(|frame| {
+                            let sum: i32 = frame.iter().map(|&s| s as i32).sum();
+                            (sum / channels as i32) as i16
+                        })
+                        .collect()
+                };
+                let _ = tx.try_send(mono);
             },
             |err| log::error!("cpal stream error: {err}"),
             None,
         )?;
 
         stream.play()?;
-        Ok(Self { _stream: stream, rx })
+        log::info!(
+            "cpal: 采集循环启动 — native {}Hz, target 16kHz (软件重采样)",
+            native_sample_rate
+        );
+        Ok(Self { _stream: stream, rx, native_sample_rate })
     }
 
-    /// 读 N 秒的 audio (blocking — 用于 spawn_blocking context)
+    /// 2026-06-27: 给外部读 native 采样率 (主循环 resample 用)
+    pub fn native_sample_rate(&self) -> u32 { self.native_sample_rate }
+
+    /// 读 N 秒 native 采样率 audio (blocking — 用于 spawn_blocking context)
     /// ⚠️ 不能 .await — cpal::Stream 持有 *mut () 跨 await 不是 Send.
     /// 必须在 spawn_blocking 跑, 跟 run_capture_loop 的设计配套.
     /// 取代之前的 async fn read_chunk (持有 cpal::Stream 跨 await 不是 Send, 已废)
-    pub fn read_chunk_blocking(&mut self, seconds: f32, sample_rate: u32) -> Result<Vec<i16>> {
-        let needed = (sample_rate as f32 * seconds) as usize;
+    /// 2026-06-27: 改成内部用 self.native_sample_rate, 不再传参
+    ///            (主循环想要 16kHz 切片时, 调用 resample_to 单独处理)
+    pub fn read_chunk_blocking(&mut self, seconds: f32) -> Result<Vec<i16>> {
+        let needed = (self.native_sample_rate as f32 * seconds) as usize;
         let mut out = Vec::with_capacity(needed);
         let timeout = Duration::from_millis(1000);
         let deadline = std::time::Instant::now() + timeout;
@@ -87,6 +129,29 @@ impl AudioCapture {
         }
         Ok(out)
     }
+}
+
+/// 2026-06-27: 线性插值重采样 (单声道 i16). 用于 native 48kHz → target 16kHz 等.
+/// 工业标准做法: cpal 用设备原生采样率, 客户端软件重采样到 funasr 期望的 16kHz.
+/// 简单线性插值足够 funasr inference (它会自己提取特征), 不需要 sinc/polyphase.
+pub fn resample_linear(samples: &[i16], from_rate: u32, to_rate: u32) -> Vec<i16> {
+    if from_rate == to_rate || samples.is_empty() {
+        return samples.to_vec();
+    }
+    let ratio = from_rate as f64 / to_rate as f64;  // >1 表示下采样
+    let out_len = (samples.len() as f64 / ratio) as usize;
+    let mut out = Vec::with_capacity(out_len);
+    for i in 0..out_len {
+        let src_pos = i as f64 * ratio;
+        let i0 = src_pos.floor() as usize;
+        let i1 = (i0 + 1).min(samples.len().saturating_sub(1));
+        let frac = src_pos - i0 as f64;
+        let v0 = samples[i0] as f64;
+        let v1 = samples[i1] as f64;
+        let v = v0 + (v1 - v0) * frac;
+        out.push(v.round().clamp(i16::MIN as f64, i16::MAX as f64) as i16);
+    }
+    out
 }
 
 /// 2026-06-25: 枚举系统音频输入设备 (cherry-pick from feature 分支)
