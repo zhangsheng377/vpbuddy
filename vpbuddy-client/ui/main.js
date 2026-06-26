@@ -334,7 +334,7 @@ async function sendChat() {
       message,
       context: {
         active_panel: document.querySelector(".bottom-nav button.active")?.dataset.panel || "chat",
-        selected_doc_kind: document.querySelector(".doc-card.stored")?.dataset.kind || null,
+        selected_doc_kind: document.querySelector(".doc-block.stored")?.dataset.kind || null,
       },
     });
     if (result.user_message) renderChatMessage(result.user_message);

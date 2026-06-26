@@ -291,8 +291,10 @@ async fn fetch_meeting_chat_history(
     state: State<'_, AppState>,
     meeting_id: String,
 ) -> Result<serde_json::Value, String> {
+    // 2026-06-27 修: GET /api/meetings/{id}/chat 在 ui_server.py 返回 404
+    // (do_GET 只匹配 endswith("/chat/history")), 改成 history 路径
     let url = format!(
-        "{}/api/meetings/{}/chat",
+        "{}/api/meetings/{}/chat/history",
         state.gpu_url.lock().await,
         urlencoding::encode(&meeting_id)
     );

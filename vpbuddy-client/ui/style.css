@@ -48,21 +48,23 @@ html, body { font-family: -apple-system, "Segoe UI", sans-serif; background: var
 .spk-00 { background: rgba(94,106,210,0.2); color: #a8a8ff; }
 .spk-01 { background: rgba(16,185,129,0.2); color: #6ee7b7; }
 .spk-02 { background: rgba(245,158,11,0.2); color: #fbbf24; }
-.docs-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-.doc-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 14px; text-align: center; }
-.doc-kind { font-size: 11px; color: var(--text2); text-transform: uppercase; margin-bottom: 6px; }
-.doc-count { font-size: 28px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
-.doc-state { font-size: 10px; color: var(--text2); }
-.doc-card.stored .doc-state { color: var(--success); }
-.doc-card.queued .doc-state { color: var(--warning); }
-.doc-card.failed .doc-state { color: var(--danger); }
-.doc-card { cursor: pointer; transition: border-color .15s ease, transform .15s ease; }
-.doc-card:hover { border-color: var(--accent); transform: translateY(-1px); }
-.doc-viewer { margin-top: 14px; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-.doc-toolbar { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--border); color: var(--text2); font-size: 12px; }
-.doc-toolbar button { background: var(--bg3); color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 6px 10px; cursor: pointer; font-size: 12px; }
-.doc-content { min-height: 260px; max-height: 420px; overflow: auto; white-space: pre-wrap; padding: 14px; color: var(--text); background: transparent; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; line-height: 1.6; }
-.demo-frame { display: none; width: 100%; height: 460px; border: 0; background: white; }
+/* 2026-06-27: 6 文档改并列展示, .doc-card 改名为 .doc-block, 加 .doc-head/.doc-body */
+.docs-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.doc-block { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; min-height: 180px; max-height: 320px; transition: border-color .15s ease; }
+.doc-block.stored { border-color: var(--success); }
+.doc-block.queued, .doc-block.triggered { border-color: var(--warning); }
+.doc-block.failed { border-color: var(--danger); }
+.doc-block .doc-head { display: flex; justify-content: space-between; align-items: center; padding-bottom: 8px; border-bottom: 1px solid var(--border); margin-bottom: 8px; }
+.doc-block .doc-kind { font-size: 12px; color: var(--text2); text-transform: uppercase; font-weight: 500; }
+.doc-block .doc-count { font-size: 11px; color: var(--text2); font-family: ui-monospace, monospace; }
+.doc-block .doc-state { font-size: 10px; padding: 2px 6px; border-radius: 3px; background: var(--bg3); color: var(--text2); }
+.doc-block .doc-body { flex: 1; margin: 0; padding: 4px; font-size: 11px; line-height: 1.5; color: var(--text-primary); overflow-y: auto; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, monospace; }
+.doc-block .doc-body::-webkit-scrollbar { width: 4px; }
+.doc-block .doc-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.doc-block .demo-frame { flex: 1; width: 100%; border: none; background: white; border-radius: 4px; }
+.doc-block.stored .doc-state { background: rgba(16,185,129,0.2); color: var(--success); }
+.doc-block.queued .doc-state, .doc-block.triggered .doc-state { background: rgba(245,158,11,0.2); color: var(--warning); }
+.doc-block.failed .doc-state { background: rgba(239,68,68,0.2); color: var(--danger); }
 .kb-search { display: flex; gap: 8px; margin-bottom: 12px; }
 .kb-search input { flex: 1; background: var(--bg2); color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 8px 12px; font-size: 13px; }
 .kb-search button { background: var(--accent); color: white; border: none; padding: 8px 16px; border-radius: 5px; cursor: pointer; }
