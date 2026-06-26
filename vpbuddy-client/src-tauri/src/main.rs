@@ -234,6 +234,7 @@ async fn run_capture_loop(
 
     // 1. spawn_blocking 跑 cpal 采集 — 不要求 Send (跑在专用 blocking pool)
     let capturing_bg = capturing.clone();
+    let native_rate_bg = native_rate.clone();  // 2026-06-27: clone 给 bg, 主循环保留自己的
     let _capture_handle = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
         // 2026-06-25: 用 new_with_device 支持指定输入设备 (cherry-pick from feature 分支)
         log::info!("cpal: new_with_device({:?})", audio_device);
@@ -241,7 +242,7 @@ async fn run_capture_loop(
             Ok(c) => {
                 log::info!("  ✓ AudioCapture 初始化成功 (host={:?})", cpal::default_host().id());
                 // 2026-06-27: 把设备 native 采样率写到共享 atomic, 主循环 resample 用
-                native_rate.store(c.native_sample_rate(), Ordering::SeqCst);
+                native_rate_bg.store(c.native_sample_rate(), Ordering::SeqCst);
                 log::info!("  → native_sample_rate = {}", c.native_sample_rate());
                 c
             }
