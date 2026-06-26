@@ -226,7 +226,7 @@ async fn run_capture_loop(
     ups: Arc<AtomicU64>,
     auto_upload: bool,
     audio_device: Option<String>,
-    /// 2026-06-27: 共享 capture 设备原生采样率, 主循环 resample 用
+    // 2026-06-27: 共享 capture 设备原生采样率, 主循环 resample 用
     native_rate: Arc<AtomicU32>,
 ) -> anyhow::Result<()> {
     use tokio::sync::mpsc as tmpsc;
