@@ -365,6 +365,16 @@ async function initAudioDevices() {
   try {
     const select = document.getElementById("audio-device");
     const devices = await invoke("list_audio_devices");
+    // 2026-06-27: 0 设备要醒目提示 (常见于: Win 隐私设置禁麦克风 / 没插麦)
+    if (devices.length === 0) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "⚠️ 未检测到任何输入设备";
+      select.appendChild(opt);
+      const recStatus = document.getElementById("rec-status");
+      if (recStatus) recStatus.textContent = "⚠️ 无输入设备 — 检查 Windows 麦克风隐私设置";
+      return;
+    }
     for (const d of devices) {
       const opt = document.createElement("option");
       opt.value = d.id;
@@ -373,6 +383,9 @@ async function initAudioDevices() {
     }
   } catch (e) {
     console.warn("获取音频设备失败", e);
+    // 2026-06-27: invoke 失败也提示 (cpal 初始化错误)
+    const recStatus = document.getElementById("rec-status");
+    if (recStatus) recStatus.textContent = "❌ 音频设备枚举失败: " + e;
   }
 }
 
@@ -383,12 +396,14 @@ document.getElementById("ui-lang").addEventListener("change", (e) => {
   document.getElementById("rec-status").textContent = recording ? t("capturing") : t("idle");
 });
 
-// GPU URL 保存按钮 (2026-06-26)
+// GPU URL 保存按钮 (2026-06-27)
 document.getElementById("btn-save-url").addEventListener("click", async () => {
   const url = document.getElementById("gpu-url").value.trim();
   if (!url) return;
   try {
-    await a("set_gpu_url", { url });
+    // 2026-06-27 修: 之前是 a("set_gpu_url") → ReferenceError: a is not defined
+    // 'a' 是 typo, 应该是 invoke。set_gpu_url 命令由 Rust 注册, 这里正确调用。
+    await invoke("set_gpu_url", { url });
     document.getElementById("btn-save-url").textContent = "✓ 已保存";
     setTimeout(() => { document.getElementById("btn-save-url").textContent = "保存"; }, 2000);
   } catch (e) {
@@ -405,3 +420,28 @@ function escapeHtml(s) {
 }
 
 initAudioDevices();
+
+// 2026-06-27: 设置页显示客户端日志路径 + 复制按钮
+(async () => {
+  const el = document.getElementById("log-path");
+  if (!el) return;
+  try {
+    const p = await invoke("get_log_path_cmd");
+    el.textContent = p;
+    el.title = p;
+  } catch (e) {
+    el.textContent = "(获取失败: " + e + ")";
+  }
+})();
+document.getElementById("btn-copy-log-path")?.addEventListener("click", async () => {
+  const el = document.getElementById("log-path");
+  const btn = document.getElementById("btn-copy-log-path");
+  if (!el || !btn) return;
+  try {
+    await navigator.clipboard.writeText(el.textContent);
+    btn.textContent = "✓ 已复制";
+    setTimeout(() => { btn.textContent = "复制路径"; }, 2000);
+  } catch (e) {
+    btn.textContent = "❌ " + e;
+  }
+});

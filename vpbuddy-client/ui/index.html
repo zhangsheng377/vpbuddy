@@ -122,6 +122,15 @@
           <p class="settings-note">客户端音频和请求发到这个服务器。重启客户端后从 VPBUDDY_GPU_URL 环境变量读取，不设则用默认值。</p>
         </div>
         <div class="settings-card">
+          <label>客户端日志</label>
+          <!-- 2026-06-27 加: 设置页展示日志路径 + 复制按钮 (排查用) -->
+          <div class="settings-row">
+            <code id="log-path" class="log-path">加载中...</code>
+            <button id="btn-copy-log-path" class="btn-small">复制路径</button>
+          </div>
+          <p class="settings-note">采集不到声音时, 把这个文件最后 30 行贴给我。</p>
+        </div>
+        <div class="settings-card">
           <label>界面语言</label>
           <select id="ui-lang">
             <option value="zh">中文</option>

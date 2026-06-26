@@ -105,4 +105,10 @@ html, body { font-family: -apple-system, "Segoe UI", sans-serif; background: var
 /* 2026-06-27: 删 .fact-stats/.fact-item/.fact-list/.fact-tag/* 等事实面板 dead CSS (改用 .fact-pill) */
 .settings-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 16px; max-width: 520px; display: flex; flex-direction: column; gap: 10px; }
 .settings-card label { color: var(--text2); font-size: 12px; }
+.settings-card input,
+.settings-card select { background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; padding: 6px 10px; font-size: 13px; }
+.settings-card .btn-small { align-self: flex-start; padding: 6px 12px; background: var(--accent); color: white; border: none; border-radius: 4px; font-size: 12px; cursor: pointer; }
+.settings-card .btn-small:hover { opacity: 0.85; }
+.settings-row { display: flex; gap: 8px; align-items: center; }
+.log-path { flex: 1; padding: 6px 10px; background: var(--bg-panel); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; font-size: 11px; font-family: ui-monospace, monospace; overflow-x: auto; white-space: nowrap; }
 .settings-note { color: var(--text2); font-size: 12px; line-height: 1.6; }

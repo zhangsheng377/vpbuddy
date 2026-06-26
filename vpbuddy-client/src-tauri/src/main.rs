@@ -26,6 +26,15 @@ pub struct AppState {
     /// 2026-06-26: 改 Mutex 支持运行时修改 (设置页 GPU URL 输入)
     pub gpu_url: Arc<Mutex<String>>,
     pub meeting_id: Arc<Mutex<Option<String>>>,
+    /// 2026-06-27: 客户端日志路径 (init 时填, 设置页 invoke get_log_path 读)
+    pub log_path: Arc<Mutex<String>>,
+}
+
+/// 2026-06-27: 全局日志路径, get_log_path invoke 命令读这里
+static LOG_PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+fn set_log_path(p: String) { let _ = LOG_PATH.set(p); }
+pub fn get_log_path() -> String {
+    LOG_PATH.get().cloned().unwrap_or_else(|| "(log path not initialized)".to_string())
 }
 
 impl AppState {
@@ -39,6 +48,7 @@ impl AppState {
             total_uploads: Arc::new(AtomicU64::new(0)),
             gpu_url: Arc::new(Mutex::new(url)),
             meeting_id: Arc::new(Mutex::new(None)),
+            log_path: Arc::new(Mutex::new(String::new())),
         }
     }
 }
@@ -167,6 +177,12 @@ async fn set_gpu_url(state: State<'_, AppState>, url: String) -> Result<(), Stri
 #[tauri::command]
 async fn get_gpu_url(state: State<'_, AppState>) -> Result<String, String> {
     Ok(state.gpu_url.lock().await.clone())
+}
+
+/// 2026-06-27: 返回客户端日志文件路径 (设置页展示)
+#[tauri::command]
+async fn get_log_path_cmd() -> Result<String, String> {
+    Ok(get_log_path())
 }
 
 /// 采集主循环: cpal 流 → 30s 切片 → WAV → multipart POST GPU
@@ -548,14 +564,28 @@ fn handle_sse_event(app: &AppHandle, event_str: &str, last_event_id: &mut Option
 }
 
 fn main() {
-    // 2026-06-27: 客户端日志写文件 ~/.vpbuddy-client.log (排查 "采集不到声音" 等问题)
+    // 2026-06-27: 客户端日志写文件 (排查 "采集不到声音" 等问题)
     // - 同时输出到 stderr (开发可见)
     // - 文件追加模式, 每次启动分隔一行 banner
-    let log_path = std::env::var("VPBUDDY_CLIENT_LOG")
-        .unwrap_or_else(|_| {
+    // - 跨平台: Windows 用 %USERPROFILE%\AppData\Local\VPBuddy\client.log
+    //            macOS/Linux 用 $HOME/.vpbuddy-client.log
+    //            VPBUDDY_CLIENT_LOG 环境变量可覆盖
+    let log_path = std::env::var("VPBUDDY_CLIENT_LOG").unwrap_or_else(|_| {
+        #[cfg(target_os = "windows")]
+        {
+            let base = std::env::var("USERPROFILE")
+                .or_else(|_| std::env::var("HOME"))
+                .unwrap_or_else(|_| "C:\\Users\\Default".into());
+            let dir = format!("{base}\\AppData\\Local\\VPBuddy");
+            let _ = std::fs::create_dir_all(&dir);
+            format!("{dir}\\client.log")
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
             format!("{home}/.vpbuddy-client.log")
-        });
+        }
+    });
     let log_file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -581,6 +611,8 @@ fn main() {
         builder.target(env_logger::Target::Pipe(Box::new(file)));
     }
     builder.init();
+    // 2026-06-27: 把路径存到全局, 设置页 invoke get_log_path 读
+    set_log_path(log_path.clone());
     log::info!("=== VPBuddy client 启动 (Tauri 2) ===");
     log::info!("日志文件: {}", log_path);
     log::info!("GPU server URL: {}", std::env::var("VPBUDDY_GPU_URL").unwrap_or_else(|_| "http://192.168.10.63:8765 (默认)".into()));
@@ -667,6 +699,7 @@ fn main() {
             list_audio_devices,
             set_gpu_url,
             get_gpu_url,
+            get_log_path_cmd,
             kb_search,
             fetch_meeting_chat_history,
             post_meeting_chat,
