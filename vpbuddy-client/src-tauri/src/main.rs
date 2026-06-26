@@ -8,7 +8,7 @@
 // - 复用 Python vpbuddy 的 /api/meetings/upload 端点 (已 commit 05a2664)
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex;
 
