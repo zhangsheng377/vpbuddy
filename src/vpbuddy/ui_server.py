@@ -1304,7 +1304,26 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"   DATA:  {DATA_DIR}", flush=True)
     print(f"   DOCS:  {DOCS_DIR}", flush=True)
     print(f"   KB:    {KB_PATH}", flush=True)
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    # 2026-06-27: IPv6 dual-stack — 默认 --host=:: 让 v4+v6 同时可连
+    # 老的 0.0.0.0 仅 IPv4; 用户的域名 gpu.zhangshengdong.com 只有 AAAA 记录
+    if args.host == "0.0.0.0":
+        args.host = "::"
+    if ":" in args.host:
+        # IPv6 地址 — 用 AF_INET6 + IPV6_V6ONLY=0 双栈
+        import socket as _socket
+        class DualStackServer(ThreadingHTTPServer):
+            address_family = _socket.AF_INET6
+        DualStackServer.allow_reuse_address = True
+        sock = _socket.socket(_socket.AF_INET6, _socket.SOCK_STREAM)
+        sock.setsockopt(_socket.IPPROTO_IPV6, _socket.IPV6_V6ONLY, 0)
+        sock.bind((args.host, args.port))
+        sock.listen(128)
+        server = DualStackServer(sock.getsockname(), Handler, bind_and_activate=False)
+        server.socket = sock
+        server.server_bind = lambda: None  # 已 bind
+        server.server_activate = lambda: None  # 已 listen
+    else:
+        server = ThreadingHTTPServer((args.host, args.port), Handler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
