@@ -188,13 +188,12 @@ async fn get_log_path_cmd() -> Result<String, String> {
 /// 2026-06-27: 在系统文件管理器中显示日志文件 (跨平台 reveal-in-folder)
 /// 用 tauri-plugin-opener 的 reveal_item_in_dir (Win/Mac/Linux 都支持)
 #[tauri::command]
-async fn open_log_dir_cmd() -> Result<String, String> {
+async fn open_log_dir_cmd(app: AppHandle) -> Result<String, String> {
     use tauri_plugin_opener::OpenerExt;
     let p = get_log_path();
     if p == "(log path not initialized)" {
         return Err("日志未初始化".into());
     }
-    let app = tauri::AppHandle::current();
     app.opener()
         .reveal_item_in_dir(&p)
         .map_err(|e| format!("打开目录失败: {e}"))?;
