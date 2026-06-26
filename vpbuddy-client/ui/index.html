@@ -35,6 +35,8 @@
           <label><input type="checkbox" id="auto-upload" checked /> 自动上传</label>
           <select id="audio-device"><option value="">默认音频设备</option></select>
         </div>
+        <!-- 2026-06-27: 实时波形图 (绿柱=有声音, 平线=静音) — 判断"采到声音"的最直观信号 -->
+        <canvas id="waveform" class="waveform" height="60"></canvas>
         <div class="stream-info">
           <span id="seg-count">0 段</span> · <span id="byte-count">0 KB</span> · <span id="up-count">0 上传</span> ·
           <span id="conn-status">SSE 未连接</span> · <span id="latency">延迟 -</span>
@@ -57,24 +59,34 @@
         </div>
       </section>
 
-      <!-- 6 docs 实时状态 -->
+      <!-- 6 docs 实时状态 (2026-06-27: 6 块并列展示, SSE 自动推流, 不需点击) -->
       <section id="panel-docs" class="panel">
-        <h2>6 类文档 (实时生成)</h2>
+        <h2>6 类文档 (实时生成 · SSE 自动刷新)</h2>
         <div id="docs-grid" class="docs-grid">
-          <div class="doc-card" data-kind="req"><div class="doc-kind">需求</div><div class="doc-count">0</div><div class="doc-state">待生成</div></div>
-          <div class="doc-card" data-kind="arch"><div class="doc-kind">架构</div><div class="doc-count">0</div><div class="doc-state">待生成</div></div>
-          <div class="doc-card" data-kind="tasks"><div class="doc-kind">任务</div><div class="doc-count">0</div><div class="doc-state">待生成</div></div>
-          <div class="doc-card" data-kind="api"><div class="doc-kind">API</div><div class="doc-count">0</div><div class="doc-state">待生成</div></div>
-          <div class="doc-card" data-kind="risk"><div class="doc-kind">风险</div><div class="doc-count">0</div><div class="doc-state">待生成</div></div>
-          <div class="doc-card" data-kind="demo"><div class="doc-kind">演示</div><div class="doc-count">0</div><div class="doc-state">待生成</div></div>
-        </div>
-        <div class="doc-viewer">
-          <div class="doc-toolbar">
-            <span id="doc-title">选择文档查看内容</span>
-            <button id="btn-refresh-docs">刷新文档</button>
+          <div class="doc-block" data-kind="req">
+            <div class="doc-head"><span class="doc-kind">需求</span><span class="doc-count">0</span><span class="doc-state">待生成</span></div>
+            <pre class="doc-body">等待 GPU 生成…</pre>
           </div>
-          <pre id="doc-content" class="doc-content"></pre>
-          <iframe id="demo-frame" class="demo-frame" sandbox="allow-scripts allow-forms"></iframe>
+          <div class="doc-block" data-kind="arch">
+            <div class="doc-head"><span class="doc-kind">架构</span><span class="doc-count">0</span><span class="doc-state">待生成</span></div>
+            <pre class="doc-body">等待 GPU 生成…</pre>
+          </div>
+          <div class="doc-block" data-kind="tasks">
+            <div class="doc-head"><span class="doc-kind">任务</span><span class="doc-count">0</span><span class="doc-state">待生成</span></div>
+            <pre class="doc-body">等待 GPU 生成…</pre>
+          </div>
+          <div class="doc-block" data-kind="api">
+            <div class="doc-head"><span class="doc-kind">API</span><span class="doc-count">0</span><span class="doc-state">待生成</span></div>
+            <pre class="doc-body">等待 GPU 生成…</pre>
+          </div>
+          <div class="doc-block" data-kind="risk">
+            <div class="doc-head"><span class="doc-kind">风险</span><span class="doc-count">0</span><span class="doc-state">待生成</span></div>
+            <pre class="doc-body">等待 GPU 生成…</pre>
+          </div>
+          <div class="doc-block" data-kind="demo">
+            <div class="doc-head"><span class="doc-kind">演示</span><span class="doc-count">0</span><span class="doc-state">待生成</span></div>
+            <pre class="doc-body">等待 GPU 生成…</pre>
+          </div>
         </div>
       </section>
 

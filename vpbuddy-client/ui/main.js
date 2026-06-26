@@ -37,11 +37,11 @@ const renderedChatIds = new Set();
 const i18n = {
   zh: {
     idle: "未连接", capturing: "采集中...", stopped: "已停止", noResult: "无结果",
-    docHint: "选择文档查看内容", sseConnected: "SSE 已连接", sseHeartbeat: "SSE 心跳正常"
+    sseConnected: "SSE 已连接", sseHeartbeat: "SSE 心跳正常"
   },
   en: {
     idle: "Disconnected", capturing: "Capturing...", stopped: "Stopped", noResult: "No results",
-    docHint: "Select a document to view", sseConnected: "SSE connected", sseHeartbeat: "SSE heartbeat ok"
+    sseConnected: "SSE connected", sseHeartbeat: "SSE heartbeat ok"
   }
 };
 let lang = localStorage.getItem("vpbuddy-lang") || "zh";
@@ -78,7 +78,7 @@ document.getElementById("btn-start").addEventListener("click", async () => {
     document.getElementById("btn-stop").disabled = false;
     document.getElementById("rec-dot").className = "dot live";
     document.getElementById("rec-status").textContent = t("capturing");
-    await refreshDocs();
+    // 2026-06-27: 不再调 refreshDocs — 内容由 SSE doc-status 自动推流
     await refreshChatHistory();
   } catch (e) {
     document.getElementById("rec-status").textContent = "❌ " + e;
@@ -119,19 +119,94 @@ listen("capture-stats", (e) => {
   document.getElementById("up-count").textContent = `${upCount} 上传`;
 });
 
+// 2026-06-27: 实时波形图 — Rust 每 0.5s emit audio-level (RMS 0.0-1.0)
+// 画 60 帧历史, 绿柱按 RMS 高度, 平线 = 静音
+const wfCanvas = document.getElementById("waveform");
+const wfCtx = wfCanvas?.getContext("2d");
+const wfHistory = [];  // 最近 60 帧 RMS
+const WF_MAX = 60;
+function drawWaveform() {
+  if (!wfCtx || !wfCanvas) return;
+  // 高 DPI 处理
+  const dpr = window.devicePixelRatio || 1;
+  const w = wfCanvas.clientWidth;
+  const h = wfCanvas.clientHeight;
+  if (wfCanvas.width !== w * dpr || wfCanvas.height !== h * dpr) {
+    wfCanvas.width = w * dpr;
+    wfCanvas.height = h * dpr;
+  }
+  wfCtx.scale(dpr, dpr);
+  wfCtx.clearRect(0, 0, w, h);
+  // 中线
+  wfCtx.strokeStyle = "rgba(255,255,255,0.06)";
+  wfCtx.beginPath();
+  wfCtx.moveTo(0, h / 2);
+  wfCtx.lineTo(w, h / 2);
+  wfCtx.stroke();
+  // 60 个柱子
+  const barW = w / WF_MAX;
+  for (let i = 0; i < wfHistory.length; i++) {
+    const rms = wfHistory[i];
+    const barH = Math.max(2, rms * h * 0.95);
+    const x = i * barW;
+    const y = (h - barH) / 2;
+    // 按 RMS 大小着色: <0.01 灰, <0.1 黄, ≥0.1 绿
+    if (rms < 0.01) wfCtx.fillStyle = "rgba(120,130,150,0.4)";
+    else if (rms < 0.1) wfCtx.fillStyle = "#f59e0b";
+    else wfCtx.fillStyle = "#10b981";
+    wfCtx.fillRect(x + 1, y, barW - 2, barH);
+  }
+}
+listen("audio-level", (e) => {
+  const rms = e.payload?.rms || 0;
+  wfHistory.push(rms);
+  if (wfHistory.length > WF_MAX) wfHistory.shift();
+  drawWaveform();
+});
+// 录音停止时清空波形 (兜底: 用户停止录音 3s 后波形归零)
+setInterval(() => {
+  if (!recording && wfHistory.some(v => v > 0)) {
+    wfHistory.length = 0;
+    drawWaveform();
+  }
+}, 3000);
+
+// 2026-06-27: doc-status SSE 事件直接写入对应 doc-block, 不再走单 viewer
 listen("doc-status", (e) => {
-  const { meeting_id, kind, state, status, count, content, updated_at, doc_size, is_demo } = e.payload;
+  const { meeting_id, kind, state, status, count, content, doc_size, is_demo } = e.payload;
   if (meeting_id) currentMeetingId = meeting_id;
   const docState = state || status || "queued";
-  const card = document.querySelector(`.doc-card[data-kind="${kind}"]`);
-  if (card) {
-    card.className = `doc-card ${docState}`;
-    card.querySelector(".doc-count").textContent = doc_size ? `${Math.ceil(doc_size / 1024)}KB` : (count || 0);
-    card.querySelector(".doc-state").textContent = docState === "stored" ? "✓ 已生成" : docState === "queued" || docState === "triggered" ? "生成中..." : "✗";
+  const block = document.querySelector(`.doc-block[data-kind="${kind}"]`);
+  if (!block) return;
+  block.className = `doc-block ${docState}`;
+  const countEl = block.querySelector(".doc-count");
+  const stateEl = block.querySelector(".doc-state");
+  if (countEl) countEl.textContent = doc_size ? `${Math.ceil(doc_size / 1024)}KB` : (count || 0);
+  if (stateEl) {
+    stateEl.textContent =
+      docState === "stored" ? "✓ 已生成" :
+      docState === "queued" || docState === "triggered" ? "生成中…" :
+      docState === "failed" ? "✗ 失败" :
+      "待生成";
   }
   if (kind && content) {
-    docsByKind[kind] = { kind, status: docState, content, updated_at, is_demo };
-    if (kind === "demo") renderDoc(kind);
+    docsByKind[kind] = { kind, status: docState, content, is_demo };
+    const body = block.querySelector(".doc-body");
+    if (body) {
+      if (kind === "demo" && is_demo) {
+        // demo 用 iframe 沙盒渲染 (保留 v0.2.1 行为)
+        let frame = block.querySelector(".demo-frame");
+        if (!frame) {
+          frame = document.createElement("iframe");
+          frame.className = "demo-frame";
+          frame.setAttribute("sandbox", "allow-scripts allow-forms");
+          body.replaceWith(frame);
+        }
+        frame.srcdoc = content;
+      } else {
+        body.textContent = content;
+      }
+    }
   }
 });
 
@@ -207,55 +282,8 @@ listen("state-update", (e) => {
   }
 });
 
-// === 文档展示 / Demo 预览 ===
-document.querySelectorAll(".doc-card").forEach(card => {
-  card.addEventListener("click", () => renderDoc(card.dataset.kind));
-});
-
-document.getElementById("btn-refresh-docs").addEventListener("click", refreshDocs);
-
-async function refreshDocs() {
-  if (!currentMeetingId) return;
-  // 2026-06-26: 走 Tauri invoke (Rust reqwest), 不再 webview fetch
-  // 原因: webview fetch 跨域受限 + POST application/json 触发 OPTIONS 预检 → Failed to fetch
-  try {
-    const result = await invoke("fetch_meeting_docs", { meetingId: currentMeetingId });
-    docsByKind = {};
-    for (const doc of (result.docs || [])) {
-      docsByKind[doc.kind] = doc;
-      const card = document.querySelector(`.doc-card[data-kind="${doc.kind}"]`);
-      if (card) {
-        card.className = `doc-card ${doc.status}`;
-        card.querySelector(".doc-count").textContent = doc.doc_size ? `${Math.ceil(doc.doc_size / 1024)}KB` : 0;
-        card.querySelector(".doc-state").textContent = doc.status === "stored" ? "✓ 已生成" : "待生成";
-      }
-    }
-  } catch (e) {
-    console.warn("refreshDocs fetch failed:", e);
-  }
-}
-
-function renderDoc(kind) {
-  const doc = docsByKind[kind];
-  document.getElementById("doc-title").textContent = doc?.label || kind || t("docHint");
-  const pre = document.getElementById("doc-content");
-  const frame = document.getElementById("demo-frame");
-  if (!doc || !doc.content) {
-    pre.style.display = "block";
-    frame.style.display = "none";
-    pre.textContent = "暂未生成";
-    return;
-  }
-  if (kind === "demo") {
-    pre.style.display = "none";
-    frame.style.display = "block";
-    frame.srcdoc = doc.content;
-  } else {
-    frame.style.display = "none";
-    pre.style.display = "block";
-    pre.textContent = doc.content;
-  }
-}
+// 2026-06-27: 6 文档改并列展示, 删除 click 切换 + refreshDocs + renderDoc 单 viewer
+// 内容全部由 SSE "doc-status" 推流自动写入对应 .doc-block
 
 listen("error", (e) => {
   document.getElementById("rec-status").textContent = "❌ " + e.payload;

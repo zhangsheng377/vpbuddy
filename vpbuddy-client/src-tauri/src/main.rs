@@ -201,7 +201,7 @@ async fn run_capture_loop(
             Some(s) => s,
             None => break,  // channel 关闭 (cpal 异常退出)
         };
-        buffer.extend(samples);
+        buffer.extend(samples.iter().copied());
 
         // 累计字节数
         let n = (buffer.len() * 2) as u64;
@@ -209,6 +209,20 @@ async fn run_capture_loop(
         let _ = app.emit("capture-stats", serde_json::json!({
             "bytes": n,
             "uploads": ups.load(Ordering::SeqCst),
+        }));
+
+        // 2026-06-27: 算 RMS (均方根) 当波形图高度, emit 给前端画 canvas
+        // 范围 0.0-1.0: 静音≈0, 正常说话 0.05-0.3, 大声 0.5+
+        // 8000 samples (0.5s@16kHz) 在 i16 range [-32768, 32767]
+        let mut sum_sq: u64 = 0;
+        for s in &samples {
+            let v = *s as i64;
+            sum_sq += (v * v) as u64;
+        }
+        let rms = ((sum_sq as f64 / samples.len() as f64).sqrt()) / 32768.0;
+        let _ = app.emit("audio-level", serde_json::json!({
+            "rms": rms.min(1.0),
+            "samples": samples.len(),
         }));
 
         // 满 30s 就切片上传
@@ -270,25 +284,7 @@ async fn kb_search(
 /// 之前前端用 `fetch(gpu_url + /api/meetings/.../chat)` 在 webview 里
 /// 会因为 (a) 跨域 fetch 受限 (b) POST application/json 触发 OPTIONS 预检
 /// → "Failed to fetch"。全部走 Rust reqwest 经 Tauri IPC 转发。
-
-#[tauri::command]
-async fn fetch_meeting_docs(
-    state: State<'_, AppState>,
-    meeting_id: String,
-) -> Result<serde_json::Value, String> {
-    let url = format!(
-        "{}/api/meetings/{}/docs",
-        state.gpu_url.lock().await,
-        urlencoding::encode(&meeting_id)
-    );
-    let resp = reqwest::get(&url)
-        .await
-        .map_err(|e| format!("Docs 请求失败: {e}"))?;
-    let body: serde_json::Value = resp.json()
-        .await
-        .map_err(|e| format!("Docs 解析失败: {e}"))?;
-    Ok(body)
-}
+/// (2026-06-27: docs 走 SSE doc-status 自动推流, fetch_meeting_docs 删掉, 只保留 chat 系列)
 
 #[tauri::command]
 async fn fetch_meeting_chat_history(
@@ -501,14 +497,15 @@ fn main() {
                 })
                 .build(app)?;
 
-            // 2026-06-26: 启动 GPU 连接心跳探针 (每 15s 探一次 /api/status)
+            // 2026-06-26: 启动 GPU 连接心跳探针 (每 10s 探一次 /api/status)
             // 前端通过 listen("gpu-connection", ...) 收事件, 渲染绿/红/黄指示灯
+            // 2026-06-27: 加防抖 — 连续 3 次失败才标红 (单次网络抖动不切)
             // 注意: tauri::State 不是 Send, 不能 spawn 后持有, 必须在每次 await 前取
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 use std::time::Duration;
                 let client = reqwest::Client::builder()
-                    .timeout(Duration::from_secs(5))
+                    .timeout(Duration::from_secs(3))
                     .build()
                     .unwrap();
                 // 初始状态: 检测中
@@ -518,12 +515,16 @@ fn main() {
                     "detail": "正在检测 GPU 服务器...",
                     "url": initial_url,
                 }));
+                let mut fail_streak: u32 = 0;
+                const FAIL_STREAK_RED: u32 = 3;
                 loop {
-                    tokio::time::sleep(Duration::from_secs(15)).await;
+                    tokio::time::sleep(Duration::from_secs(10)).await;
                     // 从 AppState 读当前 GPU URL (用户在设置页改了立刻生效)
                     let url = app_handle.state::<AppState>().gpu_url.lock().await.clone();
-                    match client.get(format!("{url}/api/status")).send().await {
+                    let probe = client.get(format!("{url}/api/status")).send().await;
+                    match probe {
                         Ok(resp) if resp.status().is_success() => {
+                            fail_streak = 0;
                             let _ = app_handle.emit("gpu-connection", serde_json::json!({
                                 "status": "online",
                                 "detail": format!("HTTP {}", resp.status().as_u16()),
@@ -531,16 +532,20 @@ fn main() {
                             }));
                         }
                         Ok(resp) => {
+                            fail_streak += 1;
+                            let label = if fail_streak >= FAIL_STREAK_RED { "offline" } else { "checking" };
                             let _ = app_handle.emit("gpu-connection", serde_json::json!({
-                                "status": "offline",
-                                "detail": format!("HTTP {}", resp.status().as_u16()),
+                                "status": label,
+                                "detail": format!("HTTP {} (连续 {fail_streak} 次)", resp.status().as_u16()),
                                 "url": url,
                             }));
                         }
                         Err(e) => {
+                            fail_streak += 1;
+                            let label = if fail_streak >= FAIL_STREAK_RED { "offline" } else { "checking" };
                             let _ = app_handle.emit("gpu-connection", serde_json::json!({
-                                "status": "offline",
-                                "detail": format!("{e}"),
+                                "status": label,
+                                "detail": format!("{e} (连续 {fail_streak} 次)"),
                                 "url": url,
                             }));
                         }
@@ -557,7 +562,6 @@ fn main() {
             set_gpu_url,
             get_gpu_url,
             kb_search,
-            fetch_meeting_docs,
             fetch_meeting_chat_history,
             post_meeting_chat,
         ])
