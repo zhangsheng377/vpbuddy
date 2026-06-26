@@ -13,6 +13,8 @@
     "core:menu:default",
     "core:tray:default",
     "core:path:default",
-    "notification:default"
+    "notification:default",
+    "opener:default",
+    "opener:allow-reveal-item-in-dir"
   ]
 }

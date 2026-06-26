@@ -66,35 +66,47 @@ async function getGpuUrl() {
 }
 
 // === 实时转写流 ===
-document.getElementById("btn-start").addEventListener("click", async () => {
-  try {
-    const e = document.getElementById("audio-device").value || null;
-    currentMeetingId = await invoke("start_capture", {
-      autoUpload: document.getElementById("auto-upload").checked,
-      audioDevice: e,
-    });
-    recording = true;
-    document.getElementById("btn-start").disabled = true;
-    document.getElementById("btn-stop").disabled = false;
-    document.getElementById("rec-dot").className = "dot live";
-    document.getElementById("rec-status").textContent = t("capturing");
-    // 2026-06-27: 不再调 refreshDocs — 内容由 SSE doc-status 自动推流
-    await refreshChatHistory();
-  } catch (e) {
-    document.getElementById("rec-status").textContent = "❌ " + e;
-  }
-});
-
-document.getElementById("btn-stop").addEventListener("click", async () => {
-  try {
-    await invoke("stop_capture");
-    recording = false;
-    document.getElementById("btn-start").disabled = false;
-    document.getElementById("btn-stop").disabled = true;
-    document.getElementById("rec-dot").className = "dot";
-    document.getElementById("rec-status").textContent = t("stopped");
-  } catch (e) {
-    document.getElementById("rec-status").textContent = "❌ " + e;
+// 2026-06-27: 开始/停止 合并成一个 toggle 按钮 (#btn-rec, data-state="idle"|"recording")
+document.getElementById("btn-rec").addEventListener("click", async () => {
+  const btn = document.getElementById("btn-rec");
+  const dot = document.getElementById("rec-dot");
+  const status = document.getElementById("rec-status");
+  if (btn.dataset.state === "idle") {
+    // 开始录音
+    btn.disabled = true;
+    try {
+      const e = document.getElementById("audio-device").value || null;
+      currentMeetingId = await invoke("start_capture", {
+        autoUpload: document.getElementById("auto-upload").checked,
+        audioDevice: e,
+      });
+      recording = true;
+      btn.dataset.state = "recording";
+      btn.textContent = "停止录音";
+      dot.className = "dot live";
+      status.textContent = t("capturing");
+      btn.disabled = false;
+      // 2026-06-27: 不再调 refreshDocs — 内容由 SSE doc-status 自动推流
+      await refreshChatHistory();
+    } catch (e) {
+      status.textContent = "❌ " + e;
+      btn.disabled = false;
+    }
+  } else {
+    // 停止录音
+    btn.disabled = true;
+    try {
+      await invoke("stop_capture");
+      recording = false;
+      btn.dataset.state = "idle";
+      btn.textContent = "开始录音";
+      dot.className = "dot";
+      status.textContent = t("stopped");
+    } catch (e) {
+      status.textContent = "❌ " + e;
+    } finally {
+      btn.disabled = false;
+    }
   }
 });
 
@@ -433,14 +445,15 @@ initAudioDevices();
     el.textContent = "(获取失败: " + e + ")";
   }
 })();
-document.getElementById("btn-copy-log-path")?.addEventListener("click", async () => {
-  const el = document.getElementById("log-path");
-  const btn = document.getElementById("btn-copy-log-path");
-  if (!el || !btn) return;
+document.getElementById("btn-open-log-dir")?.addEventListener("click", async () => {
+  const btn = document.getElementById("btn-open-log-dir");
+  if (!btn) return;
   try {
-    await navigator.clipboard.writeText(el.textContent);
-    btn.textContent = "✓ 已复制";
-    setTimeout(() => { btn.textContent = "复制路径"; }, 2000);
+    // 2026-06-27: 用 tauri-plugin-opener 的 reveal_item_in_dir 打开文件管理器
+    // (Win: 资源管理器高亮该文件; mac: Finder 高亮; Linux: 文件管理器打开父目录)
+    await invoke("open_log_dir_cmd");
+    btn.textContent = "✓ 已打开";
+    setTimeout(() => { btn.textContent = "打开目录"; }, 2000);
   } catch (e) {
     btn.textContent = "❌ " + e;
   }

@@ -30,8 +30,8 @@
       <section id="panel-stream" class="panel active">
         <h2>实时转写</h2>
         <div class="rec-controls">
-          <button id="btn-start">开始录音</button>
-          <button id="btn-stop" disabled>停止</button>
+          <!-- 2026-06-27: 合并开始/停止按钮 (一个 toggle 按钮) -->
+          <button id="btn-rec" class="btn-rec" data-state="idle">开始录音</button>
           <label><input type="checkbox" id="auto-upload" checked /> 自动上传</label>
           <select id="audio-device"><option value="">默认音频设备</option></select>
         </div>
@@ -123,10 +123,10 @@
         </div>
         <div class="settings-card">
           <label>客户端日志</label>
-          <!-- 2026-06-27 加: 设置页展示日志路径 + 复制按钮 (排查用) -->
+          <!-- 2026-06-27 加: 设置页展示日志路径 + 打开目录按钮 (2026-06-27 张胜东: "直接打开目录不就好了") -->
           <div class="settings-row">
             <code id="log-path" class="log-path">加载中...</code>
-            <button id="btn-copy-log-path" class="btn-small">复制路径</button>
+            <button id="btn-open-log-dir" class="btn-small">打开目录</button>
           </div>
           <p class="settings-note">采集不到声音时, 把这个文件最后 30 行贴给我。</p>
         </div>

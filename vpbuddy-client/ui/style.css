@@ -35,7 +35,10 @@ html, body { font-family: -apple-system, "Segoe UI", sans-serif; background: var
 .rec-controls { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
 .rec-controls button { padding: 8px 16px; border: none; border-radius: 6px; background: var(--accent); color: white; cursor: pointer; font-size: 13px; font-weight: 500; }
 .rec-controls button:disabled { background: var(--text2); cursor: not-allowed; }
-.rec-controls button#btn-stop { background: var(--danger); }
+/* 2026-06-27: btn-rec toggle 按钮 (合并开始/停止) */
+.rec-controls button#btn-rec { min-width: 96px; }
+.rec-controls button#btn-rec[data-state="recording"] { background: var(--danger); }
+.rec-controls button#btn-rec[data-state="recording"]:hover { background: #dc2626; }
 .rec-controls label { display: inline-flex; align-items: center; gap: 6px; color: var(--text2); font-size: 13px; }
 .rec-controls select { background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; padding: 6px 10px; font-size: 13px; }
 /* 2026-06-27: 实时波形图 — 60 帧历史, 绿柱=有声音, 平线=静音 */

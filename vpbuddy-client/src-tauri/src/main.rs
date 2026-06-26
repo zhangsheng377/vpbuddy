@@ -185,6 +185,22 @@ async fn get_log_path_cmd() -> Result<String, String> {
     Ok(get_log_path())
 }
 
+/// 2026-06-27: 在系统文件管理器中显示日志文件 (跨平台 reveal-in-folder)
+/// 用 tauri-plugin-opener 的 reveal_item_in_dir (Win/Mac/Linux 都支持)
+#[tauri::command]
+async fn open_log_dir_cmd() -> Result<String, String> {
+    use tauri_plugin_opener::OpenerExt;
+    let p = get_log_path();
+    if p == "(log path not initialized)" {
+        return Err("日志未初始化".into());
+    }
+    let app = tauri::AppHandle::current();
+    app.opener()
+        .reveal_item_in_dir(&p)
+        .map_err(|e| format!("打开目录失败: {e}"))?;
+    Ok(p)
+}
+
 /// 采集主循环: cpal 流 → 30s 切片 → WAV → multipart POST GPU
 ///
 /// Phase B (2026-06-24): cpal::Stream 持有 *mut () 不是 Send. 拆架构:
@@ -621,6 +637,7 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(AppState::new())
         .setup(|app| {
             // 系统托盘: 状态指示 + 退出
@@ -700,6 +717,7 @@ fn main() {
             set_gpu_url,
             get_gpu_url,
             get_log_path_cmd,
+            open_log_dir_cmd,
             kb_search,
             fetch_meeting_chat_history,
             post_meeting_chat,
