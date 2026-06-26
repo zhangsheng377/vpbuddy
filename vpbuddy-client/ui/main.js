@@ -152,6 +152,34 @@ listen("chat-message", (e) => {
   renderChatMessage(e.payload);
 });
 
+// 2026-06-26: GPU 服务器连接指示灯 (绿=在线, 红=离线, 黄=检测中)
+listen("gpu-connection", (e) => {
+  const p = e.payload || {};
+  const pill = document.getElementById("gpu-pill");
+  const status = document.getElementById("gpu-status");
+  if (!pill || !status) return;
+  pill.classList.remove("online", "offline", "checking");
+  const url = p.url || "";
+  let label;
+  if (p.status === "online") {
+    pill.classList.add("online");
+    label = "已连接";
+  } else if (p.status === "offline") {
+    pill.classList.add("offline");
+    label = "未连接";
+  } else {
+    pill.classList.add("checking");
+    label = "检测中";
+  }
+  // 显示地址最后一截 (host:port) + detail
+  try {
+    const u = new URL(url);
+    label += ` ${u.host}`;
+  } catch (_) {}
+  status.textContent = label;
+  pill.title = `GPU: ${url}\n${p.detail || ""}`;
+});
+
 // 实时结构化事实更新 (REQ/GOAL/FEAT/RISK/QUE)
 listen("state-update", (e) => {
   const stats = e.payload;

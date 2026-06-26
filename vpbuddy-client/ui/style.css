@@ -16,7 +16,14 @@ html, body { font-family: -apple-system, "Segoe UI", sans-serif; background: var
 .topbar { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; background: var(--bg2); border-bottom: 1px solid var(--border); }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 510; font-size: 14px; }
 .brand-icon { width: 26px; height: 26px; background: linear-gradient(135deg, var(--accent), #828fff); border-radius: 5px; display: flex; align-items: center; justify-content: center; font-weight: 600; color: white; }
-.status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text2); }
+.status { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--text2); }
+.status-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; background: var(--bg-surface); }
+.status-pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text2); transition: background-color 0.3s ease; }
+.status-pill.online .dot { background: var(--success); box-shadow: 0 0 6px var(--success); }
+.status-pill.offline .dot { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
+.status-pill.checking .dot { background: var(--warning); animation: pulse 1.5s infinite; }
+.status-pill.online #gpu-status { color: var(--success); }
+.status-pill.offline #gpu-status { color: var(--danger); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text2); }
 .dot.live { background: var(--success); animation: pulse 1.5s infinite; }
 .dot.err { background: var(--danger); }

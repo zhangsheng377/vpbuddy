@@ -500,6 +500,55 @@ fn main() {
                     }
                 })
                 .build(app)?;
+
+            // 2026-06-26: 启动 GPU 连接心跳探针 (每 15s 探一次 /api/status)
+            // 前端通过 listen("gpu-connection", ...) 收事件, 渲染绿/红/黄指示灯
+            let app_handle = app.handle().clone();
+            // 用 tokio async 任务, 这样能 await AppState.gpu_url Mutex
+            // (std::thread + tokio sync mutex 不能跨 await, 必须 async)
+            let state_for_heartbeat = app.state::<AppState>().inner().clone();
+            tauri::async_runtime::spawn(async move {
+                use std::time::Duration;
+                let client = reqwest::Client::builder()
+                    .timeout(Duration::from_secs(5))
+                    .build()
+                    .unwrap();
+                // 初始状态: 检测中
+                let _ = app_handle.emit("gpu-connection", serde_json::json!({
+                    "status": "checking",
+                    "detail": "正在检测 GPU 服务器...",
+                    "url": state_for_heartbeat.gpu_url.lock().await.clone(),
+                }));
+                loop {
+                    tokio::time::sleep(Duration::from_secs(15)).await;
+                    // 从 AppState 读当前 GPU URL (用户在设置页改了立刻生效)
+                    let url = state_for_heartbeat.gpu_url.lock().await.clone();
+                    match client.get(format!("{url}/api/status")).send().await {
+                        Ok(resp) if resp.status().is_success() => {
+                            let _ = app_handle.emit("gpu-connection", serde_json::json!({
+                                "status": "online",
+                                "detail": format!("HTTP {}", resp.status().as_u16()),
+                                "url": url,
+                            }));
+                        }
+                        Ok(resp) => {
+                            let _ = app_handle.emit("gpu-connection", serde_json::json!({
+                                "status": "offline",
+                                "detail": format!("HTTP {}", resp.status().as_u16()),
+                                "url": url,
+                            }));
+                        }
+                        Err(e) => {
+                            let _ = app_handle.emit("gpu-connection", serde_json::json!({
+                                "status": "offline",
+                                "detail": format!("{e}"),
+                                "url": url,
+                            }));
+                        }
+                    }
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
