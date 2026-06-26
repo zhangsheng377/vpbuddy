@@ -50,9 +50,12 @@ impl AudioCapture {
         let supported = device
             .supported_input_configs()
             .context("无法读取设备支持的输入配置")?;
-        let cfg = supported
+        // 收集为 Vec 避免迭代器 borrow 冲突 (cpal 0.15 的 API 需要)
+        let configs: Vec<_> = supported.collect();
+        let cfg = configs
+            .iter()
             .find(|c| c.channels() == 1)
-            .or_else(|| supported.max_by_key(|c| c.channels()))
+            .or_else(|| configs.iter().max_by_key(|c| c.channels()))
             .context("设备没有任何支持的输入配置")?;
         let native_sample_rate = cfg.max_sample_rate().0;
         log::info!(
