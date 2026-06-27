@@ -245,6 +245,22 @@ listen("connection-status", (e) => {
   if (p.upload === "failed") document.getElementById("conn-status").textContent = "上传失败，已重试";
 });
 
+// 2026-06-28 ADR-0018: GPU 端 6 docs 全 stored 后推 meeting-complete
+// 客户端: 标记会议状态 + 把按钮文字改成 "会议完成, 开始新会议"
+// 注意: 不需要 refreshDocs — SSE doc-status 之前已逐个推过来, 6 块已是最新
+listen("meeting-complete", (e) => {
+  const p = e.payload || {};
+  const btn = document.getElementById("btn-rec");
+  if (btn) {
+    btn.dataset.state = "idle";
+    btn.textContent = "✅ 会议完成 (开始新会议)";
+    btn.disabled = false;
+  }
+  const status = document.getElementById("rec-status");
+  if (status) status.textContent = "🎉 6 文档已全部生成";
+  console.log("meeting-complete:", p);
+});
+
 listen("metrics-update", (e) => {
   const p = e.payload || {};
   const latency = p.end_to_end_ms || p.processing_ms;

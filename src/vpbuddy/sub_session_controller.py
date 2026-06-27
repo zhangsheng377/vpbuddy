@@ -549,6 +549,10 @@ def trigger_sub_session(meeting_id: str, doc_kind: str, dry_run: bool = False) -
                             "doc_id": doc_id,
                             "kb_stored": True,
                         })
+                        # 2026-06-28: ADR-0018 — 6 docs 全 stored 后, 推 meeting-complete + close_meeting
+                        # 让客户端 SSE 自然退出 (不再需要前端轮询文档状态)
+                        from .ui_server_helpers import check_all_docs_stored_and_close
+                        check_all_docs_stored_and_close(meeting_id)
                     except Exception as e:
                         logger.warning(f"[{meeting_id}/{doc_kind}] push SSE kb-stored failed: {e}")
                     logger.info(f"[{meeting_id}/{doc_kind}] KB stored (doc_id={doc_id}, attempt {attempt})")

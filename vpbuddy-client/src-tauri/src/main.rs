@@ -143,7 +143,12 @@ async fn start_capture(
     Ok(meeting_id)
 }
 
-/// 停止采集
+/// 停止采集 (2026-06-28 ADR-0018: 改语义)
+/// - 旧: 关 SSE, 立即断 → GPU 后台 6 docs 推送不到客户端
+/// - 新: 只设 capturing=false 让音频停 + POST stream_stop 通知服务端
+///   SSE **不立即关**, 让 GPU 后台 6 docs 完成时 push 过来
+///   GPU 6 docs 全 stored 后 close_meeting → SSE 自然退出
+/// - "会议真正停止"留给以后加"结束会议"按钮 (张胜东决策)
 #[tauri::command]
 async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
     log::info!("=== stop_capture 触发 ===");
@@ -155,8 +160,9 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
         log::warn!("  capture_handle 为空, 没在跑采集?");
     }
 
-    // 2026-06-27: 通知服务端关闭 SSE subscriber, 否则服务端队列残留最多 120s
-    // + 客户端 SSE task 也要等它退出, 否则会被中途掐断留下 502 风险
+    // 2026-06-28 ADR-0018: 通知服务端 audio capture 已停, 但 SSE 继续
+    // 等 GPU 后台 6 docs 全 stored 后 close_meeting 触发 SSE 自然退出
+    // 不再 await sse_handle (老逻辑 1.5s 超时)
     if let Some(mid) = state.meeting_id.lock().await.clone() {
         let gpu_url = state.gpu_url.lock().await.clone();
         let stop_url = format!("{}/api/meetings/{}/stream_stop", gpu_url, mid);
@@ -170,18 +176,8 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
             Ok(r) => log::info!("  ✓ stream_stop 响应 {}", r.status()),
             Err(e) => log::warn!("  stream_stop 调用失败 (可忽略): {e}"),
         }
-        // 给 SSE task 1.5s 自然退出时间, 避免 abort() 强掐导致日志噪音
-        if let Some(sh) = state.sse_handle.lock().await.take() {
-            tokio::time::timeout(std::time::Duration::from_millis(1500), sh)
-                .await
-                .map(|_| log::info!("  SSE task 自然退出"))
-                .unwrap_or_else(|_| {
-                    log::info!("  SSE task 1.5s 未退出, 超时");
-                    // sh 已被 take 消费, 超时即丢弃 — task 会在 capturing=false 时自然退出
-                });
-        }
-        *state.meeting_id.lock().await = None;
     }
+    // 注意: sse_handle 不 await — SSE 继续等 GPU 6 docs 完成 + close_meeting
     Ok(())
 }
 
@@ -320,13 +316,25 @@ async fn run_capture_loop(
     let mut total_elapsed_sec: f32 = 0.0;
     // 2026-06-27: 累计 0-RMS 帧数, 30s 内全是 0 (即 60 帧) 就 warn 一次
     let mut silence_streak: u32 = 0;
+    // 2026-06-28: 音频卡死检测 — rx.recv() 等不到 chunk 时, 5s 后 warn + 强制 break
+    // 让外层 while 重新检查 capturing, 而不是永远 hang (张胜东 02:13 案例)
+    let mut last_recv = std::time::Instant::now();
+    const STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
     // 2. tokio task 拼切片 + POST
     while capturing.load(Ordering::SeqCst) {
-        let samples = match rx.recv().await {
-            Some(s) => s,
-            None => break,  // channel 关闭 (cpal 异常退出)
+        let samples = match tokio::time::timeout(STALL_TIMEOUT, rx.recv()).await {
+            Ok(Some(s)) => s,
+            Ok(None) => break,  // channel 关闭 (cpal 异常退出)
+            Err(_) => {
+                // 5s 没新 chunk — 音频驱动 hang, 不要永远 hang
+                log::warn!("⚠️ audio stall: 5s 没新 sample (cpal/USB 麦克风驱动可能挂)");
+                log::warn!("   建议: 切换右上角下拉麦克风, 或重启 Windows Audio 服务");
+                break;
+            }
         };
+        last_recv = std::time::Instant::now();
+        let _ = last_recv; // suppress unused warning
         // 2026-06-27: 设备 native 采样率 != 16kHz 时, 软件重采样到 16kHz
         // (cpal 用设备原生采样率避免 WASAPI 拒 16kHz, 主循环做重采样)
         let native = native_rate.load(Ordering::SeqCst);
@@ -634,6 +642,11 @@ fn handle_sse_event(app: &AppHandle, event_str: &str, last_event_id: &mut Option
         "doc-update" => {
             log::info!("📄 doc-update: {}", payload);
             let _ = app.emit("doc-status", &payload);
+        }
+        // 2026-06-28 ADR-0018: GPU 6 docs 全 stored 后推 meeting-complete
+        "meeting-complete" => {
+            log::info!("🎉 meeting-complete: 6 docs 全 stored, SSE 即将关闭");
+            let _ = app.emit("meeting-complete", &payload);
         }
         "chat-message" => {
             log::info!("💬 chat-message");

@@ -1267,34 +1267,41 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(f"404 Not Found: {what}".encode("utf-8"))
 
     def _handle_sse_events(self, meeting_id: str):
-        """SSE 实时事件流: 客户端连接后持续接收转写/文档/状态更新"""
-        # 2026-06-28: HTTP/1.1 + keep-alive + 客户端永远不 EOF。
-        # 之前我加了 Connection: close, 结果服务端推完 connected + heartbeat
-        # (5s 内) 就主动关 socket, reqwest 收到 EOF 报 "SSE 流结束" 然后断开。
-        # 正确做法: keep-alive + 让 reqwest 0.12 默认无 timeout + 自己持续 flush。
-        # Python BaseHTTP HTTP/1.1 + 无 Content-Length + 每帧 flush()
-        # → reqwest 持续 read 不会等 EOF, 30s timeout 也已删。
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "keep-alive")
-        self.send_header("X-Accel-Buffering", "no")  # 2026-06-28: 反向代理也别缓冲
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        # 强制 flush HTTP 响应头, 避免缓冲
-        self.wfile.flush()
+            """SSE 实时事件流: 客户端连接后持续接收转写/文档/状态更新"""
+            # 2026-06-28: HTTP/1.1 + chunked transfer encoding + keep-alive。
+            # Python BaseHTTP 默认 wfile.write() 不加 chunked 头, hyper/reqwest
+            # 在 HTTP/1.1 + 无 Content-Length 下等不到 framing → stream.next()
+            # 永远 Pending → 客户端 0 个 SSE 事件。
+            # 手动 chunked: 每帧 "hex_len\r\ndata\r\n", 终止 "0\r\n\r\n"。
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("Transfer-Encoding", "chunked")  # 2026-06-28: 显式声明
+            self.send_header("X-Accel-Buffering", "no")  # 反向代理也别缓冲
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            # 强制 flush HTTP 响应头, 避免缓冲
+            self.wfile.flush()
 
-        try:
-            from .realtime_server import sse_generator
-            last_event_id = self.headers.get("Last-Event-ID") or parse_qs(urlparse(self.path).query).get("last_event_id", [None])[0]
-            for chunk in sse_generator(meeting_id, last_event_id=last_event_id):
-                self.wfile.write(chunk)
+            try:
+                from .realtime_server import sse_generator
+                last_event_id = self.headers.get("Last-Event-ID") or parse_qs(urlparse(self.path).query).get("last_event_id", [None])[0]
+                for chunk in sse_generator(meeting_id, last_event_id=last_event_id):
+                    # 2026-06-28: 手动 chunked encoding
+                    # 格式: "{hex长度}\r\n{data}\r\n"
+                    self.wfile.write(f"{len(chunk):X}\r\n".encode("ascii"))
+                    self.wfile.write(chunk)
+                    self.wfile.write(b"\r\n")
+                    self.wfile.flush()
+                # 终止 chunk: "0\r\n\r\n"
+                self.wfile.write(b"0\r\n\r\n")
                 self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError):
-            # 客户端断开, 正常
-            pass
-        except Exception as e:
-            print(f"[SSE] {meeting_id} error: {e}")
+            except (BrokenPipeError, ConnectionResetError):
+                # 客户端断开, 正常
+                pass
+            except Exception as e:
+                print(f"[SSE] {meeting_id} error: {e}")
 
     def _handle_stream_stop(self, meeting_id: str):
         """2026-06-27: 客户端 stop_capture 调用, 关闭 SSE + 清残留"""
