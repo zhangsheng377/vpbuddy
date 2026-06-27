@@ -1268,15 +1268,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle_sse_events(self, meeting_id: str):
         """SSE 实时事件流: 客户端连接后持续接收转写/文档/状态更新"""
-        # 2026-06-28: 关 keep-alive — Python BaseHTTP 在 HTTP/1.1 不会自动 chunked,
-        # 客户端 (reqwest) 在 keep-alive + 无 Content-Length + 永远不 EOF 下会死等。
-        # 强制 close_connection 后, reqwest 读到 TCP FIN 立即结束 stream,
-        # 配合我们的 chunked-by-flush 写入, 客户端能持续收帧。
-        self.close_connection = True
+        # 2026-06-28: HTTP/1.1 + keep-alive + 客户端永远不 EOF。
+        # 之前我加了 Connection: close, 结果服务端推完 connected + heartbeat
+        # (5s 内) 就主动关 socket, reqwest 收到 EOF 报 "SSE 流结束" 然后断开。
+        # 正确做法: keep-alive + 让 reqwest 0.12 默认无 timeout + 自己持续 flush。
+        # Python BaseHTTP HTTP/1.1 + 无 Content-Length + 每帧 flush()
+        # → reqwest 持续 read 不会等 EOF, 30s timeout 也已删。
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "close")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")  # 2026-06-28: 反向代理也别缓冲
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         # 强制 flush HTTP 响应头, 避免缓冲
