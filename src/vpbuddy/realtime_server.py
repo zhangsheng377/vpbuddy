@@ -74,6 +74,7 @@ def push_event(meeting_id: str, event_type: str, payload: dict) -> int:
         subs = list(_subscribers.get(meeting_id, []))
 
     sent = 0
+    print(f"[push_event] mid={meeting_id} type={event_type} subs={len(subs)}", flush=True)
     for q in subs:
         try:
             q.put_nowait(event)

@@ -513,21 +513,36 @@ async fn run_sse_loop(
         };
         log::info!("SSE 连接: {connect_url}");
 
-        match connect_and_read_sse(&app, &connect_url, capturing.clone(), &mut last_event_id).await
-        {
-            Ok(()) => {
-                // 正常断开, 退出
+        // 2026-06-27: 用 tokio::select! 让 capturing=false 立即退出 (不等到 reqwest close)
+        tokio::select! {
+            r = connect_and_read_sse(&app, &connect_url, capturing.clone(), &mut last_event_id) => {
+                match r {
+                    Ok(()) => {
+                        // 正常断开, 退出
+                        break;
+                    }
+                    Err(e) => {
+                        log::warn!("SSE 断开: {e}, 准备重连...");
+                        retry_count += 1;
+                        // 指数退避: 1s, 2s, 4s, 8s, 最多 10s
+                        let delay = (1u64 << retry_count.min(3)) * 1000;
+                        let delay = delay.min(10_000);
+                        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                    }
+                }
+            }
+            _ = wait_capturing_false(capturing.clone()) => {
+                log::info!("SSE loop 检测到 capturing=false, 立即退出");
                 break;
             }
-            Err(e) => {
-                log::warn!("SSE 断开: {e}, 准备重连...");
-                retry_count += 1;
-                // 指数退避: 1s, 2s, 4s, 8s, 最多 10s
-                let delay = (1u64 << retry_count.min(3)) * 1000;
-                let delay = delay.min(10_000);
-                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-            }
         }
+    }
+}
+
+/// 2026-06-27: 等待 capturing 变 false (被 stop_capture 设) — 用于 select! 立即退出
+async fn wait_capturing_false(capturing: Arc<AtomicBool>) {
+    while capturing.load(Ordering::SeqCst) {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 }
 
