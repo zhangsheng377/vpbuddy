@@ -714,6 +714,9 @@ fn main() {
     // 2026-06-27: 把路径存到全局, 设置页 invoke get_log_path 读
     set_log_path(log_path.clone());
     log::info!("=== VPBuddy client 启动 (Tauri 2) ===");
+    // 2026-06-28: 启动时打印版本号 (build.rs 从 git describe 注入 env var)
+    // 张胜东: "客户端和服务端 log 一开始就打印版本信息, 就能确认有没有更新"
+    log::info!("🏷️  VPBuddy client version: {}", env!("VPBUDDY_VERSION"));
     log::info!("日志文件: {}", log_path);
     log::info!("GPU server URL: {}", std::env::var("VPBUDDY_GPU_URL").unwrap_or_else(|_| "http://192.168.10.63:8765 (默认)".into()));
     log::info!("音频 host: {:?}, 默认输出设备: 待采集时打印",

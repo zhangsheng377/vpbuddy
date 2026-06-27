@@ -1335,6 +1335,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         except Exception as e:
             print(f"⚠️ KB 预热失败(忽略): {e}", flush=True)
 
+    # 2026-06-28: 启动时打印版本号 — 一眼看出是否最新 release
+    try:
+        from ._version import __version__
+    except Exception:
+        __version__ = "unknown"
+    print(f"🏷️  VPBuddy UI server version: {__version__}", flush=True)
     print(f"🚀 VPBuddy UI server 启动", flush=True)
     print(f"   UI:    http://{args.host}:{args.port}/", flush=True)
     print(f"   DATA:  {DATA_DIR}", flush=True)
