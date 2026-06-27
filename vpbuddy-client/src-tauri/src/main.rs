@@ -553,8 +553,10 @@ async fn connect_and_read_sse(
     capturing: Arc<AtomicBool>,
     last_event_id: &mut Option<String>,
 ) -> anyhow::Result<()> {
+    // 2026-06-28: 关闭 reqwest 全局 timeout — SSE 是长连接, 30s 必报
+    // "error decoding response body" 然后断开。原 timeout(30) 是 bug。
+    // 我们用 tokio::select! + wait_capturing_false 自己控退出。
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
         .build()?;
 
     let resp = client.get(url).send().await?;

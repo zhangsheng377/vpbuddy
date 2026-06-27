@@ -492,6 +492,16 @@ def get_status() -> dict:
 
 # === HTTP Handler ===
 class Handler(BaseHTTPRequestHandler):
+    # 2026-06-28: 强制 HTTP/1.1 + 关 keep-alive — Python BaseHTTP 在 HTTP/1.1
+    # 模式下不会自动 chunked transfer encoding, wfile.write() 是裸字节;
+    # reqwest HTTP/1.1 keep-alive + no Content-Length 会死等 EOF → 30s
+    # timeout → "error decoding response body"。
+    # 关 keep-alive 后 Connection: close, reqwest 读到 EOF(连接关闭)立即结束,
+    # SSE 单连接不需要复用。
+    protocol_version = "HTTP/1.1"
+    # 关 keep-alive: Python BaseHTTP 默认 HTTP/1.1 + keep-alive, 改成 close
+    daemon_threads = True
+
     def log_message(self, format, *args):
         """安静点(不打印每次请求)"""
         pass
@@ -1258,10 +1268,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle_sse_events(self, meeting_id: str):
         """SSE 实时事件流: 客户端连接后持续接收转写/文档/状态更新"""
+        # 2026-06-28: 关 keep-alive — Python BaseHTTP 在 HTTP/1.1 不会自动 chunked,
+        # 客户端 (reqwest) 在 keep-alive + 无 Content-Length + 永远不 EOF 下会死等。
+        # 强制 close_connection 后, reqwest 读到 TCP FIN 立即结束 stream,
+        # 配合我们的 chunked-by-flush 写入, 客户端能持续收帧。
+        self.close_connection = True
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "keep-alive")
+        self.send_header("Connection", "close")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         # 强制 flush HTTP 响应头, 避免缓冲

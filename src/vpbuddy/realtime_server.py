@@ -163,12 +163,15 @@ def _format_sse(event: dict) -> bytes:
     return "".join(chunks).encode("utf-8")
 
 
-def sse_generator(meeting_id: str, timeout: float = 30.0, last_event_id: str | None = None):
-    """SSE 事件生成器, 供 HTTP handler 使用
+def sse_generator(meeting_id: str, timeout: float = 5.0, last_event_id: str | None = None):
+    """SSE 事件生成器, 供 HTTP handler 使用。
+
+    2026-06-28: heartbeat 间隔从 30s 改 5s — 客户端能更快感知连接活着,
+    debug 日志也更密集方便排查。
 
     Yields SSE 格式的字节流:
-        event: transcript-segment\n
-        data: {...}\n\n
+        event: transcript-segment\\n
+        data: {...}\\n\\n
     """
     q = _add_subscriber(meeting_id)
 
