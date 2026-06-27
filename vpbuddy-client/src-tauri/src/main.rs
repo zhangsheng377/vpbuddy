@@ -101,19 +101,26 @@ async fn start_capture(
     let ups = state.total_uploads.clone();
     // 2026-06-27: 共享 native 采样率, spawn_blocking 写, 主循环读 + resample
     let native_rate = state.native_sample_rate.clone();
-    let app_clone = app.clone();
+    // 2026-06-27: 各 spawn 闭包 move 各自的 clone, 避免 use-of-moved-value
+    // capture_emit 用闭包外的 clone, 供 run_capture_loop 退出后 emit error
+    let app_clone_sse = app.clone();
+    let app_clone_cap = app.clone();
+    let app_clone_emit = app.clone();
+    let gpu_url_sse = gpu_url.clone();
+    let mid_sse = mid.clone();
+    let capturing_sse = capturing.clone();
 
     // 2026-06-27: SSE task 提到 outer scope, 让 start_capture 能拿 JoinHandle 存进 state
     // (JoinHandle 不 Clone, 必须在 spawn caller 范围内)
     let sse_handle = tokio::spawn(async move {
-        run_sse_loop(app_clone.clone(), gpu_url.clone(), mid.clone(), capturing.clone()).await;
+        run_sse_loop(app_clone_sse, gpu_url_sse, mid_sse, capturing_sse).await;
     });
     *state.sse_handle.lock().await = Some(sse_handle);
 
     let handle = tokio::spawn(async move {
         // 音频采集 + 上传任务 (Phase B spawn_blocking, 保留我们之前的修复)
         if let Err(e) = run_capture_loop(
-            app_clone.clone(),
+            app_clone_cap,
             gpu_url,
             mid,
             capturing,
@@ -125,7 +132,7 @@ async fn start_capture(
         )
         .await
         {
-            let _ = app_clone.emit("error", format!("采集错误: {e}"));
+            let _ = app_clone_emit.emit("error", format!("采集错误: {e}"));
         }
 
         // 采集结束, SSE task 自己检测 capturing=false 后退出 (loop 条件)
