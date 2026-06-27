@@ -604,6 +604,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/meetings/stream_start":
             return self._handle_stream_start()
 
+        # 2026-06-27: stream_stop — 客户端 stop_capture 调, 关闭 SSE + 清残留
+        # 路径: POST /api/meetings/{id}/stream_stop
+        if path.startswith("/api/meetings/") and path.endswith("/stream_stop"):
+            meeting_id = path.split("/")[3]
+            return self._handle_stream_stop(meeting_id)
+
         # API: 流式 chunk — 接收 30s 切片 + 立即触发 6 docs
         # 2026-06-25: 默认走原同步模式 (向后兼容). 加 ?sync=false 走异步 fire-and-forget,
         # 立即返回 {"status":"accepted"}, 后台 daemon thread 跑 funasr+ingest+6 docs+push_event,
@@ -1272,6 +1278,19 @@ class Handler(BaseHTTPRequestHandler):
             pass
         except Exception as e:
             print(f"[SSE] {meeting_id} error: {e}")
+
+    def _handle_stream_stop(self, meeting_id: str):
+        """2026-06-27: 客户端 stop_capture 调用, 关闭 SSE + 清残留"""
+        try:
+            from .realtime_server import close_meeting
+            closed = close_meeting(meeting_id)
+        except Exception as e:
+            return self._json({"error": str(e)}, 500)
+        return self._json({
+            "meeting_id": meeting_id,
+            "closed_subscribers": closed,
+            "message": "Stream stopped, SSE subscribers closed",
+        })
 
     def _500(self, msg):
         self.send_response(500)

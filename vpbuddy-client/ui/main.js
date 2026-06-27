@@ -111,17 +111,34 @@ document.getElementById("btn-rec").addEventListener("click", async () => {
 });
 
 // === 监听 Tauri 后端事件 ===
+// 2026-06-27 加强: 时间戳 + 说话人分色块 + 自动滚动到顶 + 新增提示动画
 listen("transcript-segment", (e) => {
   const seg = e.payload;
   segCount += 1;
   const item = document.createElement("div");
   item.className = "stream-item";
-  item.innerHTML = `<span class="time">${seg.start_sec.toFixed(1)}s</span>` +
-    `<span class="spk spk-${String(seg.speaker_id).slice(-2)}">${seg.speaker_id}</span>` +
-    ` <span class="text">${escapeHtml(seg.text)}</span>`;
+  // 格式化时间 MM:SS.mmm
+  const startSec = seg.start_sec || 0;
+  const mm = Math.floor(startSec / 60).toString().padStart(2, "0");
+  const ss = (startSec % 60).toFixed(1).padStart(4, "0");
+  const timeStr = `${mm}:${ss}`;
+  const spkId = String(seg.speaker_id || "?");
+  // 说话人彩色块 — 末两位做 hash 映射色板
+  const colorIdx = parseInt(spkId.slice(-2), 10) % 8;
+  item.innerHTML =
+    `<span class="time">${timeStr}</span>` +
+    `<span class="spk spk-${colorIdx}">${escapeHtml(spkId)}</span>` +
+    ` <span class="text">${escapeHtml(seg.text || "")}</span>`;
   const list = document.getElementById("stream-list");
+  // 新增项插入顶部
   list.insertBefore(item, list.firstChild);
+  // 触发动画 — 先加高亮, 0.8s 后移除
+  item.classList.add("stream-item-fresh");
+  setTimeout(() => item.classList.remove("stream-item-fresh"), 800);
   document.getElementById("seg-count").textContent = `${segCount} 段`;
+  // 显示"最近一段"提示
+  const lastBadge = document.getElementById("last-seg");
+  if (lastBadge) lastBadge.textContent = `最新: ${(seg.text || "").slice(0, 30)}`;
 });
 
 listen("capture-stats", (e) => {

@@ -107,6 +107,38 @@ def get_subscriber_count(meeting_id: str) -> int:
         return len(_subscribers.get(meeting_id, []))
 
 
+def close_meeting(meeting_id: str) -> int:
+    """关闭某会议的所有 SSE 订阅者 (客户端 stop_capture 调)
+
+    2026-06-27: 加这个 API 是因为旧实现 sse_generator 阻塞在 q.get(timeout=30),
+    客户端 stop_capture 后不会主动关 SSE TCP, 服务端要等下一个 heartbeat/timeout
+    (最长 120s) 才能退出 generator, 期间队列残留 → 内存泄漏 + 下次同 ID 重连残留旧事件。
+
+    实现: 把所有订阅者队列都放入一个 _POISON 事件, generator 一收到立即 break。
+    Returns: 关闭的订阅者数量。
+    """
+    _POISON = object()  # 哨兵, 不是 dict, generator 判断 isinstance 跳过
+    with _subscribers_lock:
+        subs = list(_subscribers.get(meeting_id, []))
+        if meeting_id in _subscribers:
+            del _subscribers[meeting_id]
+        if meeting_id in _event_history:
+            del _event_history[meeting_id]
+    closed = 0
+    for q in subs:
+        try:
+            q.put_nowait(_POISON)
+            closed += 1
+        except queue.Full:
+            try:
+                q.get_nowait()
+                q.put_nowait(_POISON)
+                closed += 1
+            except Exception:
+                pass
+    return closed
+
+
 def cleanup_meetings_without_subscribers() -> int:
     """清理没有订阅者的会议 (清理内存)"""
     with _subscribers_lock:
@@ -149,20 +181,28 @@ def sse_generator(meeting_id: str, timeout: float = 30.0, last_event_id: str | N
                 yield _format_sse(event)
 
         last_event_time = time.time()
+        # 2026-06-27: heartbeat 用合法 JSON, 否则客户端 reqwest-eventsource 解析失败断开
+        heartbeat_payload = json.dumps({"type": "heartbeat", "ts": time.time()}, ensure_ascii=False).encode("utf-8")
+        timeout_payload = json.dumps({"type": "timeout"}, ensure_ascii=False).encode("utf-8")
         while True:
             try:
                 event = q.get(timeout=timeout)
+                # 2026-06-27: POISON = close_meeting() 发的哨兵, 收到立刻退出 generator
+                if not isinstance(event, dict):
+                    break
                 if time.time() - event.get("timestamp", 0) > EVENT_TTL:
                     continue
 
                 yield _format_sse(event)
                 last_event_time = time.time()
             except queue.Empty:
+                # 2026-06-27: 修复前 b"data: {}\n\n" 把字面 "{}" 当 JSON 推, 客户端解析失败断开
                 yield b"event: heartbeat\n"
-                yield b"data: {}\n\n"
+                yield b"data: " + heartbeat_payload + b"\n\n"
+                last_event_time = time.time()
                 if time.time() - last_event_time > 120:
                     yield b"event: timeout\n"
-                    yield b"data: {}\n\n"
+                    yield b"data: " + timeout_payload + b"\n\n"
                     break
     finally:
         _remove_subscriber(meeting_id, q)

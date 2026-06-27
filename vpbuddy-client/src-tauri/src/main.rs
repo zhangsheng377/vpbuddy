@@ -26,6 +26,8 @@ pub struct AppState {
     /// 2026-06-27: 改 Mutex 支持运行时修改 (设置页 GPU URL 输入)
     pub gpu_url: Arc<Mutex<String>>,
     pub meeting_id: Arc<Mutex<Option<String>>>,
+    /// 2026-06-27: SSE 接收 task handle, stop_capture 时 await 它自然退出
+    pub sse_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     /// 2026-06-27: 客户端日志路径 (init 时填, 设置页 invoke get_log_path 读)
     pub log_path: Arc<Mutex<String>>,
     /// 2026-06-27: 设备原生采样率 (capture 创建时填), 主循环用来 resample 16kHz
@@ -50,6 +52,7 @@ impl AppState {
             total_uploads: Arc::new(AtomicU64::new(0)),
             gpu_url: Arc::new(Mutex::new(url)),
             meeting_id: Arc::new(Mutex::new(None)),
+            sse_handle: Arc::new(Mutex::new(None)),
             log_path: Arc::new(Mutex::new(String::new())),
             // 2026-06-27: 初始 16000 (假设 16kHz native), capture 创建时更新到设备实际值
             native_sample_rate: Arc::new(AtomicU32::new(16000)),
@@ -100,16 +103,14 @@ async fn start_capture(
     let native_rate = state.native_sample_rate.clone();
     let app_clone = app.clone();
 
-    let handle = tokio::spawn(async move {
-        // SSE 接收任务 (独立 task, 跟音频采集并行)
-        let sse_gpu_url = gpu_url.clone();
-        let sse_mid = mid.clone();
-        let sse_app = app_clone.clone();
-        let sse_capturing = capturing.clone();
-        let sse_handle = tokio::spawn(async move {
-            run_sse_loop(sse_app, sse_gpu_url, sse_mid, sse_capturing).await;
-        });
+    // 2026-06-27: SSE task 提到 outer scope, 让 start_capture 能拿 JoinHandle 存进 state
+    // (JoinHandle 不 Clone, 必须在 spawn caller 范围内)
+    let sse_handle = tokio::spawn(async move {
+        run_sse_loop(app_clone.clone(), gpu_url.clone(), mid.clone(), capturing.clone()).await;
+    });
+    *state.sse_handle.lock().await = Some(sse_handle);
 
+    let handle = tokio::spawn(async move {
         // 音频采集 + 上传任务 (Phase B spawn_blocking, 保留我们之前的修复)
         if let Err(e) = run_capture_loop(
             app_clone.clone(),
@@ -127,8 +128,8 @@ async fn start_capture(
             let _ = app_clone.emit("error", format!("采集错误: {e}"));
         }
 
-        // 采集结束, 终止 SSE
-        sse_handle.abort();
+        // 采集结束, SSE task 自己检测 capturing=false 后退出 (loop 条件)
+        // 不再 abort — stop_capture 会 await 这个 handle
     });
 
     *state.capture_handle.lock().await = Some(handle);
@@ -145,6 +146,34 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
         log::info!("  采集 task 已 abort");
     } else {
         log::warn!("  capture_handle 为空, 没在跑采集?");
+    }
+
+    // 2026-06-27: 通知服务端关闭 SSE subscriber, 否则服务端队列残留最多 120s
+    // + 客户端 SSE task 也要等它退出, 否则会被中途掐断留下 502 风险
+    if let Some(mid) = state.meeting_id.lock().await.clone() {
+        let gpu_url = state.gpu_url.lock().await.clone();
+        let stop_url = format!("{}/api/meetings/{}/stream_stop", gpu_url, mid);
+        log::info!("  POST {}", stop_url);
+        match reqwest::Client::new()
+            .post(&stop_url)
+            .timeout(std::time::Duration::from_secs(3))
+            .send()
+            .await
+        {
+            Ok(r) => log::info!("  ✓ stream_stop 响应 {}", r.status()),
+            Err(e) => log::warn!("  stream_stop 调用失败 (可忽略): {e}"),
+        }
+        // 给 SSE task 1.5s 自然退出时间, 避免 abort() 强掐导致日志噪音
+        if let Some(sh) = state.sse_handle.lock().await.take() {
+            tokio::time::timeout(std::time::Duration::from_millis(1500), sh)
+                .await
+                .map(|_| log::info!("  SSE task 自然退出"))
+                .unwrap_or_else(|_| {
+                    log::info!("  SSE task 1.5s 未退出, 超时");
+                    // sh 已被 take 消费, 超时即丢弃 — task 会在 capturing=false 时自然退出
+                });
+        }
+        *state.meeting_id.lock().await = None;
     }
     Ok(())
 }
@@ -569,33 +598,43 @@ fn handle_sse_event(app: &AppHandle, event_str: &str, last_event_id: &mut Option
 
     match event_type.as_str() {
         "transcript-segment" => {
+            // 2026-06-27: 加日志 — 用户要求"客户端日志记录所有 SSE 事件"
+            log::info!("📝 transcript-segment: spk={:?} text={:?}",
+                payload.get("speaker_id"), payload.get("text"));
             let _ = app.emit("transcript-segment", &payload);
         }
         "state-update" => {
+            log::info!("📊 state-update: {}", payload);
             let _ = app.emit("state-update", &payload);
         }
         "doc-update" => {
+            log::info!("📄 doc-update: {}", payload);
             let _ = app.emit("doc-status", &payload);
         }
         "chat-message" => {
+            log::info!("💬 chat-message");
             let _ = app.emit("chat-message", &payload);
         }
         "metrics-update" => {
+            log::debug!("📈 metrics-update");
             let _ = app.emit("metrics-update", &payload);
         }
         "connected" => {
+            log::info!("✅ SSE connected: {}", payload);
             let _ = app.emit("connection-status", serde_json::json!({"sse": "connected"}));
         }
         "heartbeat" => {
+            // heartbeat 每 30s 一次, 用 debug 级别避免日志爆炸
+            log::debug!("💓 heartbeat: {}", payload);
             let _ = app.emit("connection-status", serde_json::json!({"sse": "heartbeat"}));
         }
         "timeout" => {
-            log::warn!("SSE timeout event received");
+            log::warn!("⏱️ SSE timeout event received");
         }
         other => {
             // 其他事件统一转发
             let _ = app.emit("server-event", &payload);
-            log::debug!("SSE event: {other}");
+            log::info!("🔔 SSE event [{}]: {}", other, payload);
         }
     }
 }

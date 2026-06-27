@@ -66,6 +66,33 @@ html, body { font-family: -apple-system, "Segoe UI", sans-serif; background: var
 .spk-00 { background: rgba(94,106,210,0.2); color: #a8a8ff; }
 .spk-01 { background: rgba(16,185,129,0.2); color: #6ee7b7; }
 .spk-02 { background: rgba(245,158,11,0.2); color: #fbbf24; }
+.spk-03 { background: rgba(239,68,68,0.2); color: #fca5a5; }
+.spk-04 { background: rgba(168,85,247,0.2); color: #d8b4fe; }
+.spk-05 { background: rgba(20,184,166,0.2); color: #5eead4; }
+.spk-06 { background: rgba(244,114,182,0.2); color: #f9a8d4; }
+.spk-07 { background: rgba(251,191,36,0.2); color: #fde68a; }
+/* 2026-06-27: 新增 segment 高亮动画 — 新进文本脉冲一次 */
+.stream-item-fresh { animation: seg-pulse 0.8s ease-out; border-color: var(--accent); }
+@keyframes seg-pulse {
+  0% { background: rgba(94,106,210,0.3); transform: translateX(0); }
+  20% { transform: translateX(4px); }
+  100% { background: var(--bg2); transform: translateX(0); }
+}
+/* 2026-06-27: 新增 — 最近一段 ASR 提示 */
+.last-seg-pill {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 3px;
+  background: rgba(94,106,210,0.15);
+  color: var(--accent);
+  font-size: 10px;
+  margin-left: 8px;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
 /* 2026-06-27: 6 文档改并列展示, .doc-card 改名为 .doc-block, 加 .doc-head/.doc-body */
 .docs-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
 .doc-block { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; min-height: 180px; max-height: 320px; transition: border-color .15s ease; }
