@@ -81,11 +81,15 @@ document.querySelectorAll(".bottom-nav button").forEach(b => {
 });
 
 // GPU URL 获取 (2026-06-26: 用 fetch 替代 invoke)
+// 2026-06-28: 优先级 — localStorage (用户运行时改) > invoke get_gpu_url (Rust 读 yaml) > yaml 默认值
 async function getGpuUrl() {
+  // localStorage 优先: 用户在设置页改过, 重启后保持 (Rust 启动不读 localStorage, 仅写回 yaml)
+  const ls = localStorage.getItem("vpbuddy-gpu-url");
+  if (ls) return ls;
   try {
     return await invoke("get_gpu_url");
   } catch (_) {
-    return localStorage.getItem("vpbuddy-gpu-url") || "http://gpu.zhangshengdong.com:8765";
+    return "http://gpu.zhangshengdong.com:8765";
   }
 }
 
@@ -520,5 +524,20 @@ document.getElementById("btn-open-log-dir")?.addEventListener("click", async () 
     setTimeout(() => { btn.textContent = "打开目录"; }, 2000);
   } catch (e) {
     btn.textContent = "❌ " + e;
+    setTimeout(() => { btn.textContent = "打开目录"; }, 2000);
+  }
+});
+
+// 2026-06-28: 打开配置文件 (一键直达, 用户能直接 vim 改 ~/.vpbuddy-client.yaml)
+document.getElementById("btn-open-config-dir")?.addEventListener("click", async () => {
+  const btn = document.getElementById("btn-open-config-dir");
+  if (!btn) return;
+  try {
+    await invoke("open_config_dir_cmd");
+    btn.textContent = "✓ 已打开";
+    setTimeout(() => { btn.textContent = "打开配置文件"; }, 2000);
+  } catch (e) {
+    btn.textContent = "❌ " + e;
+    setTimeout(() => { btn.textContent = "打开配置文件"; }, 2000);
   }
 });

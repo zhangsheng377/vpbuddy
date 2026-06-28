@@ -41,11 +41,128 @@ pub fn get_log_path() -> String {
     LOG_PATH.get().cloned().unwrap_or_else(|| "(log path not initialized)".to_string())
 }
 
+/// 2026-06-28: 客户端配置 (从 ~/.vpbuddy-client.yaml 读, install-client.sh 自动生成)
+/// 统一管理 GPU server URL + 音频参数 + SSE 配置 — 不再 3 处硬编码默认值
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct ClientConfig {
+    pub gpu_server_url: String,
+    #[serde(default)]
+    pub audio: AudioConfig,
+    #[serde(default)]
+    pub sse: SseConfig,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct AudioConfig {
+    #[serde(default = "default_sample_rate")]
+    pub sample_rate: u32,
+    #[serde(default = "default_chunk_seconds")]
+    pub chunk_seconds: u32,
+    #[serde(default)]
+    pub overlap_seconds: u32,
+}
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self {
+            sample_rate: default_sample_rate(),
+            chunk_seconds: default_chunk_seconds(),
+            overlap_seconds: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct SseConfig {
+    #[serde(default = "default_true")]
+    pub reconnect: bool,
+    #[serde(default = "default_max_events")]
+    pub max_events_per_chunk: u32,
+}
+impl Default for SseConfig {
+    fn default() -> Self {
+        Self {
+            reconnect: true,
+            max_events_per_chunk: default_max_events(),
+        }
+    }
+}
+
+fn default_sample_rate() -> u32 { 16000 }
+fn default_chunk_seconds() -> u32 { 30 }
+fn default_true() -> bool { true }
+fn default_max_events() -> u32 { 50 }
+
+/// 客户端配置文件路径 (跨平台: Linux/macOS=$HOME, Windows=%USERPROFILE%)
+fn client_config_path() -> std::path::PathBuf {
+    #[cfg(target_os = "windows")]
+    let base = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .unwrap_or_else(|_| "C:\\Users\\Default".into());
+    #[cfg(not(target_os = "windows"))]
+    let base = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    std::path::PathBuf::from(base).join(".vpbuddy-client.yaml")
+}
+
+/// 从 ~/.vpbuddy-client.yaml 读 config — 文件不存在/解析失败 返回 None
+/// (install-client.sh 负责首次写入默认 yaml, Rust 不主动生成)
+pub fn load_client_config() -> Option<ClientConfig> {
+    let path = client_config_path();
+    if !path.exists() {
+        log::warn!("客户端配置不存在: {} — 用硬编码默认值", path.display());
+        return None;
+    }
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("读 {} 失败: {e} — 用硬编码默认值", path.display());
+            return None;
+        }
+    };
+    match serde_yaml::from_str::<ClientConfig>(&content) {
+        Ok(c) => {
+            log::info!("客户端配置已加载: {}", path.display());
+            Some(c)
+        }
+        Err(e) => {
+            log::warn!("yaml 解析失败: {e} — 用硬编码默认值");
+            None
+        }
+    }
+}
+
+/// set_gpu_url 改后写回 yaml — 用户改设置自动持久化
+pub fn save_gpu_url_to_yaml(url: &str) -> anyhow::Result<()> {
+    let path = client_config_path();
+    // 读现有 yaml (或用默认), 改 gpu_server_url, 写回
+    let mut cfg: ClientConfig = match std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_yaml::from_str(&s).ok())
+    {
+        Some(c) => c,
+        None => ClientConfig {
+            gpu_server_url: url.to_string(),
+            audio: AudioConfig::default(),
+            sse: SseConfig::default(),
+        },
+    };
+    cfg.gpu_server_url = url.to_string();
+    let yaml = serde_yaml::to_string(&cfg).map_err(|e| anyhow::anyhow!("yaml 序列化: {e}"))?;
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(&path, yaml).map_err(|e| anyhow::anyhow!("写 {} 失败: {e}", path.display()))?;
+    log::info!("GPU URL 已写回 yaml: {}", path.display());
+    Ok(())
+}
+
 impl AppState {
     fn new() -> Self {
+        // 2026-06-28: GPU URL 优先级链 — env var > yaml > hardcoded fallback
+        // env var 用于临时调试 (不开 GUI 改文件), yaml 用于持久化 (用户改设置)
         let url = std::env::var("VPBUDDY_GPU_URL")
-            // 2026-06-28: 默认改域名 (张胜东确认 gpu.zhangshengdong.com 只解析 AAAA, IPv6)
-            .unwrap_or_else(|_| "http://gpu.zhangshengdong.com:8765".to_string());
+            .ok()
+            .or_else(|| load_client_config().map(|c| c.gpu_server_url))
+            .unwrap_or_else(|| "http://gpu.zhangshengdong.com:8765".to_string());
         Self {
             capturing: Arc::new(AtomicBool::new(false)),
             capture_handle: Arc::new(Mutex::new(None)),
@@ -211,6 +328,10 @@ async fn set_gpu_url(state: State<'_, AppState>, url: String) -> Result<(), Stri
     }
     log::info!("set_gpu_url: {} -> {}", state.gpu_url.lock().await, trimmed);
     *state.gpu_url.lock().await = trimmed.clone();
+    // 2026-06-28: 写回 ~/.vpbuddy-client.yaml, 重启后保持设置
+    if let Err(e) = save_gpu_url_to_yaml(&trimmed) {
+        log::warn!("set_gpu_url 写回 yaml 失败 (改 GPU URL 仍生效, 仅不持久化): {e}");
+    }
     Ok(())
 }
 
@@ -244,6 +365,34 @@ async fn open_log_dir_cmd(app: AppHandle) -> Result<String, String> {
         .reveal_item_in_dir(&p)
         .map_err(|e| format!("打开目录失败: {e}"))?;
     Ok(p)
+}
+
+/// 2026-06-28: 在系统文件管理器中显示 ~/.vpbuddy-client.yaml
+/// 文件不存在则创建空模板, 让用户看到能立刻编辑
+#[tauri::command]
+async fn open_config_dir_cmd(app: AppHandle) -> Result<String, String> {
+    use tauri_plugin_opener::OpenerExt;
+    let p = client_config_path();
+    log::info!("open_config_dir_cmd: reveal {}", p.display());
+    if !p.exists() {
+        // 文件不存在, 写一个默认模板 (用户能直接编辑)
+        let template = ClientConfig {
+            gpu_server_url: "http://gpu.zhangshengdong.com:8765".to_string(),
+            audio: AudioConfig::default(),
+            sse: SseConfig::default(),
+        };
+        if let Some(parent) = p.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(yaml) = serde_yaml::to_string(&template) {
+            let _ = std::fs::write(&p, yaml);
+            log::info!("已创建默认配置模板: {}", p.display());
+        }
+    }
+    app.opener()
+        .reveal_item_in_dir(&p)
+        .map_err(|e| format!("打开目录失败: {e}"))?;
+    Ok(p.to_string_lossy().to_string())
 }
 
 /// 采集主循环: cpal 流 → 30s 切片 → WAV → multipart POST GPU
@@ -745,7 +894,13 @@ fn main() {
     // 张胜东: "客户端和服务端 log 一开始就打印版本信息, 就能确认有没有更新"
     log::info!("🏷️  VPBuddy client version: {}", env!("VPBUDDY_VERSION"));
     log::info!("日志文件: {}", log_path);
-    log::info!("GPU server URL: {}", std::env::var("VPBUDDY_GPU_URL").unwrap_or_else(|_| "http://gpu.zhangshengdong.com:8765 (默认, IPv6 域名)".into()));
+    // 2026-06-28: GPU URL 显示 — env > yaml > hardcoded (跟 AppState::new 优先级一致)
+    let gpu_url_display = std::env::var("VPBUDDY_GPU_URL")
+        .ok()
+        .or_else(|| load_client_config().map(|c| c.gpu_server_url))
+        .unwrap_or_else(|| "http://gpu.zhangshengdong.com:8765 (默认, 无 yaml)".to_string());
+    log::info!("GPU server URL: {gpu_url_display}");
+    log::info!("配置文件路径: {}", client_config_path().display());
     log::info!("音频 host: {:?}, 默认输出设备: 待采集时打印",
         cpal::default_host().id());
 
@@ -832,6 +987,7 @@ fn main() {
             get_gpu_url,
             get_log_path_cmd,
             open_log_dir_cmd,
+            open_config_dir_cmd,
             kb_search,
             fetch_meeting_chat_history,
             post_meeting_chat,

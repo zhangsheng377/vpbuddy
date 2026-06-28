@@ -18,6 +18,7 @@ tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"  # 2026-06-27: 打开日志目录用 (跨平台 reveal-in-folder)
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml = "0.9"  # 2026-06-28: 读 ~/.vpbuddy-client.yaml (统一 GPU server URL 配置)
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
 futures-util = "0.3"  # SSE 流读取 (run_sse_loop 2026-06-25)

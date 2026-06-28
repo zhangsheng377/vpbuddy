@@ -127,9 +127,10 @@
         <h2>设置</h2>
         <div class="settings-card">
           <label>GPU 服务器地址</label>
-          <input type="text" id="gpu-url" placeholder="http://gpu.zhangshengdong.com:8765" />
+          <input type="text" id="gpu-url" placeholder="从 ~/.vpbuddy-client.yaml 读取" />
           <button id="btn-save-url" class="btn-small">保存</button>
-          <p class="settings-note">客户端音频和请求发到这个服务器。重启客户端后从 VPBUDDY_GPU_URL 环境变量读取，不设则用默认值。</p>
+          <button id="btn-open-config-dir" class="btn-small">打开配置文件</button>
+          <p class="settings-note">优先级: 环境变量 VPBUDDY_GPU_URL &gt; <code>~/.vpbuddy-client.yaml</code> &gt; 内置域名 (gpu.zhangshengdong.com)。"保存" 后立即生效并写回 yaml。</p>
         </div>
         <div class="settings-card">
           <label>客户端日志</label>
