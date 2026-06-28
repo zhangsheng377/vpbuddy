@@ -37,9 +37,17 @@
         </div>
         <!-- 2026-06-27: 实时波形图 (绿柱=有声音, 平线=静音) — 判断"采到声音"的最直观信号 -->
         <canvas id="waveform" class="waveform" height="60"></canvas>
+        <!-- 2026-06-28: ASR 30s batch 延迟说明 banner — 防止用户误以为"卡了"
+             funasr 不是 streaming, 攒满 30s WAV 才转写一次, 所以说话后最长等 30s 才出字
+             之前 id="latency" 占位没填, 现在用 main.js 动态显示"已等 Xs / 30s"
+             不用新加 CSS 类 — 复用现有 .stream-info 样式 -->
+        <div class="stream-info" id="latency-banner" style="color: var(--warning);">
+          <span id="latency">延迟 -</span> · 30s 切片 + funasr batch (说话后最长等 30s 出字)
+        </div>
+        <!-- 2026-06-28: 把被吃掉的 4 个 stats (段数/字节/上传/SSE) 拆成独立行 -->
         <div class="stream-info">
           <span id="seg-count">0 段</span> · <span id="byte-count">0 KB</span> · <span id="up-count">0 上传</span> ·
-          <span id="conn-status">SSE 未连接</span> · <span id="latency">延迟 -</span>
+          <span id="conn-status">SSE 未连接</span>
         </div>
         <!-- 2026-06-27: 5 类结构化事实降级到 stream 面板顶部 summary (删 facts 独立页签) -->
         <div class="stream-info" id="facts-summary">

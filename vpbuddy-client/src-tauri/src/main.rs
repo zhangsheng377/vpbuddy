@@ -208,6 +208,7 @@ async fn set_gpu_url(state: State<'_, AppState>, url: String) -> Result<(), Stri
     if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
         return Err("地址必须以 http:// 或 https:// 开头".into());
     }
+    log::info!("set_gpu_url: {} -> {}", state.gpu_url.lock().await, trimmed);
     *state.gpu_url.lock().await = trimmed.clone();
     Ok(())
 }
@@ -215,13 +216,17 @@ async fn set_gpu_url(state: State<'_, AppState>, url: String) -> Result<(), Stri
 /// 2026-06-26: 返回当前 GPU server URL (前端 fetch API 用)
 #[tauri::command]
 async fn get_gpu_url(state: State<'_, AppState>) -> Result<String, String> {
-    Ok(state.gpu_url.lock().await.clone())
+    let url = state.gpu_url.lock().await.clone();
+    log::info!("get_gpu_url: {}", url);
+    Ok(url)
 }
 
 /// 2026-06-27: 返回客户端日志文件路径 (设置页展示)
 #[tauri::command]
 async fn get_log_path_cmd() -> Result<String, String> {
-    Ok(get_log_path())
+    let p = get_log_path();
+    log::info!("get_log_path_cmd: {}", p);
+    Ok(p)
 }
 
 /// 2026-06-27: 在系统文件管理器中显示日志文件 (跨平台 reveal-in-folder)
@@ -230,6 +235,7 @@ async fn get_log_path_cmd() -> Result<String, String> {
 async fn open_log_dir_cmd(app: AppHandle) -> Result<String, String> {
     use tauri_plugin_opener::OpenerExt;
     let p = get_log_path();
+    log::info!("open_log_dir_cmd: reveal {}", p);
     if p == "(log path not initialized)" {
         return Err("日志未初始化".into());
     }
@@ -430,16 +436,19 @@ async fn kb_search(
     query: String,
     top_k: u32,
 ) -> Result<Vec<serde_json::Value>, String> {
+    log::info!("kb_search: query={:?} top_k={}", query, top_k);
     let url = format!("{}/api/kb/search?q={}&top_k={}",
         state.gpu_url.lock().await,
         urlencoding::encode(&query),
         top_k);
     let resp = reqwest::get(&url)
         .await
-        .map_err(|e| format!("KB 请求失败: {e}"))?;
+        .map_err(|e| { log::warn!("kb_search 请求失败: {e}"); format!("KB 请求失败: {e}") })?;
     let body: serde_json::Value = resp.json()
         .await
-        .map_err(|e| format!("KB 解析失败: {e}"))?;
+        .map_err(|e| { log::warn!("kb_search 解析失败: {e}"); format!("KB 解析失败: {e}") })?;
+    let n = body["results"].as_array().map(|a| a.len()).unwrap_or(0);
+    log::info!("kb_search: 命中 {} 条", n);
     Ok(body["results"].as_array().cloned().unwrap_or_default())
 }
 
@@ -456,6 +465,7 @@ async fn fetch_meeting_chat_history(
 ) -> Result<serde_json::Value, String> {
     // 2026-06-27 修: GET /api/meetings/{id}/chat 在 ui_server.py 返回 404
     // (do_GET 只匹配 endswith("/chat/history")), 改成 history 路径
+    log::info!("fetch_meeting_chat_history: meeting_id={:?}", meeting_id);
     let url = format!(
         "{}/api/meetings/{}/chat/history",
         state.gpu_url.lock().await,
@@ -463,10 +473,11 @@ async fn fetch_meeting_chat_history(
     );
     let resp = reqwest::get(&url)
         .await
-        .map_err(|e| format!("Chat 历史请求失败: {e}"))?;
+        .map_err(|e| { log::warn!("fetch_meeting_chat_history 请求失败: {e}"); format!("Chat 历史请求失败: {e}") })?;
     let body: serde_json::Value = resp.json()
         .await
-        .map_err(|e| format!("Chat 历史解析失败: {e}"))?;
+        .map_err(|e| { log::warn!("fetch_meeting_chat_history 解析失败: {e}"); format!("Chat 历史解析失败: {e}") })?;
+    log::info!("fetch_meeting_chat_history: 收到 {} 字节", body.to_string().len());
     Ok(body)
 }
 
@@ -477,6 +488,7 @@ async fn post_meeting_chat(
     message: String,
     context: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    log::info!("post_meeting_chat: meeting_id={:?} message={:?}", meeting_id, message);
     let url = format!(
         "{}/api/meetings/{}/chat",
         state.gpu_url.lock().await,
@@ -485,7 +497,7 @@ async fn post_meeting_chat(
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(150))
         .build()
-        .map_err(|e| format!("Client 构建失败: {e}"))?;
+        .map_err(|e| { log::warn!("post_meeting_chat Client 构建失败: {e}"); format!("Client 构建失败: {e}") })?;
     let resp = client
         .post(&url)
         .json(&serde_json::json!({
@@ -494,10 +506,11 @@ async fn post_meeting_chat(
         }))
         .send()
         .await
-        .map_err(|e| format!("Chat 发送失败: {e}"))?;
+        .map_err(|e| { log::warn!("post_meeting_chat 发送失败: {e}"); format!("Chat 发送失败: {e}") })?;
     let body: serde_json::Value = resp.json()
         .await
-        .map_err(|e| format!("Chat 响应解析失败: {e}"))?;
+        .map_err(|e| { log::warn!("post_meeting_chat 响应解析失败: {e}"); format!("Chat 响应解析失败: {e}") })?;
+    log::info!("post_meeting_chat: 收到响应 ({} 字节)", body.to_string().len());
     Ok(body)
 }
 
