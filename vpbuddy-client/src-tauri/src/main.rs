@@ -44,7 +44,8 @@ pub fn get_log_path() -> String {
 impl AppState {
     fn new() -> Self {
         let url = std::env::var("VPBUDDY_GPU_URL")
-            .unwrap_or_else(|_| "http://192.168.10.63:8765".to_string());
+            // 2026-06-28: 默认改域名 (张胜东确认 gpu.zhangshengdong.com 只解析 AAAA, IPv6)
+            .unwrap_or_else(|_| "http://gpu.zhangshengdong.com:8765".to_string());
         Self {
             capturing: Arc::new(AtomicBool::new(false)),
             capture_handle: Arc::new(Mutex::new(None)),
@@ -744,7 +745,7 @@ fn main() {
     // 张胜东: "客户端和服务端 log 一开始就打印版本信息, 就能确认有没有更新"
     log::info!("🏷️  VPBuddy client version: {}", env!("VPBUDDY_VERSION"));
     log::info!("日志文件: {}", log_path);
-    log::info!("GPU server URL: {}", std::env::var("VPBUDDY_GPU_URL").unwrap_or_else(|_| "http://192.168.10.63:8765 (默认)".into()));
+    log::info!("GPU server URL: {}", std::env::var("VPBUDDY_GPU_URL").unwrap_or_else(|_| "http://gpu.zhangshengdong.com:8765 (默认, IPv6 域名)".into()));
     log::info!("音频 host: {:?}, 默认输出设备: 待采集时打印",
         cpal::default_host().id());
 

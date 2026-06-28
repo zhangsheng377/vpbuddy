@@ -85,7 +85,7 @@ async function getGpuUrl() {
   try {
     return await invoke("get_gpu_url");
   } catch (_) {
-    return localStorage.getItem("vpbuddy-gpu-url") || "http://192.168.10.63:8765";
+    return localStorage.getItem("vpbuddy-gpu-url") || "http://gpu.zhangshengdong.com:8765";
   }
 }
 
