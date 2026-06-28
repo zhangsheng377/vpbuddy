@@ -101,8 +101,10 @@ echo "  ✓ rsync 推完"
 # 3. 远端 reset HEAD
 echo ""
 echo "[3/4] 远端 git reset --hard $REF_SHA ..."
+# shellcheck disable=SC2029  # 本来就该 client 端展开
 if ssh "$REMOTE" "cd $REMOTE_PATH && git cat-file -t $REF_SHA 2>/dev/null" | grep -q commit; then
     # 远端已有这个对象, 直接 reset
+    # shellcheck disable=SC2029
     ssh "$REMOTE" "cd $REMOTE_PATH && git reset --hard $REF_SHA 2>&1 | tail -3"
     echo "  ✓ HEAD 对齐 (本地已有 commit 对象)"
 else
@@ -125,6 +127,7 @@ fi
 # 4. 验证
 echo ""
 echo "[4/4] 验证远端 HEAD..."
+# shellcheck disable=SC2029
 NEW_HEAD=$(ssh "$REMOTE" "cd $REMOTE_PATH && git rev-parse HEAD")
 echo "  本机: ${REF_SHA:0:12}"
 echo "  GPU:  ${NEW_HEAD:0:12}"
