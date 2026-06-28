@@ -58,6 +58,15 @@ DOC_LABELS = {
 _CHAT_AGENT_CACHE: dict[str, Any] = {}
 _CHAT_AGENT_LOCK = threading.Lock()
 
+# 2026-06-28: ASR 后处理 agent cache — 同 (mid) 复用, 上下文拼接之前的整理结果
+# 设计: 客户端只看到整理后的 transcript-segment, 原始 segments 仍存 meta["transcript_segments"]
+_CLEAN_AGENT_CACHE: dict[str, Any] = {}
+_CLEAN_AGENT_LOCK = threading.Lock()
+# 2026-06-28: ASR 后处理窗口 — 累积 5 段 或 30s 超时 (任一满足即触发 LLM 整理)
+# 5 段阈值: 单段太短 LLM 推理开销不划算; 30s 超时: 与 funasr batch 节奏对齐, 零额外延迟
+ASR_CLEAN_WINDOW_SIZE = 5
+ASR_CLEAN_WINDOW_TIMEOUT_S = 30.0
+
 
 def _stream_meta_path(meeting_id: str) -> Path:
     return DATA_DIR / f"{meeting_id}.stream.json"
@@ -308,6 +317,91 @@ def _run_vp_chat(meeting_id: str, message: str, client_context: Optional[dict[st
         "content": str(holder["response"] or "").strip(),
         "error": None,
     }
+
+
+# 2026-06-28: ASR 后处理 agent — 复用 AIAgent 模式, 同 (mid) 跨次调用复用上下文
+# prompt 从 src/vpbuddy/prompts/asr_clean.md 加载 (跟 6 子 session 一样)
+def _get_clean_agent(meeting_id: str):
+    session_id = f"meeting:{meeting_id}:asr-clean"
+    with _CLEAN_AGENT_LOCK:
+        if session_id in _CLEAN_AGENT_CACHE:
+            return _CLEAN_AGENT_CACHE[session_id]
+        from run_agent import AIAgent  # type: ignore
+
+        # 加载 prompt 模板
+        prompt_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "prompts", "asr_clean.md"
+        )
+        try:
+            with open(prompt_path, "r", encoding="utf-8") as f:
+                prompt_template = f.read()
+        except FileNotFoundError:
+            prompt_template = "你是 VPBuddy 会议转写整理助手。"  # 兜底
+
+        _CLEAN_AGENT_CACHE[session_id] = AIAgent(
+            session_id=session_id,
+            enabled_toolsets=["file"],  # 只 file (写 doc), 不 terminal (YAGNI)
+            platform="subagent",
+            quiet_mode=True,
+            max_iterations=10,  # 整理任务不需要多轮
+            model=os.environ.get("VPBUDDY_LLM_MODEL", "MiniMax-M3"),
+            ephemeral_system_prompt=prompt_template,
+        )
+        return _CLEAN_AGENT_CACHE[session_id]
+
+
+def _run_asr_clean(meeting_id: str, raw_segments: List[dict], previous_cleaned: str = "") -> str:
+    """调 LLM 整理一段 funasr ASR 原始 segments.
+
+    输入: raw_segments 列表 (每个含 start_sec, speaker_id, text)
+         previous_cleaned 上一次的整理结果 (拼接上下文)
+    输出: LLM 整理后的纯文本
+    失败: 返回原始拼接 (fallback, 不阻塞流)
+    """
+    if not raw_segments:
+        return ""
+    # 拼成 prompt 期望的 [MM:SS] SPEAKER_XX: text 格式
+    lines = []
+    for s in raw_segments:
+        start = float(s.get("start_sec", 0))
+        mm = int(start // 60)
+        ss = start - mm * 60
+        spk = s.get("speaker_id", "UNKNOWN")
+        txt = (s.get("text") or "").strip()
+        if not txt:
+            continue
+        lines.append(f"[{mm:02d}:{ss:04.1f}] {spk}: {txt}")
+    raw_block = "\n".join(lines)
+
+    prompt = "\n".join([
+        "请整理下面这段 funasr ASR 原始输出。",
+        "",
+        f"之前的整理结果 (供上下文参考):\n{previous_cleaned[:2000] if previous_cleaned else '(无, 这是会议开始)'}\n",
+        f"原始 funasr segments:\n{raw_block}\n",
+        "直接输出整理后的文本, 不要带 markdown 标题或解释。",
+    ])
+
+    holder: dict[str, Any] = {"done": False, "response": None, "error": None}
+
+    def _runner():
+        try:
+            agent = _get_clean_agent(meeting_id)
+            holder["response"] = agent.chat(prompt)
+        except Exception as e:
+            holder["error"] = e
+        finally:
+            holder["done"] = True
+
+    t = threading.Thread(target=_runner, daemon=True)
+    t.start()
+    # ASR 整理 timeout 比 chat 短 (60s) — 5 段整理不需要 120s
+    t.join(timeout=int(os.environ.get("VPBUDDY_CLEAN_TIMEOUT", "60")))
+
+    if not holder["done"] or holder["error"]:
+        print(f"[asr_clean] {meeting_id} LLM 整理失败/超时, fallback 原始拼接: {holder.get('error')}")
+        return raw_block  # fallback: 直接返回原始拼接, 不阻塞流
+
+    return str(holder["response"] or "").strip()
 
 
 def _state_payload(state, include_items: bool = True) -> dict[str, Any]:
@@ -1103,15 +1197,62 @@ class Handler(BaseHTTPRequestHandler):
             # push_event SSE
             try:
                 from .realtime_server import push_event
+                # 2026-06-28: ASR 后处理 — 累积窗口触发 LLM 整理
+                # 原始 segments 仍存 meta["transcript_segments"], 整理版存 meta["cleaned_segments"]
+                # 客户端只看到整理版 (text 字段被替换), 字段 cleaned=true 标记
+                now_ts = time.time()
+                meta.setdefault("pending_clean", [])  # List[Tuple[raw_seg, ts]]
+                # 把这一批新 segments 加进 pending_clean 缓冲
                 for s in new_segs:
+                    meta["pending_clean"].append({"seg": s, "received_ts": now_ts})
+
+                # 判断是否触发清理: 段数 >= 5 或 最旧段超过 30s
+                should_clean = False
+                if len(meta["pending_clean"]) >= ASR_CLEAN_WINDOW_SIZE:
+                    should_clean = True
+                elif meta["pending_clean"]:
+                    oldest_ts = meta["pending_clean"][0]["received_ts"]
+                    if (now_ts - oldest_ts) >= ASR_CLEAN_WINDOW_TIMEOUT_S:
+                        should_clean = True
+
+                if should_clean:
+                    # 取出待整理的 segments
+                    pending = meta.pop("pending_clean")
+                    pending_segs = [item["seg"] for item in pending]
+                    # 拼接之前的整理结果 (上下文)
+                    prev_cleaned = "\n".join(meta.get("cleaned_segments", [])[-3:])  # 最近 3 窗口
+                    cleaned_text = _run_asr_clean(meeting_id, pending_segs, prev_cleaned)
+                    # 存整理版
+                    meta.setdefault("cleaned_segments", []).append(cleaned_text)
+                    # 2026-06-28: 只推一次清理后的"整段"文本 (不是每个原始段都推)
+                    # 用最早段的 start_sec, 整段 cleaned_text 当 1 个事件推, 客户端看到一整段
+                    first_seg = pending_segs[0]
+                    last_seg = pending_segs[-1]
                     push_event(meeting_id, "transcript-segment", {
-                        "start_sec": s["start_sec"],
-                        "end_sec": s["end_sec"],
-                        "text": s["text"],
-                        "speaker_id": s["speaker_id"],
+                        "start_sec": first_seg["start_sec"],
+                        "end_sec": last_seg["end_sec"],
+                        "text": cleaned_text,  # 整段整理后文本
+                        "raw_texts": [s["text"] for s in pending_segs],  # 保留所有原始
+                        "speaker_ids": list({s["speaker_id"] for s in pending_segs}),  # 多人去重
                         "chunk_index": chunk_index,
-                        "speaker_name": spk_map.get(s["speaker_id"], "UNKNOWN"),
+                        "speaker_name": spk_map.get(first_seg["speaker_id"], "UNKNOWN"),
+                        "cleaned": True,
+                        "window_segments": len(pending_segs),  # 这一窗口 N 段
                     })
+                    print(f"[stream_chunk/bg] {meeting_id} ASR 后处理: {len(pending_segs)} 段 → {len(cleaned_text)} 字")
+                else:
+                    # 未到窗口阈值, 先推送原始 (保证实时性)
+                    for s in new_segs:
+                        push_event(meeting_id, "transcript-segment", {
+                            "start_sec": s["start_sec"],
+                            "end_sec": s["end_sec"],
+                            "text": s["text"],
+                            "speaker_id": s["speaker_id"],
+                            "chunk_index": chunk_index,
+                            "speaker_name": spk_map.get(s["speaker_id"], "UNKNOWN"),
+                            "cleaned": False,
+                        })
+
                 push_event(meeting_id, "state-update", _state_payload(state, include_items=True))
                 push_event(meeting_id, "metrics-update", {
                     "chunk_index": chunk_index,
