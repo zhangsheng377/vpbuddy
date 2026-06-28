@@ -56,23 +56,39 @@ class TestRealtimeSSE:
     """SSE 实时推送端到端测试"""
 
     def test_sse_endpoint_exists(self, server):
-        """SSE 端点可访问并返回 connected 事件"""
+        """SSE 端点可访问并返回 connected 事件 (用 raw socket 绕 urllib chunked 解析坑)"""
         # 先创建一个会议
         resp = self._post(f"{server}/api/meetings/stream_start", {})
         assert "meeting_id" in resp
         meeting_id = resp["meeting_id"]
 
-        # 连接 SSE
-        url = f"{server}/api/meetings/{meeting_id}/events"
-        req = urllib.request.Request(url)
-        response = urllib.request.urlopen(req, timeout=5)
-        assert response.status == 200
-        assert "event-stream" in response.headers.get("Content-Type", "")
-
-        # 读 connected 事件
-        data = response.read(1024)
-        assert b"event: connected" in data
-        response.close()
+        # 连接 SSE — raw socket (跟 v0.1.1-rc5 SSE 30s timeout 修法一致)
+        import socket
+        from urllib.parse import urlparse
+        u = urlparse(f"{server}/api/meetings/{meeting_id}/events")
+        sock = socket.create_connection((u.hostname, u.port or 80), timeout=10)
+        try:
+            sock.sendall(
+                f"GET {u.path} HTTP/1.1\r\n"
+                f"Host: {u.hostname}:{u.port or 80}\r\n"
+                f"Accept: text/event-stream\r\n"
+                f"Connection: keep-alive\r\n\r\n".encode()
+            )
+            # 读 HTTP header + 第一个 SSE chunk (含 connected 事件)
+            buf = b""
+            deadline = time.time() + 10
+            while b"event: connected" not in buf and time.time() < deadline:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                buf += chunk
+            # 验证 HTTP header
+            assert b"200 OK" in buf, f"非 200 响应: {buf[:200]}"
+            assert b"text/event-stream" in buf, f"非 SSE content-type: {buf[:200]}"
+            # 验证 connected 事件
+            assert b"event: connected" in buf, f"connected 事件缺失: {buf[:500]}"
+        finally:
+            sock.close()
 
     def test_push_and_receive_event(self, server):
         """push_event → SSE 客户端能收到 (简化: 验证 server 端推送成功即可, 完整 SSE 流测试在 test_sse_e2e)"""
