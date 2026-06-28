@@ -75,54 +75,73 @@ class TestRealtimeSSE:
         response.close()
 
     def test_push_and_receive_event(self, server):
-        """push_event → SSE 客户端能收到"""
-        from vpbuddy.realtime_server import push_event, _event_queues
+        """push_event → SSE 客户端能收到 (简化: 验证 server 端推送成功即可, 完整 SSE 流测试在 test_sse_e2e)"""
+        from vpbuddy.realtime_server import push_event, close_meeting, get_subscriber_count, _event_history
 
         meeting_id = "TEST_PUSH_001"
 
-        # 清除旧队列
-        if meeting_id in _event_queues:
-            del _event_queues[meeting_id]
+        # 清除旧订阅 + 历史 (新实现用 _subscribers, 旧 _event_queues 已废)
+        close_meeting(meeting_id)
 
-        # 收集 SSE 事件
+        # 收集 SSE 事件 — 用 raw socket 更可靠
+        import socket
         received = []
+        sock = None
+        try:
+            from urllib.parse import urlparse
+            u = urlparse(f"{server}/api/meetings/{meeting_id}/events")
+            sock = socket.create_connection((u.hostname, u.port or 80), timeout=5)
+            sock.sendall(
+                f"GET {u.path} HTTP/1.1\r\n"
+                f"Host: {u.hostname}:{u.port or 80}\r\n"
+                f"Accept: text/event-stream\r\n"
+                f"Connection: keep-alive\r\n\r\n".encode()
+            )
+            # 读 HTTP header
+            buf = b""
+            while b"\r\n\r\n" not in buf:
+                chunk = sock.recv(1024)
+                if not chunk:
+                    break
+                buf += chunk
+            # 现在读 SSE body
+            body = buf.split(b"\r\n\r\n", 1)[1]
+            sock.settimeout(5)
 
-        def collect():
-            url = f"{server}/api/meetings/{meeting_id}/events"
-            req = urllib.request.Request(url)
-            try:
-                resp = urllib.request.urlopen(req, timeout=10)
-                buf = b""
-                while len(received) < 4:
-                    chunk = resp.read(512)
+            import select
+            # 等事件推到
+            for _ in range(3):
+                # 推 3 个事件
+                push_event(meeting_id, "transcript-segment", {"text": "hello", "speaker_id": "S0"})
+                push_event(meeting_id, "state-update", {"requirements": 1})
+                push_event(meeting_id, "doc-update", {"status": "ok"})
+                time.sleep(0.5)
+                # 读所有可用数据
+                while True:
+                    ready = select.select([sock], [], [], 0.2)
+                    if not ready[0]:
+                        break
+                    chunk = sock.recv(4096)
                     if not chunk:
                         break
-                    buf += chunk
-                    while b"\n\n" in buf:
-                        pos = buf.index(b"\n\n")
-                        received.append(buf[:pos].decode("utf-8"))
-                        buf = buf[pos + 2:]
-                resp.close()
-            except Exception as e:
-                received.append(f"ERROR:{e}")
+                    body += chunk
+                # 检查累计
+                events = body.decode("utf-8", errors="replace").split("\n\n")
+                received = [e for e in events if e.strip()]
+                if len(received) >= 4:
+                    break
+        finally:
+            if sock:
+                sock.close()
 
-        t = threading.Thread(target=collect, daemon=True)
-        t.start()
-        time.sleep(0.3)
-
-        # 推送 3 个事件
-        push_event(meeting_id, "transcript-segment", {"text": "hello", "speaker_id": "S0"})
-        push_event(meeting_id, "state-update", {"requirements": 1})
-        push_event(meeting_id, "doc-update", {"status": "ok"})
-
-        t.join(timeout=5)
-
-        # 验证
+        # 验证 — 至少收到 connected + 3 push 事件
         assert len(received) >= 4, f"只收到 {len(received)}: {received}"
-        assert any("transcript-segment" in e for e in received)
-        assert any("state-update" in e for e in received)
-        assert any("doc-update" in e for e in received)
-        assert any("hello" in e for e in received)
+        all_text = "\n".join(received)
+        assert "connected" in all_text, f"connected 事件缺失: {received}"
+        assert "transcript-segment" in all_text
+        assert "state-update" in all_text
+        assert "doc-update" in all_text
+        assert "hello" in all_text
 
     def test_stream_chunk_with_sse(self, server):
         """上传静音 chunk → 服务端返回 HTTP 结果 + SSE 推送"""
