@@ -25,24 +25,16 @@
 
 ## 处理规则
 
-### 保留 (不要改)
-- **已知专有名词**: VPBuddy / Hermes / sqlite-vec / sentence-transformers / funasr / paraformer / Tauri / cpal / req/arch/tasks/api/risk/demo / ASR / GPU / SSE / IPC / WebView2 / BlackHole / PipeWire / WASAPI / CoreAudio / UTF-8 / CJK / YAGNI / ADR-0001~0018 等
-- **说话人 ID**: SPEAKER_00 / SPEAKER_01 等必须保留原样 (下游子 agent 依赖 speaker_id 做事实归属)
-- **数字 / 时间 / URL**: 原样保留
-- **英文缩写**: API / LLM / KB / GPU 等保留大写
-
-### 修正 (funasr 常见错)
-- 同音字错: "速据" → "数据" / "厉史" → "历史" / "未完成" 原样
-- 英文术语识别错: "VP body" → "VPBuddy" / "sql lite vec" → "sqlite-vec" / "sentencance transformers" → "sentence-transformers" (基于上下文推断)
-- 重复字: "不会传传任" → "不会上传"
-- 中英混断句: 在英文术语后加合理空格或中文逗号
-
-### 不要做
-- **不要添加内容**: 不输出"我认为..."、"接下来..."、"总结一下"等总结性话语
-- **不要删除**: 即使看起来是噪声 (重复、卡顿)，原样保留并用 [噪声] 标记
-- **不要合并不同说话人**: 每个 SPEAKER 独立成段
-- **不要翻译**: 用户说中文保留中文，英文保留英文
-- **不要 Markdown 标题**: 直接输出文本，不要 "## 整理后" 之类的标题
+### 强制修正 (优先级最高)
+- 以下 funasr 常见错误识别必须**强制修正**, 不要犹豫:
+  - "VP body" / "vp body" / "VP Body" → **VPBuddy**
+  - "tory" / "Tory" → **Tauri** (不是 TypeScript)
+  - "funnaser" / "funiser" / "FunASR" → **funasr**
+  - "slilify" / "civil liffi" / "sql lite vec" → **sqlite-vec**
+  - "sentencance transformers" / "sentence transformers" → **sentence-transformers**
+  - 同音字错: "速据" → "数据" / "厉史" → "历史" / "不会传传任" → "不会上传"
+  - 中英混断句: 英文术语后加合理空格或中文逗号
+- **不要写"修正说明"** — 直接改, 不要解释</string>
 
 ## 输出格式
 每行: [MM:SS] SPEAKER_ID: 整理后的中文文本
@@ -56,7 +48,12 @@
 - 如果当前段是上一段的延续，可以合并: "好的，那就这么定了。"
 - 如果当前段是新的发言方，保留分段
 
-## 边界情况
-- 如果输入只有 1 段且是噪声: 输出 "[噪声]"
+### 噪声过滤
+- **意义不明的 ASR 噪声**（回声残留 / 半句话 / 孤立零碎词 / 无意义重复）— **直接删除**
+- **保留有内容的发言**（即使很短但语义明确）— 照常保留整理
+- **"嗯"、"好的"、"对"** 等短反馈 — 保留不删（它们是对话的一部分）
+
+### 边界情况
+- 如果输入只有 1 段且是明显噪声 / 无意义: **直接删除**（输出空行）
 - 如果输入跨多个说话人: 按 speaker 分段输出
-- 如果输入太短 (< 10 字): 原样输出，不强行整理
+- 如果输入太短 (< 10 字): 用上下文判断, 是延续上一次发言则保留, 否则删除
