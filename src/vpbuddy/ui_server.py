@@ -1221,7 +1221,9 @@ class Handler(BaseHTTPRequestHandler):
             })
             _save_stream_meta(meeting_id, meta)
 
-            # 6 子 session (同 _handle_stream_chunk 同步逻辑)
+            # 2026-06-30: 6 docs trigger fire-and-forget, 不阻塞 asr_clean + push_event
+            # 原因: 6 docs 各跑 30-100s 调云端 LLM, 阻塞会拖慢 transcript-segment 推送
+            # 张胜东反馈: "asr的前几句才出来, 但demo 早就出来了, 说明不是 asr 慢而是推送/接收慢"
             from concurrent.futures import ThreadPoolExecutor
             from .sub_session_controller import trigger_sub_session
             doc_kinds = DOC_KINDS
@@ -1233,19 +1235,22 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as e:
                     return (kind, False, str(e))
 
-            with ThreadPoolExecutor(max_workers=3) as ex:
-                futures = [ex.submit(_run_sub, meeting_id, k) for k in doc_kinds]
-                def _log_done(fut):
-                    try:
-                        kind, triggered, err = fut.result(timeout=1)
-                        msg = f"[stream_chunk/bg] {kind} triggered={triggered}"
-                        if err:
-                            msg += f" err={err[:200]}"
-                        print(msg)
-                    except Exception as e:
-                        print(f"[stream_chunk/bg] callback err: {e}")
-                for f in futures:
-                    f.add_done_callback(_log_done)
+            def _log_done(fut, kind):
+                try:
+                    _, triggered, err = fut.result(timeout=1)
+                    msg = f"[stream_chunk/bg] {kind} triggered={triggered}"
+                    if err:
+                        msg += f" err={err[:200]}"
+                    print(msg)
+                except Exception as e:
+                    print(f"[stream_chunk/bg] {kind} callback err: {e}")
+
+            # 2026-06-30: 独立 executor 不 await, fire-and-forget
+            # 用 daemon=True 让线程不阻塞进程退出
+            _bg_executor = ThreadPoolExecutor(max_workers=6, thread_name_prefix="doc-trigger")
+            for k in doc_kinds:
+                fut = _bg_executor.submit(_run_sub, meeting_id, k)
+                fut.add_done_callback(lambda f, kk=k: _log_done(f, kk))
 
             # push_event SSE
             try:
