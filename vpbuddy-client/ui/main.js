@@ -150,26 +150,38 @@ listen("transcript-segment", (e) => {
     document.getElementById("latency").textContent = `已等 0.0s / ${LATENCY_WINDOW_S}s (刚出字)`;
   }
   segCount += 1;
-  const item = document.createElement("div");
-  item.className = "stream-item";
-  // 格式化时间 MM:SS.mmm
-  const startSec = seg.start_sec || 0;
-  const mm = Math.floor(startSec / 60).toString().padStart(2, "0");
-  const ss = (startSec % 60).toFixed(1).padStart(4, "0");
-  const timeStr = `${mm}:${ss}`;
-  const spkId = String(seg.speaker_id || "?");
-  // 说话人彩色块 — 末两位做 hash 映射色板
-  const colorIdx = parseInt(spkId.slice(-2), 10) % 8;
-  item.innerHTML =
-    `<span class="time">${timeStr}</span>` +
-    `<span class="spk spk-${colorIdx}">${escapeHtml(spkId)}</span>` +
-    ` <span class="text">${escapeHtml(seg.text || "")}</span>`;
+  // 2026-06-29: 支持多行 cleaned 事件 — 拆 \n 逐条显示
+  // 张胜东反馈: cleaned 文本含 [MM:SS] SPEAKER_XX: text\n[MM:SS]...
+  const lines = (seg.text || "").split("\n").filter(l => l.trim());
   const list = document.getElementById("stream-list");
-  // 新增项插入顶部
-  list.insertBefore(item, list.firstChild);
-  // 触发动画 — 先加高亮, 0.8s 后移除
-  item.classList.add("stream-item-fresh");
-  setTimeout(() => item.classList.remove("stream-item-fresh"), 800);
+  for (const line of lines) {
+    // 尝试从 line 提取 [MM:SS] SPEAKER: text
+    let timeStr = "", spkId = seg.speaker_id || "?", text = line;
+    const m = line.match(/^\[(\d+:\d+[\.\d]*)\]\s*(SPEAKER_\w+):\s*(.*)/);
+    if (m) {
+      timeStr = m[1];
+      spkId = m[2];
+      text = m[3];
+    } else {
+      // 没有时间戳, 用 event 整体 start_sec
+      const startSec = seg.start_sec || 0;
+      const mm = Math.floor(startSec / 60).toString().padStart(2, "0");
+      const ss = (startSec % 60).toFixed(1).padStart(4, "0");
+      timeStr = `${mm}:${ss}`;
+    }
+    const colorIdx = parseInt(spkId.slice(-2), 10) % 8;
+    const item = document.createElement("div");
+    item.className = "stream-item";
+    // 2026-06-29: cleaned 事件标记浅蓝色背景
+    if (seg.cleaned) item.classList.add("stream-item-cleaned");
+    item.innerHTML =
+      `<span class="time">${timeStr}</span>` +
+      `<span class="spk spk-${colorIdx}">${escapeHtml(spkId)}</span>` +
+      ` <span class="text">${escapeHtml(text)}</span>`;
+    list.insertBefore(item, list.firstChild);
+    item.classList.add("stream-item-fresh");
+    setTimeout(() => item.classList.remove("stream-item-fresh"), 800);
+  }
   document.getElementById("seg-count").textContent = `${segCount} 段`;
   // 显示"最近一段"提示
   const lastBadge = document.getElementById("last-seg");

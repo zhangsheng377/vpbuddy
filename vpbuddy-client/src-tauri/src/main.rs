@@ -719,11 +719,13 @@ async fn run_sse_loop(
             r = connect_and_read_sse(&app, &connect_url, capturing.clone(), &mut last_event_id) => {
                 match r {
                     Ok(()) => {
-                        // 正常断开, 退出
+                        log::info!("SSE 正常断开");
+                        let _ = app.emit("connection-status", serde_json::json!({"sse": "disconnected"}));
                         break;
                     }
                     Err(e) => {
                         log::warn!("SSE 断开: {e}, 准备重连...");
+                        let _ = app.emit("connection-status", serde_json::json!({"sse": "disconnected"}));
                         retry_count += 1;
                         // 指数退避: 1s, 2s, 4s, 8s, 最多 10s
                         let delay = (1u64 << retry_count.min(3)) * 1000;
