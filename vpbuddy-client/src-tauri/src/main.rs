@@ -270,6 +270,7 @@ async fn start_capture(
 #[tauri::command]
 async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
     log::info!("=== stop_capture 触发 ===");
+    log::info!("  capturing={} (设 false 中)", state.capturing.load(Ordering::SeqCst));
     state.capturing.store(false, Ordering::SeqCst);
     if let Some(h) = state.capture_handle.lock().await.take() {
         h.abort();
@@ -294,8 +295,12 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
             Ok(r) => log::info!("  ✓ stream_stop 响应 {}", r.status()),
             Err(e) => log::warn!("  stream_stop 调用失败 (可忽略): {e}"),
         }
+        log::info!("  meeting_id={}, SSE 继续等 GPU docs 完成", mid);
+    } else {
+        log::warn!("  meeting_id 为空, 没有活跃会议");
     }
     // 注意: sse_handle 不 await — SSE 继续等 GPU 6 docs 完成 + close_meeting
+    log::info!("=== stop_capture 完成 ===");
     Ok(())
 }
 
@@ -464,7 +469,7 @@ async fn run_capture_loop(
     });
 
     let sample_rate = 16000u32;
-    // 30s 切片缓冲
+    // 30s 切片缓冲 (480000 samples = 30s @ 16kHz)
     let chunk_samples = (sample_rate as usize) * 30;
     let mut buffer: Vec<i16> = Vec::with_capacity(chunk_samples);
     // 2026-06-25: 切片序号 (TRAE upload_chunk API 需要)
@@ -476,6 +481,10 @@ async fn run_capture_loop(
     // 让外层 while 重新检查 capturing, 而不是永远 hang (张胜东 02:13 案例)
     let mut last_recv = std::time::Instant::now();
     const STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+    // 2026-06-29: time-based 切片 — 30s 到了强制切 (不用等满 480000 samples)
+    // 张胜东反馈: 录 30s 差 0.5s 没满 chunk_samples, 切片永远不触发
+    let mut last_chunk_at = std::time::Instant::now();
+    const CHUNK_TIME_SECS: f32 = 30.0;
 
     // 2. tokio task 拼切片 + POST
     while capturing.load(Ordering::SeqCst) {
@@ -508,9 +517,12 @@ async fn run_capture_loop(
             "bytes": n,
             "uploads": ups.load(Ordering::SeqCst),
         }));
-        if n > 0 && chunk_index == 0 && buffer.len() < chunk_samples {
-            log::info!("buffering: {} / {} samples ({:.0}%)",
-                buffer.len(), chunk_samples, buffer.len() as f32 / chunk_samples as f32 * 100.0);
+        // 2026-06-29: 每 10% 记录一次缓冲状态 (张胜东要求所有行为加日志)
+        let buf_pct = buffer.len() as f32 / chunk_samples as f32 * 100.0;
+        if chunk_index == 0 && buf_pct > 0.0 && (buf_pct as u32) % 10 == 0 {
+            log::info!("📦 缓冲进度: {:.0}% ({} / {} samples, {:.1}s)",
+                buf_pct, buffer.len(), chunk_samples,
+                buffer.len() as f32 / sample_rate as f32);
         }
 
         // 2026-06-27: 算 RMS (均方根) 当波形图高度, emit 给前端画 canvas
@@ -544,10 +556,24 @@ async fn run_capture_loop(
             silence_streak = 0;
         }
 
-        // 满 30s 就切片上传
-        if buffer.len() >= chunk_samples && auto_upload {
-            let chunk: Vec<i16> = buffer.drain(..chunk_samples).collect();
+        // 满 30s 就切片上传 (size-based OR time-based)
+        // 张胜东反馈: 30s 差 0.5s 没满 480000, 切片永远不触发 — 改 time-based
+        let elapsed_sec = last_chunk_at.elapsed().as_secs_f32();
+        let should_chunk_size = buffer.len() >= chunk_samples;
+        let should_chunk_time = elapsed_sec >= CHUNK_TIME_SECS && !buffer.is_empty();
+        if (should_chunk_size || should_chunk_time) && auto_upload {
+            let (start_t, end_t) = if should_chunk_size {
+                (buffer.len() - chunk_samples, buffer.len())
+            } else {
+                log::info!("⏰ time-based 切片触发 ({}s, buffer={} samples < 满)",
+                    elapsed_sec, buffer.len());
+                (0, buffer.len())
+            };
+            let chunk: Vec<i16> = buffer.drain(start_t..end_t).collect();
             let wav_data = audio::encode_wav(&chunk, sample_rate)?;
+            log::info!("📤 上传 chunk #{}: {} samples ({:.1}s 音频, trigger={})",
+                chunk_index, chunk.len(), chunk.len() as f32 / sample_rate as f32,
+                if should_chunk_size { "size" } else { "time" });
 
             // 2026-06-25: TRAE 改的 upload_chunk 签名 (5 参数 + 返回 Vec)
             let overlap_sec = 0.0_f32;  // Phase B 没有 overlap, 后续 v1.2 加
@@ -563,16 +589,20 @@ async fn run_capture_loop(
             {
                 Ok(segs) => {
                     ups.fetch_add(1, Ordering::SeqCst);
+                    log::info!("✅ chunk #{} 上传成功, server 返回 {} 段 transcript-segment",
+                        chunk_index, segs.len());
                     for seg in segs {
                         let _ = app.emit("transcript-segment", &seg);
                     }
                 }
                 Err(e) => {
+                    log::error!("❌ chunk #{} 上传失败: {e}", chunk_index);
                     let _ = app.emit("error", format!("上传失败: {e}"));
                 }
             }
             chunk_index += 1;
-            total_elapsed_sec += 30.0;
+            total_elapsed_sec += chunk.len() as f32 / sample_rate as f32;
+            last_chunk_at = std::time::Instant::now();
         }
     }
 
@@ -794,8 +824,14 @@ fn handle_sse_event(app: &AppHandle, event_str: &str, last_event_id: &mut Option
     match event_type.as_str() {
         "transcript-segment" => {
             // 2026-06-27: 加日志 — 用户要求"客户端日志记录所有 SSE 事件"
-            log::info!("📝 transcript-segment: spk={:?} text={:?}",
-                payload.get("speaker_id"), payload.get("text"));
+            let cleaned = payload.get("cleaned").and_then(|v| v.as_bool()).unwrap_or(false);
+            let text = payload.get("text").and_then(|v| v.as_str()).map(|s| &s[..s.len().min(80)]);
+            log::info!("📝 transcript-segment: cleaned={} spk={:?} text={:?}",
+                cleaned, payload.get("speaker_id"), text);
+            // 2026-06-29: 收到 SSE transcript-segment 时, 记录完整 payload (去重音)
+            let text_len = payload.get("text").and_then(|v| v.as_str()).map(|s| s.len()).unwrap_or(0);
+            log::debug!("transcript-segment payload keys: {:?}, text_len={}",
+                payload.as_object().map(|o| o.keys().collect::<Vec<_>>()), text_len);
             let _ = app.emit("transcript-segment", &payload);
         }
         "state-update" => {
