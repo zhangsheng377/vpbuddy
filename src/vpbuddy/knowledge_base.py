@@ -49,7 +49,18 @@ class KnowledgeBase:
         """初始化表 + vec0 虚拟表"""
         if not SQLITE_VEC_LOADED:
             raise RuntimeError("sqlite-vec not installed. pip install sqlite-vec")
-        self._conn = sqlite3.connect(str(self.db_path))
+        # 2026-06-30: WAL 模式 + 锁 + timeout — 修多线程 6 docs trigger database is locked
+        # 张胜东反馈: 6 AIAgent 同时调 add_document 抢锁失败 3 次
+        self._conn = sqlite3.connect(
+            str(self.db_path),
+            check_same_thread=False,  # 多线程 (6 docs trigger 同时写)
+            timeout=30,               # 等锁最多 30s
+        )
+        self._conn.execute("PRAGMA journal_mode=WAL")  # WAL 模式读不阻塞写
+        self._conn.execute("PRAGMA busy_timeout=30000")  # 30s busy timeout
+        # 2026-06-30: 写操作串行化锁 — sqlite3 单连接多线程不安全
+        # 6 docs 触发 → 6 个 thread 同时 add_document, 加锁串行写
+        self._write_lock = __import__('threading').RLock()
         self._conn.enable_load_extension(True)
         sqlite_vec.load(self._conn)
         self._conn.enable_load_extension(False)
@@ -93,37 +104,40 @@ class KnowledgeBase:
         if not content or not content.strip():
             return -1
 
-        # 1. upsert 元数据(同 meeting+kind 覆盖)
-        # ⚠️ Pydantic/SQLite: INSERT OR REPLACE 会复用 rowid
-        #    必须先查老 doc_id 再删 vec, 不能 lastrowid (REPLACE 时拿到的是新 id, 旧 vec 残留)
-        old_row = self._conn.execute(
-            "SELECT id FROM documents WHERE meeting_id = ? AND doc_kind = ?",
-            (meeting_id, doc_kind),
-        ).fetchone()
-        old_doc_id = old_row[0] if old_row else None
-        if old_doc_id is not None:
-            self._conn.execute("DELETE FROM vec_documents WHERE id = ?", (old_doc_id,))
-            self._conn.execute("DELETE FROM documents WHERE id = ?", (old_doc_id,))
+        # 2026-06-30: 写锁 — 6 docs 触发并发写 KB 时, 串行化避免 database is locked
+        # 注意: encoding (model.encode) 不在锁内, 锁只包 SQL 写, 否则 GPU/内存浪费
+        with self._write_lock:
+            # 1. upsert 元数据(同 meeting+kind 覆盖)
+            # ⚠️ Pydantic/SQLite: INSERT OR REPLACE 会复用 rowid
+            #    必须先查老 doc_id 再删 vec, 不能 lastrowid (REPLACE 时拿到的是新 id, 旧 vec 残留)
+            old_row = self._conn.execute(
+                "SELECT id FROM documents WHERE meeting_id = ? AND doc_kind = ?",
+                (meeting_id, doc_kind),
+            ).fetchone()
+            old_doc_id = old_row[0] if old_row else None
+            if old_doc_id is not None:
+                self._conn.execute("DELETE FROM vec_documents WHERE id = ?", (old_doc_id,))
+                self._conn.execute("DELETE FROM documents WHERE id = ?", (old_doc_id,))
+                self._conn.commit()
+
+            cur = self._conn.execute(
+                "INSERT INTO documents (meeting_id, doc_kind, content) VALUES (?, ?, ?)",
+                (meeting_id, doc_kind, content),
+            )
+            doc_id = cur.lastrowid
+
+            # 2. 算 embedding(整文档平均, 简单粗暴) — 在锁内复用同一事务
+            model = self._get_model()
+            vec = model.encode(content, normalize_embeddings=True).tolist()
+            vec_blob = sqlite_vec.serialize_float32(vec)
+
+            # 3. 插入新 vec (用真新 doc_id, 老 vec 已删)
+            self._conn.execute(
+                "INSERT INTO vec_documents (id, embedding) VALUES (?, ?)",
+                (doc_id, vec_blob),
+            )
             self._conn.commit()
-
-        cur = self._conn.execute(
-            "INSERT INTO documents (meeting_id, doc_kind, content) VALUES (?, ?, ?)",
-            (meeting_id, doc_kind, content),
-        )
-        doc_id = cur.lastrowid
-
-        # 2. 算 embedding(整文档平均, 简单粗暴)
-        model = self._get_model()
-        vec = model.encode(content, normalize_embeddings=True).tolist()
-        vec_blob = sqlite_vec.serialize_float32(vec)
-
-        # 3. 插入新 vec (用真新 doc_id, 老 vec 已删)
-        self._conn.execute(
-            "INSERT INTO vec_documents (id, embedding) VALUES (?, ?)",
-            (doc_id, vec_blob),
-        )
-        self._conn.commit()
-        return doc_id
+            return doc_id
 
     def search(self, query: str, top_k: int = 5,
                meeting_id: Optional[str] = None) -> List[Dict]:
