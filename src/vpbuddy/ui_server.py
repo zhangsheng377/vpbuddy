@@ -30,6 +30,8 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
+from urllib.request import Request, urlopen
+from urllib.error import URLError
 
 # 🔒 HF 模型离线铁律 (2026-06-23 ADR-0011):
 # 国内 huggingface.co 被墙,启动时强制默认走本地 cache。
@@ -66,6 +68,11 @@ _CLEAN_AGENT_LOCK = threading.Lock()
 # 5 段阈值: 单段太短 LLM 推理开销不划算; 30s 超时: 与 funasr batch 节奏对齐, 零额外延迟
 ASR_CLEAN_WINDOW_SIZE = 5
 ASR_CLEAN_WINDOW_TIMEOUT_S = 30.0
+# 2026-06-29: 截断保护 — LLM 整理超长时截断到 N 字 (防 8b num_predict 用尽丢原话)
+ASR_CLEAN_MAX_CHARS = 2000
+# 2026-06-29: 默认 LLM 模型 (本地 ollama qwen3:8b, 实测 6.58s/窗口, 4/5 术语修对)
+# 用 VPBUDDY_LLM_MODEL env 覆盖, 留 hermes 云端 fallback
+ASR_CLEAN_DEFAULT_MODEL = os.environ.get("VPBUDDY_LLM_MODEL", "qwen3:8b")
 
 
 def _stream_meta_path(meeting_id: str) -> Path:
@@ -251,7 +258,8 @@ def _get_chat_agent(meeting_id: str):
             platform="subagent",
             quiet_mode=True,
             max_iterations=20,
-            model=os.environ.get("VPBUDDY_LLM_MODEL", "MiniMax-M3"),
+            base_url=os.environ.get("VPBUDDY_LLM_API_BASE", "http://localhost:11434/v1"),
+            model=os.environ.get("VPBUDDY_LLM_MODEL", "qwen3:8b"),
             ephemeral_system_prompt="\n".join([
                 "你是 VPBuddy 的 VP Chat 主控 agent。",
                 f"session_id 固定 = {session_id}。",
@@ -344,7 +352,8 @@ def _get_clean_agent(meeting_id: str):
             platform="subagent",
             quiet_mode=True,
             max_iterations=10,  # 整理任务不需要多轮
-            model=os.environ.get("VPBUDDY_LLM_MODEL", "MiniMax-M3"),
+            base_url=os.environ.get("VPBUDDY_LLM_API_BASE", "http://localhost:11434/v1"),
+            model=os.environ.get("VPBUDDY_LLM_MODEL", "qwen3:8b"),
             ephemeral_system_prompt=prompt_template,
         )
         return _CLEAN_AGENT_CACHE[session_id]
@@ -357,6 +366,11 @@ def _run_asr_clean(meeting_id: str, raw_segments: List[dict], previous_cleaned: 
          previous_cleaned 上一次的整理结果 (拼接上下文)
     输出: LLM 整理后的纯文本
     失败: 返回原始拼接 (fallback, 不阻塞流)
+
+    2026-06-29: 直接调 ollama HTTP API (/api/chat), 不走 AIAgent
+    原因: AIAgent dispatch 内部固定 OpenAI 协议走 minimaxi 云端,
+         `qwen3:8b` 这种本地 ollama 模型名会 400.
+         ASR 整理是单轮 LLM call, 不需要 agent 框架的 tool calling.
     """
     if not raw_segments:
         return ""
@@ -373,7 +387,17 @@ def _run_asr_clean(meeting_id: str, raw_segments: List[dict], previous_cleaned: 
         lines.append(f"[{mm:02d}:{ss:04.1f}] {spk}: {txt}")
     raw_block = "\n".join(lines)
 
-    prompt = "\n".join([
+    # 加载 prompt
+    prompt_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "prompts", "asr_clean.md"
+    )
+    try:
+        with open(prompt_path, "r", encoding="utf-8") as f:
+            system_prompt = f.read()
+    except FileNotFoundError:
+        system_prompt = "你是 VPBuddy 会议转写整理助手。"
+
+    user_msg = "\n".join([
         "请整理下面这段 funasr ASR 原始输出。",
         "",
         f"之前的整理结果 (供上下文参考):\n{previous_cleaned[:2000] if previous_cleaned else '(无, 这是会议开始)'}\n",
@@ -381,12 +405,33 @@ def _run_asr_clean(meeting_id: str, raw_segments: List[dict], previous_cleaned: 
         "直接输出整理后的文本, 不要带 markdown 标题或解释。",
     ])
 
+    # 直接调 ollama /api/chat
+    ollama_url = os.environ.get("VPBUDDY_OLLAMA_URL", "http://localhost:11434/api/chat")
+    model = os.environ.get("VPBUDDY_LLM_MODEL", "qwen3:8b")
+    timeout = int(os.environ.get("VPBUDDY_CLEAN_TIMEOUT", "60"))
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_msg},
+        ],
+        "stream": False,
+        "options": {"num_predict": 4096, "temperature": 0.1},
+    }
+
     holder: dict[str, Any] = {"done": False, "response": None, "error": None}
 
     def _runner():
         try:
-            agent = _get_clean_agent(meeting_id)
-            holder["response"] = agent.chat(prompt)
+            req = Request(
+                ollama_url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            with urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read())
+            holder["response"] = data.get("message", {}).get("content", "")
         except Exception as e:
             holder["error"] = e
         finally:
@@ -394,14 +439,22 @@ def _run_asr_clean(meeting_id: str, raw_segments: List[dict], previous_cleaned: 
 
     t = threading.Thread(target=_runner, daemon=True)
     t.start()
-    # ASR 整理 timeout 比 chat 短 (60s) — 5 段整理不需要 120s
-    t.join(timeout=int(os.environ.get("VPBUDDY_CLEAN_TIMEOUT", "60")))
+    t.join(timeout=timeout + 5)  # 留 5s 余量
 
     if not holder["done"] or holder["error"]:
         print(f"[asr_clean] {meeting_id} LLM 整理失败/超时, fallback 原始拼接: {holder.get('error')}")
         return raw_block  # fallback: 直接返回原始拼接, 不阻塞流
 
-    return str(holder["response"] or "").strip()
+    text = str(holder["response"] or "").strip()
+    if not text:
+        print(f"[asr_clean] {meeting_id} LLM 返回空, fallback 原始拼接")
+        return raw_block
+
+    # 2026-06-29: 截断保护 — 防 LLM 超出 num_predict 丢原话
+    if len(text) > ASR_CLEAN_MAX_CHARS:
+        print(f"[asr_clean] {meeting_id} 整理超长 {len(text)}>{ASR_CLEAN_MAX_CHARS}, 截断")
+        text = text[:ASR_CLEAN_MAX_CHARS] + f"\n[...已截断, 原始 {len(raw_segments)} 段在 cleaned_windows 回查]"
+    return text
 
 
 def _state_payload(state, include_items: bool = True) -> dict[str, Any]:
@@ -1224,6 +1277,21 @@ class Handler(BaseHTTPRequestHandler):
                     cleaned_text = _run_asr_clean(meeting_id, pending_segs, prev_cleaned)
                     # 存整理版
                     meta.setdefault("cleaned_segments", []).append(cleaned_text)
+                    # 2026-06-29: 存 cleaned_windows — 一一对应 raw_segments 和 cleaned_text
+                    # 防 LLM 输出截断时丢原话, 回查用
+                    truncated = "[...已截断" in cleaned_text
+                    meta.setdefault("cleaned_windows", []).append({
+                        "window_id": len(meta.get("cleaned_windows", [])) + 1,
+                        "start_sec": pending_segs[0].get("start_sec", 0),
+                        "end_sec": pending_segs[-1].get("end_sec", 0),
+                        "raw_segments": pending_segs,  # 完整原始 (含 start_sec/speaker_id/text)
+                        "cleaned_text": cleaned_text,
+                        "truncated": truncated,
+                        "cleaned_at": datetime.now().isoformat(),
+                        "window_segments": len(pending_segs),
+                    })
+                    # 2026-06-29: 持久化 meta — 上面改了 cleaned_windows/cleaned_segments, 必须 save
+                    _save_stream_meta(meeting_id, meta)
                     # 2026-06-28: 只推一次清理后的"整段"文本 (不是每个原始段都推)
                     # 用最早段的 start_sec, 整段 cleaned_text 当 1 个事件推, 客户端看到一整段
                     first_seg = pending_segs[0]
