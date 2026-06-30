@@ -54,10 +54,22 @@
 | [0007](./0007-多平台适配器架构.md) | 多平台 MeetingAdapter 抽象(防锁定) | Accepted | 2026-06-21 |
 | [0008](./0008-ADR-0001-决策1-Superseded.md) | ADR-0001 决策 1 (飞书第一平台) Superseded | Superseded | 2026-06-21 |
 | [0009](./0009-部署架构-Hermes-runtime.md) | 部署架构 — 以 Hermes Agent 作为生产 runtime | Accepted | 2026-06-21 |
-| [0010](./0013-流式E2E-端到端工作流.md) | 流式 E2E 端到端工作流 (stream chunk + 5+1 agent in-process) | Accepted | 2026-06-23 |
-| [0011](./0014-VPBuddy装成Hermes-Skill.md) | VPBuddy 装成 Hermes Skill (5 doc + 1 demo agent) | Accepted | 2026-06-23 |
-| [0012](./0015-RAG-sqlite-vec本地知识库.md) | RAG 接入 — sqlite-vec + sentence-transformers 本地知识库 | Accepted | 2026-06-23 |
-| [0013](./0016-桌面客户端技术选型.md) | 桌面客户端技术选型 — Tauri 2.x + Rust (cpal 跨平台音频) | Accepted | 2026-06-24 |
+| [0010](./0010-信息隔离-deployment-clean-install.md) | 信息隔离 — deployment clean install 铁律 | Accepted | 2026-06-21 |
+| [0011](./0011-HF模型离线铁律.md) | HF 模型离线铁律 (国内网络) | Accepted | 2026-06-22 |
+| [0012](./0012-RAG-sqlite-vec本地知识库.md) | RAG 接入 — sqlite-vec + sentence-transformers 本地知识库 | **Superseded by [0019](./0019-RAG-选型-Chroma-嵌入式.md)** | 2026-06-23 |
+| [0013](./0013-流式E2E-端到端工作流.md) | 流式 E2E 端到端工作流 (stream chunk + 5+1 agent in-process) | Accepted | 2026-06-23 |
+| [0014](./0014-VPBuddy装成Hermes-Skill.md) | VPBuddy 装成 Hermes Skill (5 doc + 1 demo agent) | Accepted | 2026-06-23 |
+| [0015](./0015-桌面客户端技术选型.md) | 桌面客户端技术选型 — Tauri 2.x + Rust (cpal 跨平台音频) | Accepted | 2026-06-24 |
+| [0016](./0016-桌面客户端技术选型-原15.md) | (老编号, 文件名漂移) | (已合并入 0015) | — |
+| [0017](./0017-SSE-stream-close语义与heartbeat修复.md) | SSE stream close 语义 + heartbeat 修复 | Accepted | 2026-06-28 |
+| [0018](./0018-SSE-chunked-meeting-complete-stop语义.md) | SSE chunked meeting-complete / close 语义 | Accepted | 2026-06-28 |
+| [0019](./0019-RAG-选型-Chroma-嵌入式.md) | **RAG 选型 — Chroma 嵌入式 + sentence-transformers** | Accepted | 2026-07-01 |
+| [0020](./0020-知识库-废弃旧库-文件上传-会议隔离.md) | **知识库方案废弃 + 文件上传 + 会议隔离** | Accepted | 2026-07-01 |
+| [0021](./0021-桌面客户端-麦克风+内录双轨.md) | **桌面客户端支持麦克风 + 内录双轨 (跨平台)** | Accepted | 2026-07-01 |
+| [0022](./0022-首页录音-强制会议选择创建.md) | **首页录音流程 — 强制会议选择/创建 + 6 doc 完成不关会议** | Accepted | 2026-07-01 |
+| [0023](./0023-chat-上传-主动提问.md) | **chat 页面支持文件/图片上传 + agent 主动提问** | Accepted | 2026-07-01 |
+| [0024](./0024-demo-版本号-多版本切换.md) | **demo 版本号 + 多版本切换** | Accepted | 2026-07-01 |
+| [0025](./0025-agent-网络搜索-KB检索.md) | **agent 网络搜索 + KB 检索工具** | Accepted | 2026-07-01 |
 
 ## 更新原则 (2026-06-23 张胜东立的铁律)
 

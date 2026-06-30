@@ -13,7 +13,7 @@ ADR-0008 Superseded:见 docs/decisions/0008-ADR-0001-决策1-Superseded.md
 ADR-0009 部署架构:见 docs/decisions/0009-部署架构-Hermes-runtime.md (2026-06-22 更新 — VPBuddy 用 in-process `from run_agent import AIAgent` 真共享 session + ThreadPoolExecutor(3) 真并发)
 ADR-0011 HF 模型离线:见 docs/decisions/0011-HF模型离线铁律.md (2026-06-23)
 """
-__version__ = "0.2.0"  # Step 2 完成
+__version__ = "0.6.0"  # v0.6 — 8 项需求合入设计稿 (ADR-0019 ~ 0025)
 
 # === 必须在 import 任何 huggingface/sentence_transformers 之前 ===
 # 🔒 HF 模型离线铁律 (2026-06-23 ADR-0011):

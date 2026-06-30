@@ -1,32 +1,27 @@
-|> **说明**:本文档是 `VPBuddy_产品说明书_v1.13_2026-06-21.docx` 的 Markdown 渲染副本。
+|> **说明**:本文档是 `VPBuddy_产品说明书_v2.0_2026-07-01.md` 的 Markdown 渲染。
 > 原始 .docx 文件同目录保留。
 >
 > **版本历史**:
-> - **v1.0**: 初版
-> - **v1.1**: 去"实时"
-> - **v1.2**: 后台并行生成
-> - **v1.3**: 知识库双模式
-> - **v1.4**: 展示不注入 prompt
-> - **v1.5**: Steer 控制层
-> - **v1.6**: Hermes-native + 可选生产
-> - **v1.7**: 投屏 = 会议原生
-> - **v1.8**: 回退 session 生命周期(YAGNI)
-> - **v1.9**: VPBuddy 连投屏按钮都不提供
-> - **v1.10**: 疑问窗口 + 预准备内容
-> - **v1.11**: 重大简化 — 默认用平台原生 ASR/转写
-> - **v1.12** (2026-06-20): **双轨 ASR** — 第一方案默认 Whisper 自接 + pyannote(VP 设备 loopback + 服务端 faster-whisper);第二方案 Zoom RTMS(英文);第三方案 小鱼易连企业版 API(需 VPBuddy 签企业合作);飞书妙记降为"会后校准源";VPBuddy 内部跨源融合补全 speaker_name;**新增 VP 设备硬约束**(必须用桌面客户端)
-> - **v1.13** (2026-06-21): **Step 2 落地 + Step 3 子 session 循环架构**;(1) Step 2 38/38 tests 全过(详见 [ADR-0004](../decisions/0004-MVP-Step2-ASR设计.md));(2) **国内无 HF 账号方案**——用 ModelScope 镜像替代 HF_TOKEN(详见 [ADR-0005](../decisions/0005-ModelScope-替代HF_TOKEN.md));(3) **6 个常驻子 session 各维护一种交付物**(`meeting:{mid}:{doc_kind}`,doc_kind ∈ req/arch/tasks/api/risk/demo);(4) **完全复用 Hermes 已有能力**——工具调用/历史上下文/cron 调度用 `delegate_task` + `session_search`,不自己造;(5) **共享累积 = 1 个 MeetingState JSON**(Step 1 已实现,无新数据库);(6) **子 session 直接写文件**(不输出 JSON 让别的进程写);(7) **知识库统一 sqlite-vec**(不分"双模式");详见 [ADR-0006](../decisions/0006-MVP-Step3-子session架构.md) + [总体架构 v1.17](../design/总体架构.md)
-> - **v1.14** (2026-06-21): **部署架构 = Hermes runtime**(ADR-0009 落地):(1) 目标服务器部署 = `pip install hermes-agent` + `pip install vpbuddy` + `hermes skills install vpbuddy`;(2) VPBuddy = 装在 `~/.hermes/skills/vpbuddy/` 的 skill 集合(非独立 Python 包);(3) 5 Agent 并行 = `delegate_task`(替换 controller.py 手编循环,Step B 下个 PR);(4) `pyproject.toml` 新增声明 `hermes-agent>=0.16.0,<1.0`;(5) 部署文档重写:5 分钟起;详见 [ADR-0009](../decisions/0009-部署架构-Hermes-runtime.md)
+> - **v1.0 - v1.13**: 见 `VPBuddy_产品说明书_v1.*_2026-06-20.md` (历史归档, 都已过时)
+> - **v2.0** (2026-07-01): **8 项产品需求合入 v0.6**:
+>   1. **录音支持麦克风 + 内录** (Linux 0 操作, macOS 需 BlackHole, Windows WASAPI loopback 0 操作) — 见 ADR-0021
+>   2. **chat 页面支持文件/图片上传** (复用 KB 上传 API) — 见 ADR-0023
+>   3. **知识库方案废弃旧库 + 改用户主动上传 + 会议隔离** (旧 sqlite-vec 全部删, 切 Chroma 嵌入式) — 见 ADR-0019/0020
+>   4. **首页录音强制会议选择/创建** (按钮 disabled 直到选了旧会议或输入新会议名) — 见 ADR-0022
+>   5. **chat 允许 agent 主动提问** (6 doc 完成 / 风险命中 / demo 新版本 / 停顿 / 节点 5 类 trigger, 可关) — 见 ADR-0023
+>   6. **demo 版本号 + 多版本切换** (v1/v2/v3... 增量存档, 客户端可切) — 见 ADR-0024
+>   7. **6 doc / demo / chat agent 都能网络搜索 + KB 检索** (DDG + Chroma 检索当前会议) — 见 ADR-0025
+>   8. **RAG 切分逻辑跟项目解耦** (切 Chroma 嵌入式, 升级只换 framework 不动业务) — 见 ADR-0019
+>
+> 详见 [总体架构 v1.21](../design/总体架构.md) + [ADR-0019 ~ 0025](../decisions/)
 
 ---
 
-# VPBuddy 产品说明书
+# VPBuddy 产品说明书 v2.0
 
-> **v1.13** (2026-06-21 修订 — **重大修订 by ADR-0008**): 数据源改为 **VP 桌面客户端麦克风/系统音频 loopback**(ADR-0004 自接 Whisper + pyannote),**删除飞书妙记作为数据源**;飞书 SDK / miaoji_calibration.py / FeishuAdapter / Platform.FEISHU 全部删除 (commit `5048936`);说话人校准改人工/stt_map 填入。详见 [ADR-0008](decisions/0008-ADR-0001-决策1-Superseded.md)。
+> **v2.0** (2026-07-01 修订 — **8 项需求合入**): 录音双轨(麦克风+内录) / chat 上传+agent 主动 / KB 切 Chroma 嵌入式+用户主动上传+会议隔离 / 首页强制会议选择 / demo 多版本 / agent 工具(web+KB)。详见 [ADR-0019 ~ 0025](decisions/)。
 
-> **v1.14** (2026-06-21 修订 — **部署架构 by ADR-0009**): VPBuddy = **Hermes Agent 之上的 skill 集合**(非独立 Python 包);目标服务器部署 = `pip install hermes-agent` + `pip install vpbuddy` + `hermes skills install vpbuddy`;5 Agent 并行从 `controller.py` 手编循环改为 `delegate_task` 真并行(下个 PR);`pyproject.toml` 新增 `hermes-agent` 依赖;详见 [ADR-0009](decisions/0009-部署架构-Hermes-runtime.md)。
-
-> **历史版本**:v1.0-v1.12 见 `VPBuddy_产品说明书_v1.*_2026-06-20.md`(都已过时,仅留作历史)
+> **历史版本**:v1.0-v1.13 见 `VPBuddy_产品说明书_v1.*_2026-06-20.md`(都已过时,仅留作历史)
 
 ## 一、产品定位
 

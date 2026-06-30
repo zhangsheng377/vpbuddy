@@ -1,9 +1,16 @@
-# VPBuddy — 现代 Python 包声明 (2026-06-21 ADR-0009)
+# VPBuddy — 现代 Python 包声明 (2026-06-21 ADR-0009 → 2026-07-01 v0.6 ADR-0019~0025)
 #
 # 之前只用 requirements.txt;现在补 pyproject.toml 作为包元数据 + hermes 依赖声明。
 # 部署仍可用 `pip install -r requirements.txt` 走老路;新部署用 `pip install .` 走 pyproject。
 #
-# 关键变更:
+# v0.6 关键变更 (ADR-0019 RAG 选型 + ADR-0020 KB 方案废弃):
+#   - 删 `sqlite-vec` (旧 KB, 废弃, ADR-0012 superseded)
+#   - 加 `chromadb>=0.5` (新 RAG 嵌入式, ADR-0019)
+#   - 加 `pypdf` (KB 上传 PDF 抽文本, ADR-0020)
+#   - 加 `duckduckgo-search` (agent web_search 工具, ADR-0025)
+#   - version 0.2.0 → 0.6.0 (合入 8 项需求)
+#
+# 关键变更 (历史):
 #   - 新增 `hermes-agent>=0.16.0,<1.0` 依赖 (ADR-0009)
 #   - 新增 `[project.scripts]` 让 `vpbuddy` 命令可调用
 #   - 新增 optional `[gpu]` extra 装 GPU 模型
@@ -15,7 +22,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vpbuddy"
-version = "0.2.0"
+version = "0.6.0"
 description = "人机协同会议操作系统级 AI 助手 — 运行在 Hermes Agent 之上"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -23,7 +30,7 @@ license = {text = "MIT"}
 authors = [
     {name = "张胜东", email = "zhangsheng377@users.noreply.github.com"},
 ]
-keywords = ["vp", "meeting", "ai-assistant", "asr", "diarization", "hermes-agent"]
+keywords = ["vp", "meeting", "ai-assistant", "asr", "diarization", "hermes-agent", "rag", "tauri"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -44,10 +51,15 @@ dependencies = [
     # 数据模型
     "pydantic>=2.0,<3",
 
-    # 知识库
-    "sqlite-vec>=0.1.0",
-    "sentence-transformers>=2.2,<4",
-    "numpy>=1.24,<2.8",
+    # 知识库 / RAG (v0.6 ADR-0019 + ADR-0020)
+    # 旧 sqlite-vec + sentence-transformers 全部废弃,切 Chroma 嵌入式 (in-process, 单文件夹持久化)
+    # Chroma 内置 sentence-transformers 包装,所以不用单独列
+    "chromadb>=0.5,<2",          # ADR-0019 选型
+    "pypdf>=4.0,<6",             # ADR-0020 KB 上传 PDF 抽文本
+    "numpy>=1.24,<2.8",          # Chroma 间接依赖
+
+    # Agent 工具 (v0.6 ADR-0025)
+    "duckduckgo-search>=6.0,<8", # web_search 工具 (无 API key,公开搜索)
 
     # 工具
     "requests>=2.31",

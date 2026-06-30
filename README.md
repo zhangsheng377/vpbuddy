@@ -2,6 +2,8 @@
 
 > **本地优先的会议操作系统级 AI 助手** —— 为 VP / 售前 / 项目负责人设计,运行在 VP 自己桌面客户端,数据完全本地化。
 
+**v0.6.0** (2026-07-01) — 8 项产品需求合入:RAG 切 Chroma 嵌入式 / KB 改用户主动上传+会议隔离 / 客户端麦克风+内录双轨 / 首页强制会议选择 / chat 上传+agent 主动 / demo 多版本 / agent 网络搜索+KB 工具。详见 [CHANGELOG](#v060-2026-07-01-8-项需求合入) + [ADR-0019 ~ 0025](docs/decisions/README.md)。
+
 [English](#english) | [中文](#中文)
 
 ---
@@ -10,13 +12,15 @@
 
 ### 什么是 VPBuddy?
 
-VPBuddy 是一款**本地优先的会议 AI 系统**,直接捕获系统音频(腾讯会议/钉钉/企微 不需要 SDK),在会议过程中自动:
+VPBuddy 是一款**本地优先的会议 AI 系统**,桌面客户端直接捕获系统音频(腾讯会议/钉钉/企微 不需要 SDK),在会议过程中自动:
 
-- 🎙️ **实时转写** — funasr paraformer-zh (本地 ASR,中文识别率 > 90%)
+- 🎙️ **实时转写** — funasr paraformer-zh (本地 ASR,中文识别率 > 90%) + **支持麦克风 + 系统内录双轨** (v0.6, 详见 ADR-0021)
 - 📋 **结构化累积** — REQ / GOAL / FEAT / RISK / QUE 5 类事实自动分类
-- 📄 **6 种文档自动生成** — 需求 / 架构 / 任务 / API / 风险 / 演示
-- 🧠 **跨会议知识库** — sqlite-vec + sentence-transformers,余弦相似度检索
-- 🌐 **Web UI** — 端口 8765,实时看累积、检索历史会议
+- 📄 **6 种文档自动生成** — 需求 / 架构 / 任务 / API / 风险 / 演示 (**演示按版本号增量存档**, v0.6 详见 ADR-0024)
+- 🧠 **用户主动维护的知识库** — v0.6 改用 Chroma 嵌入式 (in-process) + 用户上传文件入库,不再自动 ingest 6 docs,默认按会议隔离检索 (详见 ADR-0019/0020)
+- 🤖 **agent 工具** — 6 doc / demo / chat agent 都能调网络搜索 (DuckDuckGo) + KB 检索当前会议 (v0.6 详见 ADR-0025)
+- 💬 **chat 上传文件 + agent 主动提问** — v0.6 (详见 ADR-0023)
+- 🖥️ **桌面客户端** — Tauri 2.6+ 跨平台 (Linux / macOS / Windows), **首页必须先选/输入会议才能开始录音** (v0.6 详见 ADR-0022)
 
 **关键特性**: 完全运行在 VP 自己机器,数据不上传云端。单租户,单实例,单镜像。
 
@@ -26,7 +30,7 @@ VPBuddy 是一款**本地优先的会议 AI 系统**,直接捕获系统音频(�
 # 1. 安装(开发机/桌面客户端)
 git clone https://github.com/zhangsheng377/vpbuddy.git
 cd vpbuddy
-pip install -e .
+pip install -e .  # v0.6 自动装 chromadb + pypdf + duckduckgo-search
 
 # 2. 启动 UI
 vpbuddy ui
@@ -37,8 +41,8 @@ vpbuddy controller --start
 ```
 
 **第一次启动会自动**:
-- 预下载 256MB embedding 模型(`paraphrase-multilingual-MiniLM-L12-v2`)
-- 创建本地数据库(`data/knowledge.db`)
+- 预下载 embedding 模型 (`paraphrase-multilingual-MiniLM-L12-v2` 384 维, Chroma 首次运行时下载)
+- 创建本地 RAG 库 (`data/chroma/` 单文件夹持久化)
 - 初始化 6 种子 session prompts
 
 ### 下载预编译客户端安装包
@@ -207,12 +211,26 @@ See `docs/` for:
 - Phase B Tauri desktop client (ADR-0016, since 2026-06-24)
 - Streaming E2E architecture (ADR-0013, since 2026-06-23)
 
-### Status (2026-06-24)
-- ✅ MVP full pipeline: audio → ASR → 6 docs → KB → UI
-- ✅ Tauri desktop client compiles (`cargo build --release`) + 6 sub-session E2E pass
-- ✅ 5 cargo tests + 1 GPU E2E integration test
-- ✅ Complete documentation: 16 ADRs + INSTALL.md + CI workflow
+### Status (2026-07-01)
+- ✅ v0.6 设计稿完成,等待实现: 8 项需求 + 6 个新 ADR (0019 ~ 0025)
+- ✅ v0.5 现状: 5 cargo tests + 1 GPU E2E integration test
+- ✅ 完整文档: 25 ADRs + INSTALL.md + CI workflow
 
 ### License
 MIT
-MIT
+
+---
+
+## CHANGELOG
+
+### ⚠️ v0.6.0 (2026-07-01) — **设计稿发布,非实现完成**
+
+> **本版本仅含设计稿 (6 个新 ADR + 文档同步 + 依赖声明),代码实现未完成。**
+> ADR-0019 (RAG 选型) / 0020 (KB 方案废弃) / 0021 (客户端双轨) / 0022 (首页流程) / 0023 (chat 上传+主动) / 0024 (demo 多版本) / 0025 (agent 工具) 待实现。安装 `pip install -e .` 仍是 v0.5 行为,无新功能可用。
+
+**改动**:
+- 📝 6 个新 ADR (0019 ~ 0025) + AGENTS.md (项目协作铁律) + TODO_v0.6.md
+- 📝 design / spec / pyproject / README 同步到 0.6 状态 (含 chromadb + pypdf + duckduckgo-search 依赖声明,但还没 import)
+- 🔢 版本号全栈升 0.6.0: pyproject / Tauri Cargo.toml / tauri.conf.json / package.json / `__init__.py`
+
+详见 [docs/decisions/README.md](docs/decisions/README.md) + [总体架构 v1.21](docs/design/总体架构.md)。
