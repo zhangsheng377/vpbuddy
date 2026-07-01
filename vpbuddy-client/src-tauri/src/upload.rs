@@ -15,8 +15,40 @@ pub struct TranscriptSegment {
 }
 
 /// 在 GPU 端创建一个"长连接"会议, 后续 chunk 都 push 到这个 meeting
-pub async fn create_meeting(gpu_url: &str) -> Result<String> {
-    let url = format!("{}/api/meetings/stream_start", gpu_url);
+///
+/// 2026-07-01 ADR-0021: 加 audio_source 参数 (?audio_source=microphone|loopback|both),
+/// 老客户端不传 → 默认 microphone (向后兼容).
+pub async fn create_meeting(gpu_url: &str, audio_source: &str) -> Result<String> {
+    let url = format!(
+        "{}/api/meetings/stream_start?audio_source={}",
+        gpu_url,
+        urlencoding::encode(audio_source)
+    );
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({"platform": "desktop_client"}))
+        .send()
+        .await?;
+    let body: serde_json::Value = resp.json().await?;
+    Ok(body["meeting_id"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("no meeting_id in response"))?
+        .to_string())
+}
+
+/// 2026-07-01 ADR-0022: 复用 UI 选/建的 meeting_id 在服务端 init 会议.
+///
+/// 调 POST /api/meetings/stream_start?meeting_id=XXX&audio_source=YYY
+/// 服务端: 若 XXX 已存在 → 复用 (返回原 meeting_id), 若不存在 → 用 XXX 创建新 state.
+/// 返回服务端确认的 meeting_id (正常 = XXX 自身).
+pub async fn init_meeting(gpu_url: &str, meeting_id: &str, audio_source: &str) -> Result<String> {
+    let url = format!(
+        "{}/api/meetings/stream_start?meeting_id={}&audio_source={}",
+        gpu_url,
+        urlencoding::encode(meeting_id),
+        urlencoding::encode(audio_source)
+    );
     let client = reqwest::Client::new();
     let resp = client
         .post(&url)

@@ -30,10 +30,22 @@
       <section id="panel-stream" class="panel active">
         <h2>实时转写</h2>
         <div class="rec-controls">
-          <!-- 2026-06-27: 合并开始/停止按钮 (一个 toggle 按钮) -->
-          <button id="btn-rec" class="btn-rec" data-state="idle">开始录音</button>
+          <!-- 2026-07-01 ADR-0022: 首页强制选/创建会议 — 下拉旧会议 + 输入新会议名, 二者必填其一才启用录音按钮 -->
+          <select id="meeting-select" title="选择已有会议"><option value="">— 选择已有会议 —</option></select>
+          <span style="color: var(--text-muted); font-size: 12px;">或</span>
+          <input type="text" id="meeting-new" placeholder="输入新会议名 (3-32 字符, A-Z 0-9 _ -)" maxlength="32" />
+          <!-- 2026-07-01 ADR-0021: 音频源类型下拉 -->
+          <select id="audio-source-kind" title="音频源">
+            <option value="microphone">麦克风 (默认)</option>
+            <option value="loopback">系统内录</option>
+            <option value="both">麦克风 + 内录</option>
+          </select>
+          <!-- 2026-06-27: 合并开始/停止按钮 (一个 toggle 按钮) — 默认 disabled, 选/输入会议后启用 -->
+          <button id="btn-rec" class="btn-rec" data-state="idle" disabled title="请先选择或输入会议">开始录音</button>
           <label><input type="checkbox" id="auto-upload" checked /> 自动上传</label>
           <select id="audio-device"><option value="">默认音频设备</option></select>
+          <!-- 2026-07-01 ADR-0022: 录音中才能结束会议 -->
+          <button id="btn-end-meeting" class="btn-rec" data-state="hidden" style="display:none;">结束会议</button>
         </div>
         <!-- 2026-06-27: 实时波形图 (绿柱=有声音, 平线=静音) — 判断"采到声音"的最直观信号 -->
         <canvas id="waveform" class="waveform" height="60"></canvas>
@@ -94,9 +106,14 @@
         </div>
       </section>
 
-      <!-- 演示 (2026-06-27: 独立页签, 全屏 iframe 展示) -->
+      <!-- 演示 (2026-06-27: 独立页签, 全屏 iframe 展示; 2026-07-01 ADR-0024: 加版本下拉) -->
       <section id="panel-demo" class="panel">
-        <h2>演示 (SSE 自动推流)</h2>
+        <h2>演示 (SSE 自动推流, 多版本切换)</h2>
+        <div class="demo-controls" style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+          <select id="demo-version-select" title="选择 demo 版本"><option value="">— 暂无版本 —</option></select>
+          <span id="demo-version-info" style="color: var(--text-muted); font-size:12px;"></span>
+          <button id="demo-latest-btn" class="btn-small" disabled>跳到最新</button>
+        </div>
         <iframe id="demo-iframe" class="demo-iframe-full" sandbox="allow-scripts allow-forms"></iframe>
       </section>
 

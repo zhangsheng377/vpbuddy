@@ -179,29 +179,53 @@ impl AppState {
 }
 
 /// 启动采集 (VP 点"开始录音")
+///
+/// 2026-07-01:
+/// - ADR-0022: meeting_id 必填 (UI 选/建的), 不允许自动建
+/// - ADR-0021: audio_source 参数 (microphone/loopback/both, 默认 microphone)
 #[tauri::command]
 async fn start_capture(
     app: AppHandle,
     state: State<'_, AppState>,
     auto_upload: bool,
     audio_device: Option<String>,
+    meeting_id: Option<String>,
+    audio_source: Option<String>,
 ) -> Result<String, String> {
     if state.capturing.load(Ordering::SeqCst) {
         return Err("已在采集中".into());
     }
+    // 校验 meeting_id
+    let mid_in = meeting_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "请先选择或输入会议名 (ADR-0022)".to_string())?
+        .to_string();
+    // 校验 audio_source
+    let audio_source_norm = audio_source
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("microphone")
+        .to_lowercase();
+    if !["microphone", "loopback", "both"].contains(&audio_source_norm.as_str()) {
+        return Err(format!("非法 audio_source: {audio_source_norm}"));
+    }
+
     log::info!("=== start_capture 触发 ===");
     log::info!("  audio_device: {:?}", audio_device);
     log::info!("  auto_upload: {}", auto_upload);
+    log::info!("  meeting_id (用户选/建): {mid_in}");
+    log::info!("  audio_source: {audio_source_norm}");
 
-    // 1. 在 GPU 端创建会议 + 取 meeting_id
-    // 2026-06-26: gpu_url 改 Arc<Mutex>, 需要 lock().await
+    // 1. 在 GPU 端 init 会议 (复用 UI 选的 meeting_id)
     let gpu_url = state.gpu_url.lock().await.clone();
-    log::info!("  POST {}/api/meetings/stream_start", gpu_url);
-    let meeting_id = upload::create_meeting(&gpu_url)
+    let meeting_id = upload::init_meeting(&gpu_url, &mid_in, &audio_source_norm)
         .await
         .map_err(|e| {
-            log::error!("创建会议失败: {e}");
-            format!("创建会议失败: {e}")
+            log::error!("init 会议失败: {e}");
+            format!("init 会议失败: {e}")
         })?;
     log::info!("  ✓ meeting_id: {meeting_id}");
     *state.meeting_id.lock().await = Some(meeting_id.clone());

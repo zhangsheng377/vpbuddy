@@ -101,12 +101,21 @@ document.getElementById("btn-rec").addEventListener("click", async () => {
   const status = document.getElementById("rec-status");
   if (btn.dataset.state === "idle") {
     // 开始录音
+    // 2026-07-01 ADR-0022: 必须先选/输入会议, 客户端校验 (服务端二次校验)
+    const mid = resolveMeetingId();
+    if (!mid) {
+      status.textContent = "❌ 请先选择或输入会议";
+      return;
+    }
     btn.disabled = true;
     try {
       const e = document.getElementById("audio-device").value || null;
+      const sourceKind = document.getElementById("audio-source-kind").value || "microphone";
       currentMeetingId = await invoke("start_capture", {
         autoUpload: document.getElementById("auto-upload").checked,
         audioDevice: e,
+        meetingId: mid,
+        audioSource: sourceKind,
       });
       recording = true;
       startLatencyTicker();
@@ -115,8 +124,13 @@ document.getElementById("btn-rec").addEventListener("click", async () => {
       dot.className = "dot live";
       status.textContent = t("capturing");
       btn.disabled = false;
+      // 显示结束会议按钮 (ADR-0022)
+      const endBtn = document.getElementById("btn-end-meeting");
+      if (endBtn) endBtn.style.display = "";
       // 2026-06-27: 不再调 refreshDocs — 内容由 SSE doc-status 自动推流
       await refreshChatHistory();
+      // 2026-07-01 ADR-0024: 录音中可能已生成 demo, 加载版本列表
+      loadDemoVersions();
     } catch (e) {
       status.textContent = "❌ " + e;
       btn.disabled = false;
@@ -132,12 +146,189 @@ document.getElementById("btn-rec").addEventListener("click", async () => {
       btn.textContent = "开始录音";
       dot.className = "dot";
       status.textContent = t("stopped");
+      // 隐藏结束会议按钮 (会议还在, 用户可继续开)
+      const endBtn = document.getElementById("btn-end-meeting");
+      if (endBtn) endBtn.style.display = "none";
     } catch (e) {
       status.textContent = "❌ " + e;
     } finally {
       btn.disabled = false;
     }
   }
+});
+
+// === 2026-07-01 ADR-0022: 首页会议选择 / 输入 / 校验 / 按钮启用 ===
+const MEETING_ID_RE = /^[A-Za-z0-9_-]+$/;  // 跟服务端 _validate_meeting_id 一致
+
+function resolveMeetingId() {
+  const sel = document.getElementById("meeting-select");
+  const input = document.getElementById("meeting-new");
+  const selVal = sel && sel.value ? sel.value.trim() : "";
+  const inputVal = input && input.value ? input.value.trim() : "";
+  if (inputVal) {
+    // 输入框优先 (新会议)
+    if (!MEETING_ID_RE.test(inputVal)) {
+      alert("会议名只能含字母数字下划线连字符, 无空格/中文");
+      input.focus();
+      return null;
+    }
+    if (inputVal.length < 3 || inputVal.length > 32) {
+      alert("会议名长度需 3-32 字符");
+      input.focus();
+      return null;
+    }
+    return inputVal;
+  }
+  if (selVal) return selVal;
+  return null;
+}
+
+function updateRecBtnState() {
+  const btn = document.getElementById("btn-rec");
+  const sel = document.getElementById("meeting-select");
+  const input = document.getElementById("meeting-new");
+  if (!btn || btn.dataset.state !== "idle") return;  // 录音中不变
+  const selVal = sel && sel.value ? sel.value.trim() : "";
+  const inputVal = input && input.value ? input.value.trim() : "";
+  if (selVal || inputVal) {
+    btn.disabled = false;
+    btn.title = "";
+  } else {
+    btn.disabled = true;
+    btn.title = "请先选择已有会议或输入新会议名";
+  }
+}
+
+async function loadMeetings() {
+  const sel = document.getElementById("meeting-select");
+  if (!sel) return;
+  const gpu = await getGpuUrl();
+  try {
+    const r = await fetch(`${gpu}/api/meetings`);
+    const data = await r.json();
+    const currentVal = sel.value;
+    sel.innerHTML = '<option value="">— 选择已有会议 —</option>' +
+      data.meetings.map(m =>
+        `<option value="${m.meeting_id}">${m.meeting_id}${m.audio_source && m.audio_source !== "microphone" ? " · " + m.audio_source : ""} · ${m.last_updated ? m.last_updated.slice(0, 16).replace("T", " ") : ""}</option>`
+      ).join("");
+    sel.value = currentVal;  // 保留用户之前选的值 (刷新后)
+  } catch (e) {
+    console.warn("loadMeetings 失败:", e);
+  }
+}
+
+// 输入框输入时清空下拉 (避免冲突), 反之亦然
+document.getElementById("meeting-new")?.addEventListener("input", () => {
+  const sel = document.getElementById("meeting-select");
+  if (sel && document.getElementById("meeting-new").value) sel.value = "";
+  updateRecBtnState();
+});
+document.getElementById("meeting-select")?.addEventListener("change", () => {
+  const input = document.getElementById("meeting-new");
+  if (input && document.getElementById("meeting-select").value) input.value = "";
+  updateRecBtnState();
+});
+
+// === 2026-07-01 ADR-0022: 结束会议按钮 ===
+document.getElementById("btn-end-meeting")?.addEventListener("click", async () => {
+  if (!currentMeetingId) return;
+  if (!confirm(`确定结束会议 "${currentMeetingId}"?\n会议结束后无法继续录音.`)) return;
+  try {
+    // 先停录音
+    await invoke("stop_capture");
+    // 再调服务端 close
+    const gpu = await getGpuUrl();
+    const r = await fetch(`${gpu}/api/meetings/${currentMeetingId}/close`, { method: "POST" });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    status_recording_update("会议已结束");
+    currentMeetingId = null;
+    await loadMeetings();  // 刷新列表
+    // 重置 UI
+    const endBtn = document.getElementById("btn-end-meeting");
+    if (endBtn) endBtn.style.display = "none";
+    const btn = document.getElementById("btn-rec");
+    if (btn) {
+      btn.dataset.state = "idle";
+      btn.textContent = "开始录音";
+    }
+  } catch (e) {
+    status_recording_update("❌ 结束会议失败: " + e);
+  }
+});
+
+function status_recording_update(msg) {
+  const dot = document.getElementById("rec-dot");
+  const status = document.getElementById("rec-status");
+  if (status) status.textContent = msg;
+  if (dot && msg.includes("结束")) dot.className = "dot";
+}
+
+// === 2026-07-01 ADR-0024: demo 版本切换 ===
+let demoVersions = [];  // [{version, created_at, summary, file_size}, ...]
+
+async function loadDemoVersions() {
+  if (!currentMeetingId) return;
+  const gpu = await getGpuUrl();
+  try {
+    const r = await fetch(`${gpu}/api/meetings/${currentMeetingId}/demo/versions`);
+    if (!r.ok) return;
+    const data = await r.json();
+    demoVersions = data.versions || [];
+    renderDemoVersionSelect();
+    if (demoVersions.length > 0) {
+      // 自动选最新
+      const latest = demoVersions[0];  // 倒序, [0] 是最新
+      loadDemoVersion(latest.version);
+      document.getElementById("demo-version-select").value = String(latest.version);
+    }
+  } catch (e) {
+    console.warn("loadDemoVersions 失败:", e);
+  }
+}
+
+function renderDemoVersionSelect() {
+  const sel = document.getElementById("demo-version-select");
+  if (!sel) return;
+  if (demoVersions.length === 0) {
+    sel.innerHTML = '<option value="">— 暂无版本 —</option>';
+    document.getElementById("demo-latest-btn").disabled = true;
+    return;
+  }
+  sel.innerHTML = demoVersions.map(v =>
+    `<option value="${v.version}">v${v.version} · ${v.summary || "(无描述)"} · ${formatTs(v.created_at)}</option>`
+  ).join("");
+  document.getElementById("demo-latest-btn").disabled = false;
+}
+
+function formatTs(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const pad = n => String(n).padStart(2, "0");
+  return `${d.getMonth() + 1}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+async function loadDemoVersion(version) {
+  if (!currentMeetingId) return;
+  const gpu = await getGpuUrl();
+  document.getElementById("demo-iframe").src = `${gpu}/docs/${currentMeetingId}/demo_v${version}.html`;
+  // 更新 info
+  const v = demoVersions.find(x => x.version === version);
+  const info = document.getElementById("demo-version-info");
+  if (info && v) {
+    info.textContent = `大小: ${(v.file_size / 1024).toFixed(1)} KB`;
+  }
+}
+
+document.getElementById("demo-version-select")?.addEventListener("change", (e) => {
+  const v = parseInt(e.target.value, 10);
+  if (!isNaN(v)) loadDemoVersion(v);
+});
+
+document.getElementById("demo-latest-btn")?.addEventListener("click", () => {
+  if (demoVersions.length === 0) return;
+  const latest = demoVersions[0];
+  document.getElementById("demo-version-select").value = String(latest.version);
+  loadDemoVersion(latest.version);
 });
 
 // === 监听 Tauri 后端事件 ===
