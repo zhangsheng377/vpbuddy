@@ -32,6 +32,9 @@ pub struct AppState {
     pub log_path: Arc<Mutex<String>>,
     /// 2026-06-27: 设备原生采样率 (capture 创建时填), 主循环用来 resample 16kHz
     pub native_sample_rate: Arc<AtomicU32>,
+    /// 2026-07-02 Phase 7: 当前会议 audio_source (microphone/loopback/both)
+    /// start_capture 写, run_capture_loop 读后传给 AudioCapture.
+    pub audio_source: Arc<Mutex<Option<String>>>,
 }
 
 /// 2026-06-27: 全局日志路径, get_log_path invoke 命令读这里
@@ -174,6 +177,8 @@ impl AppState {
             log_path: Arc::new(Mutex::new(String::new())),
             // 2026-06-27: 初始 16000 (假设 16kHz native), capture 创建时更新到设备实际值
             native_sample_rate: Arc::new(AtomicU32::new(16000)),
+            // 2026-07-02 Phase 7: 初始 None, start_capture 时填
+            audio_source: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -229,6 +234,9 @@ async fn start_capture(
         })?;
     log::info!("  ✓ meeting_id: {meeting_id}");
     *state.meeting_id.lock().await = Some(meeting_id.clone());
+    // 2026-07-02 Phase 7: 写 audio_source 到共享 state, run_capture_loop 调 AudioCapture 时读
+    *state.audio_source.lock().await = Some(audio_source_norm.clone());
+    log::debug!("  ✓ audio_source 写入 state: {audio_source_norm}");
 
     state.capturing.store(true, Ordering::SeqCst);
     state.total_bytes.store(0, Ordering::SeqCst);
@@ -243,6 +251,13 @@ async fn start_capture(
     let ups = state.total_uploads.clone();
     // 2026-06-27: 共享 native 采样率, spawn_blocking 写, 主循环读 + resample
     let native_rate = state.native_sample_rate.clone();
+    // 2026-07-02 Phase 7: 共享 audio_source (microphone/loopback/both), start_capture 已写, capture 线程读
+    let audio_source_for_capture = state
+        .audio_source
+        .lock()
+        .await
+        .clone()
+        .unwrap_or_else(|| "microphone".to_string());
     // 2026-06-27: 各 spawn 闭包 move 各自的 clone, 避免 use-of-moved-value
     // capture_emit 用闭包外的 clone, 供 run_capture_loop 退出后 emit error
     let app_clone_sse = app.clone();
@@ -261,6 +276,7 @@ async fn start_capture(
 
     let handle = tokio::spawn(async move {
         // 音频采集 + 上传任务 (Phase B spawn_blocking, 保留我们之前的修复)
+        // 2026-07-02 Phase 7: audio_source 已在 start_capture outer scope 读完 clone 进 audio_source_for_capture
         if let Err(e) = run_capture_loop(
             app_clone_cap,
             gpu_url,
@@ -271,6 +287,7 @@ async fn start_capture(
             auto_upload,
             audio_device,
             native_rate,
+            audio_source_for_capture,
         )
         .await
         {
@@ -445,6 +462,8 @@ async fn run_capture_loop(
     audio_device: Option<String>,
     // 2026-06-27: 共享 capture 设备原生采样率, 主循环 resample 用
     native_rate: Arc<AtomicU32>,
+    // 2026-07-02 Phase 7: audio_source (microphone/loopback/both), 传给 AudioCapture new_with_source
+    audio_source: String,
 ) -> anyhow::Result<()> {
     use tokio::sync::mpsc as tmpsc;
     let (tx, mut rx) = tmpsc::channel::<Vec<i16>>(64);
@@ -452,10 +471,11 @@ async fn run_capture_loop(
     // 1. spawn_blocking 跑 cpal 采集 — 不要求 Send (跑在专用 blocking pool)
     let capturing_bg = capturing.clone();
     let native_rate_bg = native_rate.clone();  // 2026-06-27: clone 给 bg, 主循环保留自己的
+    let audio_source_bg = audio_source.clone();  // 2026-07-02 Phase 7: clone 给 bg, AudioCapture 用
     let _capture_handle = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        // 2026-06-25: 用 new_with_device 支持指定输入设备 (cherry-pick from feature 分支)
-        log::info!("cpal: new_with_device({:?})", audio_device);
-        let mut capture = match AudioCapture::new_with_device(audio_device) {
+        // 2026-07-02 Phase 7: 走 new_with_source 路由 (microphone/loopback/both)
+        log::info!("cpal: new_with_source({:?}, audio_source={:?})", audio_device, audio_source_bg);
+        let mut capture = match AudioCapture::new_with_source(audio_device, &audio_source_bg) {
             Ok(c) => {
                 log::info!("  ✓ AudioCapture 初始化成功 (host={:?})", cpal::default_host().id());
                 // 2026-06-27: 把设备 native 采样率写到共享 atomic, 主循环 resample 用

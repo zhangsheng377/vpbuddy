@@ -223,6 +223,31 @@ MIT
 
 ## CHANGELOG
 
+### v0.7.1 (2026-07-02) — Phase 7 客户端双轨采集 stub (microphone / loopback / both)
+
+**核心**: 让客户端 Rust 端**真正读** `audio_source` 字段(`microphone|loopback|both`)——之前 UI 选 loopback/both 只发到 server,客户端 cpal 采集完全忽略;v0.7.1 把字段串通到 AudioCapture。**loopback/both 跨平台实现留 v0.8.x** (本次仅 stub + fallbak mic, **不破 v0.7.0 录音流程**)。
+
+**改动**:
+- 🎛️ **新增 `AudioCapture::new_with_source()` 公开 API**: `match audio_source { "microphone" => 现行 mic 路径; "loopback" => warn + fallback mic; "both" => warn + fallback mic; 未知 => warn + fallback mic }`。`new_with_device` 保留向后兼容 (内部拆 `self_new_with_device_inner`)
+- 🔄 **AppState 加 `audio_source: Arc<Mutex<Option<String>>>` 共享字段**: `start_capture` 写入 `Some(audio_source_norm)` → `run_capture_loop` outer scope clone → `tokio::spawn_blocking` 内传给 `AudioCapture::new_with_source(device, &audio_source_bg)`
+- 🧪 **6 个 inline unit tests 在 `audio.rs` 末尾 `#[cfg(test)] mod tests`**: `mix_stereo_into_full_and_zero / overflow_clamp / odd_length_panics / appends_not_clears` × 4 + `resample_linear_same_rate_identity / downsample_48k_to_16k` × 2. `cargo test --lib` 6/6 passed in 0.00s
+- 🛠️ **`mix_stereo_into(dst, src)` pure helper 落库**: 双声道 L/R → 单声道等权平均, debug_assert 偶数长度, `(l+r)/2` clamp `i16::MIN..i16::MAX` 防削顶. v0.8.x both 路径可直接复用
+- 📝 design v1.31 → v1.32 + 新 ADR-0031 + ADR index 加 0031
+- 🔢 pyproject 0.7.0 → 0.7.1
+
+**验证**:
+- ✅ `cargo check` 0 errors, 4 dead_code warnings (`AudioCapture::new`, `mix_stereo_into`, `create_meeting`, `last_recv` — pub API + 复用预留, expected)
+- ✅ `cargo test --lib` 6/6 pass
+- ✅ mic path 完全等价 v0.7.0 (兼容)
+
+**未实现 / v0.8 计划**:
+- 真正 loopback 跨平台 cpal: Linux PulseAudio mon / macOS BlackHole / Windows WASAPI loopback
+- 真正 both path: mic + loopback 双 stream 并行 + `mix_stereo_into` 复用
+- stop_capture 重置 `audio_source` 字段 (当前留 Some 不清, 行为 OK 但不优雅)
+- 跟随: UI `音频源` label 加 `(待 v0.8 实现)` 副标
+
+详见 [docs/decisions/0031-Phase7-客户端双轨采集-stub落地.md](docs/decisions/0031-Phase7-客户端双轨采集-stub落地.md) + [总体架构 v1.32](docs/design/总体架构.md)。
+
 ### v0.7.0 (2026-07-01) — 协作提问层 (collab.md) + 6→2 kinds 合并 + UI 实时折叠面板
 
 **核心**: 让 VP 跟 agent **双向对话式协作**—— agent 提问、VP 回答、增量改方向，文档跟方向一致。

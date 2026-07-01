@@ -24,14 +24,55 @@ pub struct AudioCapture {
 
 impl AudioCapture {
     pub fn new() -> Result<Self> {
-        Self::new_with_device(None)
+        Self::new_with_device(None, "microphone")
+    }
+
+    /// 2026-07-02 Phase 7: 公开入口, 路由 audio_source
+    /// - "microphone" (默认): 用系统默认输入设备 (现行实现)
+    /// - "loopback" / "both": 跨平台 cpal 内录暂未实现 (TODO)
+    ///   Fallback 策略: warn log + 切到 microphone 兜底, 保证不破 v0.7.x 录音
+    /// - 未知值: warn + 兜底 microphone
+    ///
+    /// 之所以 KISS 兜底: v0.7.1 是不破 mic 主流程的最小变更.
+    /// 真 cross-platform loopback (Linux PulseAudio mon / macOS BlackHole / Windows WASAPI)
+    /// 是 v0.8.x 的独立 PR (用 cpal 支持 host-specific loopback API).
+    pub fn new_with_source(device_id: Option<String>, audio_source: &str) -> Result<Self> {
+        match audio_source {
+            "microphone" | "mic" => Self::new_with_device(device_id, "microphone"),
+            "loopback" => {
+                log::warn!(
+                    "audio_source=loopback 暂未实现 (Phase 7 stub, v0.8 跟随平台分支) — 兜底用 microphone"
+                );
+                Self::new_with_device(device_id, "microphone")
+            }
+            "both" => {
+                log::warn!(
+                    "audio_source=both 暂未实现 (Phase 7 stub, v0.8 跟随平台分支) — 兜底用 microphone"
+                );
+                Self::new_with_device(device_id, "microphone")
+            }
+            other => {
+                log::warn!(
+                    "未知 audio_source={other:?}, 期望 microphone|loopback|both — 兜底用 microphone"
+                );
+                Self::new_with_device(device_id, "microphone")
+            }
+        }
     }
 
     /// 2026-06-25: cherry-pick from feature/requirements-architecture-update
     /// device_id=None 用系统默认, 否则按 name 匹配
     /// 2026-06-27: 用设备原生采样率 (不写死 16kHz, Realtek/WASAPI 不支持会 fail)
     ///            然后在 read_chunk_blocking 重采样到目标 16kHz
-    pub fn new_with_device(device_id: Option<String>) -> Result<Self> {
+    /// 2026-07-02 Phase 7: 内部多一个 ignored 参 (audio_source), 仅用于 log.
+    ///                    Public API 走 new_with_source(), 此处保留向后兼容签名.
+    pub fn new_with_device(device_id: Option<String>, audio_source: &str) -> Result<Self> {
+        log::debug!("audio_source={audio_source} (本期仅 log, mic path)");
+        Self::self_new_with_device_inner(device_id)
+    }
+
+    /// 实际设备 init (v0.7.0 原 logic 拆出, 内部用)
+    fn self_new_with_device_inner(device_id: Option<String>) -> Result<Self> {
         let host = cpal::default_host();
         let device = if let Some(id) = device_id {
             let devices = host.input_devices().context("无法枚举输入设备")?;
@@ -134,6 +175,25 @@ impl AudioCapture {
     }
 }
 
+/// 2026-07-02 Phase 7 (v0.7.1): 双声道 → 单声道等权混合.
+/// 用于 `audio_source=both` 时把 mic 半幅 + loopback 半幅 求均值, 防止削顶.
+/// `dst` 追加结果 (push 风格; 切片场景复用 buffer)
+/// `src` 长度必须是 偶数 (左/右 帧) — 否则最后一个 sample 抛 drop (调试 assert).
+///
+/// 注意: 这是 KISS 平均; 真实产品应该用 soxr + bytes_per_sample 重采样 + gain control.
+/// v0.7.1 仅 stub 落库, 真实 both path 是 v0.8 跟随平台 PR.
+pub fn mix_stereo_into(dst: &mut Vec<i16>, src: &[i16]) {
+    debug_assert!(src.len() % 2 == 0, "mix_stereo_into expects even-length src (L/R frames)");
+    let mut i = 0;
+    while i + 1 < src.len() {
+        let l = src[i] as i32;
+        let r = src[i + 1] as i32;
+        let mixed = ((l + r) / 2).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        dst.push(mixed);
+        i += 2;
+    }
+}
+
 /// 2026-06-27: 线性插值重采样 (单声道 i16). 用于 native 48kHz → target 16kHz 等.
 /// 工业标准做法: cpal 用设备原生采样率, 客户端软件重采样到 funasr 期望的 16kHz.
 /// 简单线性插值足够 funasr inference (它会自己提取特征), 不需要 sinc/polyphase.
@@ -203,4 +263,71 @@ pub fn make_wav_header(data_len: u32, sample_rate: u32, channels: u16) -> Vec<u8
     h.extend_from_slice(b"data");
     h.extend_from_slice(&data_size.to_le_bytes());
     h
+}
+
+// 2026-07-02 Phase 7 (v0.7.1) inline unit tests.
+// 没有 mock cpal 的方便手段, 所以只测 pure helper `mix_stereo_into` + `resample_linear` 边界.
+// 真实 e2e 录音在 install-client.sh + GPU 端集成测.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 满幅左 + 0 右 → 半幅右 走 diff (-) 而不是 sum 反向 — 验证 sign 正确
+    #[test]
+    fn mix_stereo_into_full_and_zero() {
+        let mut dst = Vec::new();
+        let src: Vec<i16> = vec![i16::MAX, 0, i16::MAX, 0];
+        mix_stereo_into(&mut dst, &src);
+        assert_eq!(dst.len(), 2);
+        let exp = (i16::MAX as i32 / 2) as i16;
+        assert_eq!(dst[0], exp, "half-amplitude on full+zero");
+        assert_eq!(dst[1], exp);
+    }
+
+    // 双满幅 → 应 clamp 到 i16::MAX 不溢出
+    #[test]
+    fn mix_stereo_into_overflow_clamp() {
+        let mut dst = Vec::new();
+        let src: Vec<i16> = vec![i16::MAX, i16::MAX, i16::MAX, i16::MAX];
+        mix_stereo_into(&mut dst, &src);
+        assert_eq!(dst, vec![i16::MAX, i16::MAX]);
+    }
+
+    // 奇数长度 → 断言失败 (debug_assert!)
+    #[test]
+    #[should_panic(expected = "even-length")]
+    fn mix_stereo_into_odd_length_panics() {
+        let mut dst = Vec::new();
+        let src: Vec<i16> = vec![1, 2, 3]; // 3 = 奇 → panic
+        mix_stereo_into(&mut dst, &src);
+    }
+
+    // dst push 风格: 多次调用累积
+    #[test]
+    fn mix_stereo_into_appends_not_clears() {
+        let mut dst = Vec::new();
+        mix_stereo_into(&mut dst, &[100, -100]); // 0
+        assert_eq!(dst, vec![0]);
+        mix_stereo_into(&mut dst, &[1000, 2000]); // 1500
+        assert_eq!(dst, vec![0, 1500]);
+    }
+
+    // resample_linear 边界: 同采样率直通
+    #[test]
+    fn resample_linear_same_rate_identity() {
+        let samples: Vec<i16> = vec![100, -100, 200, -200];
+        let out = resample_linear(&samples, 16000, 16000);
+        assert_eq!(out, samples);
+    }
+
+    // resample_linear 下采样: 48k → 16k (ratio=3)
+    #[test]
+    fn resample_linear_downsample_48k_to_16k() {
+        let samples: Vec<i16> = (0..48).map(|i| i as i16 * 100).collect();
+        let out = resample_linear(&samples, 48000, 16000);
+        // ratio=3, 48 samples → ~16 samples
+        assert!(out.len() >= 15 && out.len() <= 17,
+                "expected ~16 samples for 48→16, got {}", out.len());
+    }
 }

@@ -70,6 +70,11 @@
 | [0023](./0023-chat-上传-主动提问.md) | **chat 页面支持文件/图片上传 + agent 主动提问** | Accepted | 2026-07-01 |
 | [0024](./0024-demo-版本号-多版本切换.md) | **demo 版本号 + 多版本切换** | Accepted | 2026-07-01 |
 | [0025](./0025-agent-网络搜索-KB检索.md) | **agent 网络搜索 + KB 检索工具** | Accepted | 2026-07-01 |
+| [0026](./0026-macOS-CI-去-no-bundle产出app和dmg.md) | **macOS CI 去 no-bundle + 产出 app 和 dmg** | Accepted | 2026-07-01 |
+| [0028](./0028-协作提问层-collab-md三方共享.md) | **协作提问层 — collab.md 三方共享 (Commit 1)** | Accepted | 2026-07-02 |
+| [0029](./0029-6sub-session合并为2batch-agent.md) | **6 sub-session 合并为 2 batch agent (一致性 + 速度)** | Accepted | 2026-07-01 |
+| [0030](./0030-协作提问层-UI面板-实时SSE推流.md) | **协作提问层 — UI 面板 + 实时 SSE 推流** | Accepted | 2026-07-02 |
+| [0031](./0031-Phase7-客户端双轨采集-stub落地.md) | **Phase 7 客户端双轨采集 stub 落地 (microphone/loopback/both)** | Accepted (Stub) | 2026-07-02 |
 
 ## 更新原则 (2026-06-23 张胜东立的铁律)
 
