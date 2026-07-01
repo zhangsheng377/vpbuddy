@@ -47,9 +47,12 @@ def server():
         daemon=True,
     )
     server_thread.start()
-    time.sleep(1)
-
-    yield f"http://{TEST_HOST}:{TEST_PORT}"
+    # 2026-07-02 v0.8.0 fixture 修 (bug 自 393330e 之前就 broken):
+    # 老 time.sleep(1) 不够 — KB Chroma 首次加载 embedding 模型 ~10-12s
+    # 改用 wait_for_server 轮询 socket, max 30s
+    from ._server_helpers import wait_for_server
+    base_url = wait_for_server(TEST_HOST, TEST_PORT, timeout=30.0)
+    yield base_url
 
 
 class TestRealtimeSSE:
