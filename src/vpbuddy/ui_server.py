@@ -928,35 +928,60 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_stream_start(self):
         """Tauri 客户端调用: 创建"持续接收"会议, 后续每 30s 推 chunk
 
-        2026-07-01 ADR-0021: 接受 audio_source 参数 (?audio_source=microphone|loopback|both),
-        存到 MeetingState.audio_source. 老客户端不传 → 默认 MICROPHONE (向后兼容).
+        2026-07-01:
+        - ADR-0022: 接受 ?meeting_id=XXX 参数, 如已存在 → 复用 state, 不创建.
+            UI 选/建的会议, 客户端传过来直接用. 不传则保持原行为 (服务端自建 STREAM_xxx).
+        - ADR-0021: 接受 ?audio_source=microphone|loopback|both, 默认 microphone.
+            老客户端不传 → 向后兼容.
         """
         from .state import AudioSourceKind  # 动态 import, ui_server 顶层不依赖 state
-        # 1. 解析 audio_source (query string, 老客户端不传 OK)
+        # 1. 解析 audio_source + meeting_id (query string)
         from urllib.parse import urlparse, parse_qs
         parsed = urlparse(self.path)
         qs = parse_qs(parsed.query)
+
+        # meeting_id (2026-07-01 ADR-0022)
+        meeting_id_in = qs.get("meeting_id", [""])[0].strip()
+        if meeting_id_in:
+            ok, err = _validate_meeting_id(meeting_id_in)
+            if not ok:
+                return self._json({"error": f"meeting_id 非法: {err}", "status": 400}, 400)
+
+        # audio_source (2026-07-01 ADR-0021)
         audio_source_str = qs.get("audio_source", [""])[0].strip().lower() or AudioSourceKind.MICROPHONE.value
-        # 校验值, 非法 → fallback 默认 + warning
         try:
             audio_source = AudioSourceKind(audio_source_str)
         except ValueError:
             print(f"[ui_server] stream_start: invalid audio_source={audio_source_str!r}, fallback to microphone")
             audio_source = AudioSourceKind.MICROPHONE
 
-        meeting_id = f"STREAM_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
-        # 占位 state (空), 后续 chunk 会更新
+        # 2. 决定最终 meeting_id (ADR-0022: 复用 UI 选/建的; 老调用方: 服务端自建)
+        if meeting_id_in:
+            meeting_id = meeting_id_in
+        else:
+            meeting_id = f"STREAM_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+
+        # 3. 写 state (复用 or 创建)
+        from .storage import MeetingStorage
+        from .state import MeetingState, Platform
+        storage = MeetingStorage(DATA_DIR)
+        reused = bool(meeting_id_in) and storage.exists(meeting_id)
         try:
-            from .storage import MeetingStorage
-            from .state import MeetingState, Platform
-            storage = MeetingStorage(DATA_DIR)
-            state = MeetingState(
-                meeting_id=meeting_id,
-                platform=Platform.LOCAL,
-                audio_source=audio_source,
-                project_name=f"长连接会议 {meeting_id}",
-            )
-            storage.save(state)
+            if reused:
+                # 复用: 读已有, 只更新 audio_source (用户可切换)
+                state = storage.load(meeting_id)
+                state.audio_source = audio_source
+                state.last_updated = datetime.now().isoformat()
+                storage.save(state)
+            else:
+                # 创建新
+                state = MeetingState(
+                    meeting_id=meeting_id,
+                    platform=Platform.LOCAL,
+                    audio_source=audio_source,
+                    project_name=f"长连接会议 {meeting_id}",
+                )
+                storage.save(state)
             _save_stream_meta(meeting_id, {
                 "processed_chunks": [],
                 "transcript_segments": [],
@@ -970,6 +995,7 @@ class Handler(BaseHTTPRequestHandler):
             "meeting_id": meeting_id,
             "chunk_interval_sec": 30,
             "audio_source": audio_source.value,
+            "reused": reused,
             "message": "Stream started, send 30s WAV chunks to /api/meetings/{id}/stream_chunk",
         })
 

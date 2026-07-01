@@ -117,12 +117,20 @@ def http_server(tmp_path, monkeypatch):
     server.server_close()
 
 
-def _post(url, data=b""):
+def _post(url, data: bytes = b""):
     import urllib.request
+    import urllib.error
     req = urllib.request.Request(url, data=data, method="POST")
     req.add_header("Content-Type", "application/octet-stream")
-    with urllib.request.urlopen(req, timeout=5) as resp:
-        return resp.status, json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status, json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8") if e.fp else ""
+        try:
+            return e.code, json.loads(body)
+        except Exception:
+            return e.code, {"raw": body, "error": "non-json"}
 
 
 def test_stream_start_default_microphone(http_server):
@@ -177,6 +185,53 @@ def test_stream_start_strips_whitespace(http_server):
     code, body = _post(f"http://127.0.0.1:{http_server}/api/meetings/stream_start?audio_source=%20loopback%20")
     assert code == 200
     assert body["audio_source"] == "loopback"
+
+
+# ── POST /api/meetings/stream_start?meeting_id= (ADR-0022) ──
+
+
+def test_stream_start_with_meeting_id_creates(http_server, tmp_path):
+    """传 meeting_id + 不存在 → 用该 ID 创建新 state."""
+    code, body = _post(f"http://127.0.0.1:{http_server}/api/meetings/stream_start?meeting_id=my-mtg-1&audio_source=loopback")
+    assert code == 200
+    assert body["meeting_id"] == "my-mtg-1"
+    assert body["audio_source"] == "loopback"
+    assert body["reused"] is False
+
+    # state 文件存在
+    state_files = [f for f in tmp_path.glob("*.json") if f.stem == "my-mtg-1" and not f.name.endswith(".stream.json")]
+    assert len(state_files) == 1
+
+
+def test_stream_start_with_meeting_id_reuses(http_server, tmp_path):
+    """传 meeting_id + 已存在 → 复用, audio_source 更新."""
+    # 第一次创建
+    _post(f"http://127.0.0.1:{http_server}/api/meetings/stream_start?meeting_id=reuse-mtg&audio_source=microphone")
+    # 第二次传同 ID + 不同 audio_source
+    code, body = _post(f"http://127.0.0.1:{http_server}/api/meetings/stream_start?meeting_id=reuse-mtg&audio_source=both")
+    assert code == 200
+    assert body["meeting_id"] == "reuse-mtg"
+    assert body["audio_source"] == "both"  # 更新
+    assert body["reused"] is True
+
+
+def test_stream_start_meeting_id_validates_format(http_server):
+    """meeting_id 格式错 → 400 (复用 _validate_meeting_id)."""
+    code, body = _post(f"http://127.0.0.1:{http_server}/api/meetings/stream_start?meeting_id=ab")  # 太短
+    assert code == 400
+    assert "meeting_id" in body.get("error", "")
+
+
+def test_stream_start_meeting_id_rejects_chinese(http_server):
+    from urllib.parse import quote
+    code, body = _post(f"http://127.0.0.1:{http_server}/api/meetings/stream_start?meeting_id={quote('我的会议')}")
+    assert code == 400
+
+
+def test_stream_start_meeting_id_special_chars(http_server):
+    from urllib.parse import quote
+    code, body = _post(f"http://127.0.0.1:{http_server}/api/meetings/stream_start?meeting_id={quote('mtg@home')}")
+    assert code == 400
 
 
 # ── /api/meetings/{id}/state 显示 audio_source ──
