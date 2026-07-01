@@ -131,7 +131,8 @@
 | ASR | funasr paraformer-zh | 服务端 GPU, 30s batch 切片 |
 | 说话人分离 | pyannote-audio | 离线下载, ModelScope 镜像 |
 | LLM (chat / doc) | ollama 本地 | 默认 `qwen2.5:7b` |
-| RAG (新, v0.6) | **Chroma 嵌入式 + sentence-transformers** | ADR-0019 选型 |
+| RAG (新, v0.6) | **Chroma 嵌入式 + sentence-transformers** | ADR-0019 选型, KB 隔离 by meeting_id (ADR-0020) |
+| Agent 工具 (v0.6 Phase 2) | **`vpbuddy.tools.web_search` (DDG) + `vpbuddy.tools.kb_search`** | 纯函数, agent 通过 terminal 调 (ADR-0025, 不接 LLM function calling 协议) |
 | 数据存储 | SQLite (stdlib) | 不引外部 DB 进程 |
 | 客户端打包 | Tauri 2.6+ | 三平台自动 CI (Linux / macOS / Windows) |
 

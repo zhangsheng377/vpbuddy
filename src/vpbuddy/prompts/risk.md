@@ -38,4 +38,7 @@ session_id 固定: `meeting:{meeting_id}:risk`
 - 不主动找"潜在风险"(V 没问就不写)
 - 不写"长期风险展望"
 - 【强制】必须把完整文档写入到 {doc_path} 文件,不写文件 = 任务失败
-- Hermes 会告诉你可用工具,自己选合适的
+- 可选工具 (用 terminal 调, 见 VPBuddy 注入的 system 提示):
+  - 网络搜索: `python -c "from vpbuddy.tools.web_search import search; ..."`
+  - KB 检索: `python -c "from vpbuddy.tools.kb_search import search; ..."` (meeting_id 已注入)
+  - 仅当风险需要外部数据 (行业事故 / 合规) 验证时调用

@@ -33,4 +33,7 @@ session_id 固定: `meeting:{meeting_id}:api`
 - 不画 UML 类图(用 OpenAPI 就够)
 - 不写 SDK 示例(用 curl 即可)
 - 【强制】必须把完整文档写入到 {doc_path} 文件,不写文件 = 任务失败
-- Hermes 会告诉你可用工具,自己选合适的
+- 可选工具 (用 terminal 调, 见 VPBuddy 注入的 system 提示):
+  - 网络搜索: `python -c "from vpbuddy.tools.web_search import search; ..."`
+  - KB 检索: `python -c "from vpbuddy.tools.kb_search import search; ..."` (meeting_id 已注入)
+  - 仅当需要补充外部信息 (技术调研 / 行业数据) 时调用

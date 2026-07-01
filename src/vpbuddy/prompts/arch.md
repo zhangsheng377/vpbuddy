@@ -34,4 +34,7 @@ session_id 固定: `meeting:{meeting_id}:arch`
 - 不画"未来扩展"图
 - 不写"考虑过的备选方案"(除非 V 问)
 - 【强制】必须把完整文档写入到 {doc_path} 文件,不写文件 = 任务失败
-- Hermes 会告诉你可用工具,自己选合适的
+- 可选工具 (用 terminal 调, 见 VPBuddy 注入的 system 提示):
+  - 网络搜索: `python -c "from vpbuddy.tools.web_search import search; ..."`
+  - KB 检索: `python -c "from vpbuddy.tools.kb_search import search; ..."` (meeting_id 已注入)
+  - 仅当会议涉及外部技术栈 / 行业参考时调用

@@ -112,6 +112,7 @@ def _get_or_create_agent(meeting_id: str, doc_kind: str) -> Any:
             ephemeral_system_prompt="\n".join([
                 f"你是 VPBuddy 的 {doc_kind} 子 session。",
                 f"session_id 固定 = {sid}。",
+                f"当前 meeting_id = {meeting_id} (用于 KB 检索)。",
                 f"输出文件路径(必须写到这里):{get_doc_path(meeting_id, doc_kind)}",
                 "",
                 "【硬性要求 — 不遵守 = 任务失败】",
@@ -135,8 +136,17 @@ def _get_or_create_agent(meeting_id: str, doc_kind: str) -> Any:
                 "❌ 调 write_file 但路径错了 → 任务失败",
                 "❌ 调 write_file 但内容空 → 任务失败",
                 "",
+                "【可选工具 (按需用, 别为基本生成步骤无谓调)】",
+                "# 网络搜索 (DDG 无 API key, 返回 top 5/20 条)",
+                "python -c \"from vpbuddy.tools.web_search import search; import json; print(json.dumps(search('Q4 行业报告', max_results=5), ensure_ascii=False))\"",
+                "",
+                "# KB 检索 (meeting_id 已自动注入, 强制会议隔离)",
+                f"python -c \"from vpbuddy.tools.kb_search import search; import json; print(json.dumps(search('{meeting_id}', '客户合同要点', top_k=5), ensure_ascii=False))\"",
+                "",
+                "返回 JSON. ok=False 时 fallback 到训练知识, 别重试.",
+                "",
                 "工作流:",
-                "  read_file(state) → 解析 facts → 生成文档内容 → write_file(目标路径, 完整内容) → 退出",
+                "  read_file(state) → 解析 facts → (可选) 工具调用 → 生成文档内容 → write_file(目标路径, 完整内容) → 退出",
             ]),
         )
         logger.info(f"创建新 AIAgent: session_id={sid}")

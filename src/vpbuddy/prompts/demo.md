@@ -72,8 +72,12 @@ VP 在 Web UI 主屏 iframe 里直接看 (sandbox 隔离)。
 【若累积无变化】
 直接输出 "无变化" (一个字串), 不要再生成文件。
 
-【YAGNI】
-- 不主动加"可能需要的"功能(没 REQ 提就不写)
-- 不接外部后端 / 不写本地存储(纯前端 HTML)
-- 不污染环境(不调 pip install, 不写后端)
-- 【强制】必须把完整 HTML 写入到 {doc_path} 文件,不写文件 = 任务失败
+| YAGNI】
+|- 不主动加"可能需要的"功能(没 REQ 提就不写)
+|- 不接外部后端 / 不写本地存储(纯前端 HTML)
+|- 不污染环境(不调 pip install, 不写后端)
+|- 【强制】必须把完整 HTML 写入到 {doc_path} 文件,不写文件 = 任务失败
+|- 可选工具 (用 terminal 调, 见 VPBuddy 注入的 system 提示):
+  - 网络搜索: `python -c "from vpbuddy.tools.web_search import search; ..."`
+  - KB 检索: `python -c "from vpbuddy.tools.kb_search import search; ..."` (meeting_id 已注入)
+  - 仅当 demo 需要真实数据样例 (产品名 / 行业标准) 时调用
