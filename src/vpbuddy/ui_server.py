@@ -750,6 +750,12 @@ class Handler(BaseHTTPRequestHandler):
             meeting_id = path.split("/")[3]
             return self._handle_chat_history(meeting_id)
 
+        # API: 单场会议 协作提问文档 (ADR-0028)
+        # GET /api/meetings/{id}/collab → {collab, pending, answered, stats}
+        if path.startswith("/api/meetings/") and path.endswith("/collab"):
+            meeting_id = path.split("/")[3]
+            return self._handle_collab_get(meeting_id)
+
         # API: 单场会议 6 类文档正文
         if path.startswith("/api/meetings/") and path.endswith("/docs"):
             meeting_id = path.split("/")[3]
@@ -819,6 +825,17 @@ class Handler(BaseHTTPRequestHandler):
             meeting_id = path.split("/")[3]
             return self._handle_chat(meeting_id)
 
+        # API: 协作提问文档 (ADR-0028)
+        # POST /api/meetings/{id}/ask_question?section=X&question=Y&asker=Z
+        if path.startswith("/api/meetings/") and path.endswith("/ask_question"):
+            meeting_id = path.split("/")[3]
+            return self._handle_collab_ask(meeting_id)
+
+        # POST /api/meetings/{id}/answer_question?qid=X&answer=Y
+        if path.startswith("/api/meetings/") and path.endswith("/answer_question"):
+            meeting_id = path.split("/")[3]
+            return self._handle_collab_answer(meeting_id)
+
         # API: KB upload (multipart)
         if path == "/api/kb/upload":
             content_type = self.headers.get("Content-Type", "")
@@ -875,7 +892,73 @@ class Handler(BaseHTTPRequestHandler):
         })
 
     def _handle_chat(self, meeting_id: str):
-        """VP 自由输入 → Hermes VP Chat 主控 agent → SSE 回流。"""
+        """VP 自由输入 → Hermes VP Chat 主控 agent → SSE 回流.
+
+        2026-07-01 ADR-0023: 支持 multipart/form-data (上传文件/图片).
+        - JSON 路径: 原行为, text-only.
+        - Multipart 路径: 调 handle_chat_upload, 文本/文件入 KB, 图片 → base64 data URI
+          然后走 chat agent 答 (本期简化: 多模态 vision 暂不接, 仅当 files 含图片时
+          把图片总数告知 chat agent; KB 文本类已入, agent 可通过 kb_search 检索).
+        """
+        content_type = self.headers.get("Content-Type", "")
+
+        # Multipart 分支 (ADR-0023 Phase 6)
+        if content_type.startswith("multipart/form-data"):
+            content_length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(content_length)
+            from .kb_api import handle_chat_upload
+            upload_result = handle_chat_upload(body, content_type, meeting_id)
+            if upload_result.get("error"):
+                return self._json(upload_result, upload_result.get("status", 400))
+
+            text = upload_result.get("text", "")
+            files_meta = upload_result.get("files", [])
+            # 把"上传了 N 个文件"作为 user message 进 chat 历史
+            if files_meta:
+                attach_summary = ", ".join(
+                    f.get("filename", "?") for f in files_meta
+                    if f.get("status") in ("kb-stored", "image", "empty")
+                )
+                if attach_summary:
+                    text = text or f"[上传了 {len(files_meta)} 个文件]"
+            user_msg = _append_chat_message(
+                meeting_id,
+                "user",
+                text,
+                source="client-upload",
+                extra={"attachments": files_meta},
+            )
+            try:
+                from .realtime_server import push_event
+                push_event(meeting_id, "chat-message", user_msg)
+            except Exception:
+                pass
+            # 触发 agent 答 (复用现有 _run_vp_chat, 文本已拼进 history)
+            result = _run_vp_chat(meeting_id, text or "(用户只上传了文件, 没问文本)")
+            assistant_msg = _append_chat_message(
+                meeting_id,
+                "assistant",
+                result["content"],
+                source=result["source"],
+                status=result["status"],
+                extra={"error": result.get("error"), "attachment_count": len(files_meta)},
+            )
+            try:
+                from .realtime_server import push_event
+                push_event(meeting_id, "chat-message", assistant_msg)
+            except Exception:
+                pass
+            return self._json({
+                "meeting_id": meeting_id,
+                "upload": upload_result,
+                "user_message": user_msg,
+                "assistant_message": assistant_msg,
+                "status": result["status"],
+                "source": result["source"],
+                "error": result.get("error"),
+            })
+
+        # JSON 路径 (原行为, 向后兼容)
         content_length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(content_length)
         try:
@@ -1633,12 +1716,104 @@ class Handler(BaseHTTPRequestHandler):
             "message": "Stream stopped, SSE subscribers closed",
         })
 
+    def _handle_collab_get(self, meeting_id: str):
+        """GET /api/meetings/{id}/collab — 返 collab.md + pending/answered 列表 + 统计.
+
+        2026-07-01 ADR-0028: 3 个 agent 共享 collab.md, UI 端面板调这个端点拉全量.
+        """
+        try:
+            from .collab import (
+                read_collab,
+                list_pending,
+                list_answered,
+                collab_stats,
+            )
+            return self._json({
+                "meeting_id": meeting_id,
+                "collab": read_collab(meeting_id),
+                "pending": list_pending(meeting_id),
+                "answered": list_answered(meeting_id),
+                "stats": collab_stats(meeting_id),
+            })
+        except Exception as e:
+            return self._json({"error": str(e)}, 500)
+
+
+    def _handle_collab_ask(self, meeting_id: str):
+        """POST /api/meetings/{id}/ask_question?section=X&question=Y[&asker=Z].
+
+        任意 agent / 用户都能调. 节流: 同 (mid, section, 相似问题) 1 次会议只 1 次.
+        成功后推 SSE `collab-update` 让前端实时刷新.
+        """
+        parsed = urlparse(self.path)
+        qs = parse_qs(parsed.query)
+        section = (qs.get("section", [""])[0] or "").strip()
+        question = (qs.get("question", [""])[0] or "").strip()
+        asker = (qs.get("asker", ["agent"])[0] or "agent").strip()
+        if not section or not question:
+            return self._json({"error": "section 和 question 必填"}, 400)
+
+        from .collab import ask_question
+        result = ask_question(meeting_id, section, question, asker=asker)
+        if not result["ok"]:
+            return self._json(result, 400)
+
+        # SSE: 让前端 + 其他 agent 实时看到 (已在 chat-message 流之外, 新事件类型)
+        try:
+            from .realtime_server import push_event
+            push_event(meeting_id, "collab-update", {
+                "action": "ask",
+                "qid": result.get("qid"),
+                "section": section,
+                "status": result["status"],
+                "question": question,
+                "asker": asker,
+            })
+        except Exception:
+            pass
+        return self._json(result)
+
+
+    def _handle_collab_answer(self, meeting_id: str):
+        """POST /api/meetings/{id}/answer_question?qid=X&answer=Y[&answerer=Z].
+
+        把 pending Q 标记为 answered, 推到 Answered 段. 推 SSE 通知前端 + agent.
+        """
+        parsed = urlparse(self.path)
+        qs = parse_qs(parsed.query)
+        qid = (qs.get("qid", [""])[0] or "").strip()
+        answer = (qs.get("answer", [""])[0] or "").strip()
+        answerer = (qs.get("answerer", ["VP"])[0] or "VP").strip()
+        if not qid or not answer:
+            return self._json({"error": "qid 和 answer 必填"}, 400)
+
+        from .collab import answer_question
+        result = answer_question(meeting_id, qid, answer, answerer=answerer)
+        if not result["ok"]:
+            return self._json(result, result.get("status") == "not_found" and 404 or 400)
+
+        # SSE: 通知前端 + 监听线程 (后续 Commit 3 监听回答触发增量 patch)
+        try:
+            from .realtime_server import push_event
+            push_event(meeting_id, "collab-update", {
+                "action": "answer",
+                "qid": qid,
+                "answer": answer,
+                "answerer": answerer,
+                "status": "answered",
+            })
+        except Exception:
+            pass
+        return self._json(result)
+
+
     def _handle_meeting_close(self, meeting_id: str):
         """2026-07-01 ADR-0022: 用户主动 [结束会议] 按钮调
 
         行为:
         1. push_event("meeting-complete", {...}) — 客户端 SSE 收到, 状态切 'closed'
         2. close_meeting(meeting_id) — 服务端 SSE 订阅者退出
+        3. clear proactive throttle (ADR-0023 Phase 5: 下次开同 ID 会议, 主动消息能再触发)
 
         调用方: UI 手动按钮 / 客户端断开前 / 切会议时 (前一个会议).
         """
@@ -1650,10 +1825,17 @@ class Handler(BaseHTTPRequestHandler):
                 "note": "用户主动结束 (ADR-0022)",
             })
             closed = close_meeting(meeting_id)
-            print(f"[ui_server] 用户主动 close_meeting: {meeting_id}, 关闭 {closed} 个 SSE 订阅者")
+            # 2026-07-01 ADR-0023: 清 proactive 节流, 下次复用同 mid 时主动消息能再触发
+            try:
+                from .agent_proactive import clear_throttle
+                cleared = clear_throttle(meeting_id)
+            except Exception:
+                cleared = 0
+            print(f"[ui_server] 用户主动 close_meeting: {meeting_id}, 关闭 {closed} 个 SSE 订阅者, 清 {cleared} 个 proactive 节流")
             return self._json({
                 "meeting_id": meeting_id,
                 "closed_subscribers": closed,
+                "proactive_cleared": cleared,
                 "status": "closed",
             })
         except Exception as e:
