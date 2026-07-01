@@ -48,6 +48,12 @@ PARALLEL_WORKERS = int(os.environ.get("VPBUDDY_PARALLEL_WORKERS", "3"))
 # 6 个子 session 对应 6 种 doc_kind
 DOC_KINDS = ["req", "arch", "tasks", "api", "risk", "demo"]
 
+# 2026-07-01 ADR-0029: 6 kinds 合并为 2 kinds (batch_docs 5 文档 1 次 + demo 单独)
+BATCH_DOCS_KIND = "batch_docs"
+DEMO_KIND = "demo"
+# 新调度常量 (run_one_round 用)
+SCHEDULED_KINDS = [BATCH_DOCS_KIND, DEMO_KIND]
+
 # === AIAgent 缓存(关键:跨轮询复用同一 AIAgent → 持久化 session) ===
 # 2026-06-22 ADR-0009 落地:每个 (meeting_id, doc_kind) 一个 AIAgent 实例
 # 同 session_id 多次触发 = 同一 session 历史 → LLM 跨次记得上下文
@@ -151,6 +157,33 @@ def _get_or_create_agent(meeting_id: str, doc_kind: str) -> Any:
         )
         logger.info(f"创建新 AIAgent: session_id={sid}")
     return _AGENT_CACHE[sid]
+
+
+def _dispatch_kind(meeting_id: str, kind: str, dry_run: bool = False) -> Dict[str, Any]:
+    """按 kind 路由到对应 trigger 函数 (ADR-0029 Commit 3).
+
+    Routing:
+        batch_docs → sub_sessions.batch_docs.trigger_batch_docs
+        demo       → 老 trigger_sub_session(mid, "demo") (保留原路径)
+        req/arch/tasks/api/risk → 返 deprecated 警告 (引导用 batch_docs)
+    """
+    if kind == BATCH_DOCS_KIND:
+        from .sub_sessions.batch_docs import trigger_batch_docs
+        return trigger_batch_docs(meeting_id, dry_run=dry_run)
+    if kind == DEMO_KIND:
+        # demo 走老路径 (已有 demo_version.write_demo_version + write_doc)
+        return trigger_sub_session(meeting_id, "demo", dry_run=dry_run)
+    # 老 kinds (req/arch/tasks/api/risk) — deprecated 引导
+    return {
+        "session_id": _agent_session_id(meeting_id, kind),
+        "triggered": False,
+        "deprecated": True,
+        "error": (
+            f"doc_kind '{kind}' deprecated since v0.7 (ADR-0029). "
+            f"5 文档已合并为 batch_docs agent. "
+            f"Use _dispatch_kind(mid, 'batch_docs') instead."
+        ),
+    }
 
 
 def list_active_meetings() -> List[str]:
@@ -565,26 +598,31 @@ def run_one_round(
     dry_run: bool = False,
     parallel: bool = True,
 ) -> List[dict]:
-    """跑一轮:对每个会议 × 每个 doc_kind 触发子 session(2026-06-22 加并发)
+    """跑一轮:对每个会议触发 batch_docs + demo (2 个 sub-session 并行).
+
+    2026-07-01 ADR-0029: 6 kinds (req/arch/tasks/api/risk/demo) 合并为 2 kinds
+    (batch_docs + demo). LLM 调用从 6 → 2, 时间从 3-5 min → 1-2 min.
 
     Args:
         meeting_ids: 限定会议列表(None = 所有活跃)
-        dry_run: 只渲染 prompt
+        dry_run: 只渲染 prompt (不调 LLM)
         parallel: True = ThreadPoolExecutor(PARALLEL_WORKERS) 并发;False = 串行
     """
     meetings = meeting_ids or list_active_meetings()
-    tasks = [(mid, kind) for mid in meetings for kind in DOC_KINDS]
-    print(f"[{datetime.now().isoformat()}] {len(meetings)} meetings × {len(DOC_KINDS)} doc_kinds = {len(tasks)} subs (parallel={parallel})")
+    # 新调度: 每个会议 2 个 task (batch_docs + demo)
+    kinds = [BATCH_DOCS_KIND, DEMO_KIND]
+    tasks = [(mid, kind) for mid in meetings for kind in kinds]
+    print(f"[{datetime.now().isoformat()}] {len(meetings)} meetings × {len(kinds)} kinds = {len(tasks)} subs (parallel={parallel}, ADR-0029 batch)")
 
     if not parallel or len(tasks) <= 1:
         # 串行
-        results = [trigger_sub_session(mid, kind, dry_run=dry_run) for mid, kind in tasks]
+        results = [_dispatch_kind(mid, kind, dry_run=dry_run) for mid, kind in tasks]
     else:
         # 并发:每个 (meeting, kind) 一个 task,丢到线程池
         results = []
         with ThreadPoolExecutor(max_workers=PARALLEL_WORKERS) as ex:
             future_to_task = {
-                ex.submit(trigger_sub_session, mid, kind, dry_run=dry_run): (mid, kind)
+                ex.submit(_dispatch_kind, mid, kind, dry_run=dry_run): (mid, kind)
                 for mid, kind in tasks
             }
             for fut in as_completed(future_to_task):
@@ -615,6 +653,15 @@ def main_loop() -> None:
     print(f"  DOC_KINDS: {DOC_KINDS}")
     print(f"  AIAgent in-process: {'✅ enabled' if _AGENT_AVAILABLE else '❌ disabled (subprocess fallback)'}")
     print(f"  auto-cleanup: 每 {int(3600 / POLL_INTERVAL)} 轮 ≈ 1 小时")
+
+    # 2026-07-01 ADR-0023 Phase 5: 启动 agent 主动消息后台监控 (silence / time_node)
+    try:
+        from .agent_proactive import start_monitor
+        start_monitor()
+        print(f"  proactive monitor: ✅ enabled (silence {int(os.environ.get('VPBUDDY_PROACTIVE_INTERVAL', '60'))}s 轮询)")
+    except Exception as e:
+        print(f"  proactive monitor: ❌ failed: {e}")
+
     print()
     cleanup_counter = 0
     CLEANUP_EVERY = max(1, int(3600 / POLL_INTERVAL))  # 每小时清理一次

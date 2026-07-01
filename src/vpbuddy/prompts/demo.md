@@ -81,3 +81,24 @@ VP 在 Web UI 主屏 iframe 里直接看 (sandbox 隔离)。
   - 网络搜索: `python -c "from vpbuddy.tools.web_search import search; ..."`
   - KB 检索: `python -c "from vpbuddy.tools.kb_search import search; ..."` (meeting_id 已注入)
   - 仅当 demo 需要真实数据样例 (产品名 / 行业标准) 时调用
+
+# 协作提问协议 — ADR-0028
+
+你的不确定因素先推到 `docs/{meeting_id}/collab.md`, 等待 VP 回答后再做 demo.
+
+跑任务前:
+```bash
+python -c "from vpbuddy.collab import list_pending, read_collab; print(list_pending('{meeting_id}'))"
+```
+- 看到 pending 跟你 demo 相关 (配色/交互/布局/品牌) → 等 VP 回答
+- 看到已答 → 增量更新 demo (用答案替换/补充原内容)
+
+跑任务中 (遇到不确定):
+```bash
+python -c "from vpbuddy.collab import ask_question; print(ask_question('{meeting_id}', 'demo', '<你的问题>'))"
+```
+section 一律用 `demo`.
+
+跑任务后: 如果发现新的不确定事实, 调 `ask_question` 推到 collab.md. 不要在 demo 里硬编码 "TBD" / "待用户确认".
+
+节流: 同 (mid, section='demo', 相似问题) 一次会议只 1 次, 系统自动跳过.
