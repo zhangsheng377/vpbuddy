@@ -745,6 +745,15 @@ class Handler(BaseHTTPRequestHandler):
             meeting_id, kind = doc_match.group(1), doc_match.group(2)
             return self._handle_meeting_doc(meeting_id, kind)
 
+        # API: 单场会议 demo 版本列表 (ADR-0024)
+        # GET /api/meetings/{id}/demo/versions → {versions: [{version, created_at, summary, file_size}, ...]}
+        demo_ver_match = re.match(r"^/api/meetings/([^/]+)/demo/versions$", path)
+        if demo_ver_match:
+            from .demo_version import list_versions
+            meeting_id = demo_ver_match.group(1)
+            versions = list_versions(meeting_id)
+            return self._json({"meeting_id": meeting_id, "versions": versions, "count": len(versions)})
+
         # API: SSE 实时事件流 /api/meetings/{id}/events
         if path.startswith("/api/meetings/") and path.endswith("/events"):
             meeting_id = path.split("/")[3]  # /api/meetings/{id}/events

@@ -88,7 +88,8 @@ def http_server(tmp_path, monkeypatch):
     """起本地 HTTP server, DATA_DIR 指向 tmp_path."""
     # 改 DATA_DIR 到 tmp_path
     monkeypatch.setattr("vpbuddy.ui_server.DATA_DIR", tmp_path)
-    # realtime_server 无 DATA_DIR 模块属性 (数据存在 queue 里, 不读盘)
+    # demo_version 内部 import DOCS_DIR, 同样要改, 不然写到了真实 data/docs
+    monkeypatch.setattr("vpbuddy.ui_server.DOCS_DIR", tmp_path / "docs")
 
     port = _free_port()
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
@@ -163,6 +164,35 @@ def test_check_id_rejects_chinese(http_server):
     code, body = _get(f"{http_server}/api/meetings/check_id?id={quote('我的会议')}")
     assert code == 400
     assert body["valid"] is False
+
+
+# ── GET /api/meetings/{id}/demo/versions (ADR-0024) ──
+
+
+def test_demo_versions_endpoint_empty(http_server):
+    """新会议没 demo → 返空 versions."""
+    code, body = _get(f"{http_server}/api/meetings/newmtg/demo/versions")
+    assert code == 200
+    assert body["count"] == 0
+    assert body["versions"] == []
+
+
+def test_demo_versions_endpoint_returns_manifest(http_server, tmp_path):
+    """有 2 版本 → 返回 manifest 列表."""
+    from vpbuddy import demo_version
+    demo_version.write_demo_version("m1", "<h1>v1</h1>", trigger="agent_iterate")
+    demo_version.write_demo_version("m1", "<h1>v2</h1>", trigger="user_chat")
+
+    code, body = _get(f"{http_server}/api/meetings/m1/demo/versions")
+    assert code == 200
+    versions = body["versions"]
+    assert len(versions) == 2
+    # 倒序: 最新在前
+    assert versions[0]["version"] == 2
+    assert versions[1]["version"] == 1
+    assert "summary" in versions[0]
+    assert "file_size" in versions[0]
+    assert "trigger" in versions[0]
 
 
 # ── POST /api/meetings/{id}/close ──

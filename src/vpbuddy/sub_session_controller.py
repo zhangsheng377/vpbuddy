@@ -501,6 +501,31 @@ def trigger_sub_session(meeting_id: str, doc_kind: str, dry_run: bool = False) -
     if result.get("triggered") and doc_path.exists():
         result["doc_size"] = doc_path.stat().st_size
         content = doc_path.read_text(encoding="utf-8", errors="replace")
+
+        # 2026-07-01 ADR-0024: demo 走版本化 — 写新版本, 不覆盖老的
+        if doc_kind == "demo":
+            try:
+                from .demo_version import write_demo_version
+                from .realtime_server import push_event as _push
+                v_result = write_demo_version(meeting_id, content, trigger="agent_iterate")
+                if v_result.get("ok"):
+                    # 推 demo-new-version SSE (新版生成通知)
+                    try:
+                        _push(meeting_id, "demo-new-version", {
+                            "version": v_result["version"],
+                            "summary": v_result["summary"],
+                            "file_size": v_result["file_size"],
+                            "file": v_result["file"],
+                        })
+                    except Exception:
+                        pass  # push 失败不影响主流程
+                    result["demo_version"] = v_result["version"]
+                    result["demo_versions_count"] = len(v_result["manifest"])
+                else:
+                    logger.warning(f"[{meeting_id}/demo] 写新版本失败: {v_result.get('error')}")
+            except Exception as e:
+                logger.warning(f"[{meeting_id}/demo] demo_version integration failed: {e}")
+
         # 推送 SSE: 文档生成完成
         try:
             from .realtime_server import push_event
