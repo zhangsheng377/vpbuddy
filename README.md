@@ -2,7 +2,7 @@
 
 > **本地优先的会议操作系统级 AI 助手** —— 为 VP / 售前 / 项目负责人设计,运行在 VP 自己桌面客户端,数据完全本地化。
 
-**v0.6.0** (2026-07-01) — 8 项产品需求合入:RAG 切 Chroma 嵌入式 / KB 改用户主动上传+会议隔离 / 客户端麦克风+内录双轨 / 首页强制会议选择 / chat 上传+agent 主动 / demo 多版本 / agent 网络搜索+KB 工具。详见 [CHANGELOG](#v060-2026-07-01-8-项需求合入) + [ADR-0019 ~ 0025](docs/decisions/README.md)。
+**v0.7.0** (2026-07-01) — 协作提问层 + 6→2 kinds 合并 + UI 实时折叠面板 (见 CHANGELOG)。**v0.6.0** (2026-07-01) — 8 项产品需求合入:RAG 切 Chroma 嵌入式 / KB 改用户主动上传+会议隔离 / 客户端麦克风+内录双轨 / 首页强制会议选择 / chat 上传+agent 主动 / demo 多版本 / agent 网络搜索+KB 工具。详见 [CHANGELOG](#v060-2026-07-01-8-项需求合入) + [ADR-0019 ~ 0025](docs/decisions/README.md)。
 
 [English](#english) | [中文](#中文)
 
@@ -222,6 +222,19 @@ MIT
 ---
 
 ## CHANGELOG
+
+### v0.7.0 (2026-07-01) — 协作提问层 (collab.md) + 6→2 kinds 合并 + UI 实时折叠面板
+
+**核心**: 让 VP 跟 agent **双向对话式协作**—— agent 提问、VP 回答、增量改方向，文档跟方向一致。
+
+**改动**:
+- 🤝 **协作提问层 (ADR-0028)**: 新 `collab.py` 模块 (5 API: read_collab/parse_questions/list_pending/ask_question/answer_question), `docs/{mid}/collab.md` 三方共享文件 (chat agent / batch_docs / demo agent), 线程安全 (per-file Lock + fcntl.flock + Windows fallback), 节流 (同 mid+section+相似问题 1 次会议只 1 次), 3 个 HTTP 端点 (`GET /api/meetings/{id}/collab` · `POST /ask_question` · `POST /answer_question`), SSE `collab-update` 推流 (13 + 25 测试)
+- 🔀 **6 sub-session → 2 batch agent (ADR-0029)**: req/arch/tasks/api/risk 5 老 prompt 合并为 1 个 `batch_docs.md` (Markdown 分隔符, 软约束, 1 次 LLM 输出 5 文档), demo agent 独立 (HTML 格式差异大), `SCHEDULED_KINDS = ("batch_docs", "demo")`, 老 kinds 兼容 stub 返 deprecated 警告, **LLM 调用 6→2 (-66%), 时间 3-5min → 1-2min, 一致性显著提升** (19 测试)
+- 💬 **客户端协作疑问折叠面板 (ADR-0030)**: Chat 面板顶部 `<details>` 默认折叠 + N 徽标 + pending 列表 + 主动提问栏 (6 section 下拉 + 输入) + 已答折叠子区, SSE 实时刷新, 回答内嵌 textarea (无 modal), Enter 提交, 字段兼容 (asked_by/asker)
+- 🔢 版本号全栈升 0.7.0: pyproject
+- 📝 design v1.29 → v1.31 + 3 个新 ADR (0028/0029/0030)
+
+详见 [docs/decisions/README.md](docs/decisions/README.md) + [总体架构 v1.31](docs/design/总体架构.md)。
 
 ### ⚠️ v0.6.0 (2026-07-01) — **设计稿发布,非实现完成**
 

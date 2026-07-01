@@ -131,6 +131,26 @@ html, body { font-family: -apple-system, "Segoe UI", sans-serif; background: var
 .chat-input-row { display: flex; gap: 8px; margin-top: 10px; }
 .chat-input-row textarea { flex: 1; height: 78px; resize: vertical; background: var(--bg2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; line-height: 1.5; }
 .chat-input-row button { width: 88px; background: var(--accent); color: white; border: none; border-radius: 6px; cursor: pointer; }
+/* 2026-07-01 ADR-0023: 📎 按钮更紧凑 (跟发送按钮对齐) */
+#chat-attach { width: 44px !important; font-size: 16px; background: var(--bg2) !important; color: var(--text) !important; border: 1px solid var(--border) !important; }
+#chat-attach:hover { background: var(--accent) !important; color: white !important; }
+
+/* 2026-07-01 ADR-0023: 附件预览 chip 区 */
+.chat-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; padding: 0; }
+.chat-attach-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; font-size: 11px; }
+.chat-attach-thumb { width: 18px; height: 18px; object-fit: cover; border-radius: 3px; }
+.chat-attach-icon { font-size: 14px; }
+.chat-attach-name { color: var(--text); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-attach-size { color: var(--text2); font-size: 10px; }
+.chat-attach-rm { width: 16px !important; height: 16px; line-height: 1; padding: 0; background: transparent !important; color: var(--text2) !important; border: none !important; border-radius: 50%; cursor: pointer; font-size: 14px; }
+.chat-attach-rm:hover { background: rgba(245,11,11,0.2) !important; color: #f50b0b !important; }
+
+/* 2026-07-01 ADR-0023: 消息里嵌入的附件 chip (上传后渲染) */
+.chat-msg-attachs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.chat-msg-attach-chip { display: inline-block; padding: 2px 6px; background: rgba(99,102,241,0.15); border-radius: 8px; font-size: 10px; color: var(--text2); }
+
+/* 2026-07-01 ADR-0023 Phase 5: agent 主动消息 — 浅黄底 + 左竖线 */
+.chat-msg.assistant.proactive { background: rgba(245,158,11,0.08); border-left: 3px solid rgba(245,158,11,0.6); }
 /* 2026-06-28: chat-status 粘底 + 高亮背景, 防止被 chat-list 滚走看不到
    张胜东反馈: "Hermes 正在思考...的提示会被挡住, 不动滚轮根本看不到" */
 .chat-status {
@@ -158,3 +178,152 @@ html, body { font-family: -apple-system, "Segoe UI", sans-serif; background: var
 .settings-row { display: flex; gap: 8px; align-items: center; }
 .log-path { flex: 1; padding: 6px 10px; background: var(--bg-panel); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; font-size: 11px; font-family: ui-monospace, monospace; overflow-x: auto; white-space: nowrap; }
 .settings-note { color: var(--text2); font-size: 12px; line-height: 1.6; }
+
+/* 2026-07-01 ADR-0028 Commit 4: 协作疑问折叠面板 — 默认折叠, 折叠时只显示标签 + 徽标 */
+.collab-panel {
+  margin-bottom: 10px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.collab-panel > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  font-size: 12px;
+  color: var(--text2);
+}
+.collab-panel > summary::-webkit-details-marker { display: none; }
+.collab-panel > summary::before {
+  content: "▶";
+  font-size: 9px;
+  color: var(--text2);
+  transition: transform 0.15s ease;
+  display: inline-block;
+  width: 10px;
+}
+.collab-panel[open] > summary::before { transform: rotate(90deg); }
+.collab-label { color: var(--text); font-weight: 500; }
+.collab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  background: var(--warning);
+  color: #1a1a1a;
+  border-radius: 9px;
+  font-size: 10px;
+  font-weight: 600;
+}
+.collab-collapsed-info { color: var(--warning); font-size: 11px; margin-left: auto; }
+.collab-body { padding: 0 14px 12px; display: flex; flex-direction: column; gap: 10px; }
+.collab-empty { color: var(--text2); font-size: 11px; padding: 12px; text-align: center; background: var(--bg3); border-radius: 6px; }
+.collab-pending { display: flex; flex-direction: column; gap: 8px; }
+.collab-q-item {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.collab-q-item.answered { border-left: 3px solid var(--success); }
+.collab-q-head { display: flex; align-items: center; gap: 8px; font-size: 10px; color: var(--text2); }
+.collab-q-section {
+  display: inline-block;
+  padding: 2px 6px;
+  background: var(--accent);
+  color: white;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+.collab-q-asker, .collab-q-answerer { font-size: 10px; }
+.collab-q-body { color: var(--text); font-size: 12px; line-height: 1.5; }
+.collab-q-answer { color: var(--success); font-size: 11px; line-height: 1.5; padding-top: 4px; border-top: 1px dashed var(--border); margin-top: 4px; }
+.collab-answer-btn {
+  margin-left: auto;
+  padding: 3px 10px;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.collab-answer-btn:hover { background: var(--accent); color: white; }
+.collab-answer-form { display: flex; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px dashed var(--border); }
+.collab-answer-form textarea {
+  background: var(--bg2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 12px;
+  resize: vertical;
+  font-family: inherit;
+}
+.collab-answer-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.collab-answer-send {
+  padding: 4px 12px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.collab-answer-cancel {
+  padding: 4px 12px;
+  background: transparent;
+  color: var(--text2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.collab-ask-row { display: flex; gap: 6px; padding-top: 8px; border-top: 1px solid var(--border); }
+.collab-ask-row select,
+.collab-ask-row input {
+  background: var(--bg3);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.collab-ask-row input { flex: 1; }
+.collab-ask-row button {
+  padding: 6px 14px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.collab-ask-row button:hover { opacity: 0.85; }
+.collab-answered-toggle { font-size: 11px; color: var(--text2); }
+.collab-answered-toggle > summary {
+  cursor: pointer;
+  padding: 6px 0;
+  list-style: none;
+  user-select: none;
+}
+.collab-answered-toggle > summary::-webkit-details-marker { display: none; }
+.collab-answered-toggle > summary::before {
+  content: "▼ ";
+  font-size: 9px;
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+.collab-answered-toggle:not([open]) > summary::before { transform: rotate(-90deg); }
+#collab-answered { display: flex; flex-direction: column; gap: 6px; padding: 8px 0 0; }

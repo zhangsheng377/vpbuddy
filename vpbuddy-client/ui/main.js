@@ -131,6 +131,8 @@ document.getElementById("btn-rec").addEventListener("click", async () => {
       await refreshChatHistory();
       // 2026-07-01 ADR-0024: 录音中可能已生成 demo, 加载版本列表
       loadDemoVersions();
+      // 2026-07-01 ADR-0028 Commit 4: 拉 collab 全量 (initial state)
+      refreshCollab();
     } catch (e) {
       status.textContent = "❌ " + e;
       btn.disabled = false;
@@ -509,6 +511,229 @@ listen("chat-message", (e) => {
   renderChatMessage(e.payload);
 });
 
+// 2026-07-01 ADR-0028 Commit 4: SSE `collab-update` 推流 — 实时刷新疑问面板
+// payload: { action: "ask"|"answer", qid, section, question, answer, status, asker, answerer }
+// 注: ask_question/answer_question 端点用 asker/answerer, 但 GET /collab 返 asked_by/answered_by
+listen("collab-update", (e) => {
+  const p = e.payload || {};
+  if (p.action === "ask") {
+    upsertPendingQuestion({
+      qid: p.qid,
+      section: p.section,
+      question: p.question,
+      asker: p.asker || "agent",
+      status: p.status || "pending",
+    });
+    bumpPendingCount(+1);
+    const panel = document.getElementById("collab-panel");
+    if (panel) panel.open = true;
+  } else if (p.action === "answer") {
+    movePendingToAnswered({
+      qid: p.qid,
+      answer: p.answer,
+      answerer: p.answerer,
+    });
+    bumpPendingCount(-1);
+  }
+});
+
+// === 协作疑问面板 (ADR-0028 Commit 4) ===
+// 状态: pendingQuestions + answeredQuestions 各是 Map<qid, item>
+// 初始: 切会议时调 GET /api/meetings/{id}/collab 拉全量
+let pendingQuestions = new Map();
+let answeredQuestions = new Map();
+let pendingCountDelta = 0; // SSE 增量计数 (初始拉全量时不用, 后续用 delta)
+
+function upsertPendingQuestion(item) {
+  pendingQuestions.set(item.qid, item);
+  renderCollabPanel();
+}
+
+function movePendingToAnswered({ qid, answer, answerer }) {
+  const p = pendingQuestions.get(qid);
+  if (p) {
+    answeredQuestions.set(qid, { ...p, answer, answerer, status: "answered" });
+    pendingQuestions.delete(qid);
+  } else {
+    // 服务端推 answer 但本地 pending 里没有 (可能切会议后才有推送) → 占位条目
+    answeredQuestions.set(qid, {
+      qid, answer, answerer, status: "answered",
+      section: "?", question: "(略)", asker: "?",
+    });
+  }
+  renderCollabPanel();
+}
+
+function bumpPendingCount(delta) {
+  pendingCountDelta += delta;
+  renderCollabBadge();
+}
+
+function renderCollabBadge() {
+  const badge = document.getElementById("collab-pending-count");
+  const info = document.getElementById("collab-collapsed-info");
+  const n = pendingQuestions.size + pendingCountDelta;
+  if (n > 0) {
+    badge.textContent = n;
+    badge.style.display = "";
+    info.textContent = `有 ${n} 个待答疑问`;
+  } else {
+    badge.style.display = "none";
+    info.textContent = "";
+  }
+}
+
+function renderCollabPanel() {
+  const pendingWrap = document.getElementById("collab-pending");
+  const answeredWrap = document.getElementById("collab-answered");
+  const answeredCount = document.getElementById("collab-answered-count");
+
+  // pending
+  const pendingList = Array.from(pendingQuestions.values());
+  if (pendingList.length === 0) {
+    pendingWrap.innerHTML = `<div class="collab-empty">暂无待答疑问。Agent 提问后会出现在这里。</div>`;
+  } else {
+    pendingWrap.innerHTML = pendingList.map((q) => renderPendingItem(q)).join("");
+    // 绑定 [回答] 按钮
+    pendingWrap.querySelectorAll(".collab-answer-btn").forEach((btn) => {
+      btn.addEventListener("click", () => showAnswerInline(btn.dataset.qid));
+    });
+    pendingWrap.querySelectorAll(".collab-answer-send").forEach((btn) => {
+      btn.addEventListener("click", () => submitAnswer(btn.dataset.qid));
+    });
+    pendingWrap.querySelectorAll(".collab-answer-cancel").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const item = btn.closest(".collab-q-item");
+        if (item) item.querySelector(".collab-answer-form").style.display = "none";
+      });
+    });
+  }
+
+  // answered
+  const answeredList = Array.from(answeredQuestions.values()).reverse(); // 最新在前
+  answeredCount.textContent = answeredList.length;
+  answeredWrap.innerHTML = answeredList.length === 0
+    ? `<div class="collab-empty">尚无已回答条目</div>`
+    : answeredList.map((q) => renderAnsweredItem(q)).join("");
+
+  renderCollabBadge();
+}
+
+function renderPendingItem(q) {
+  const asker = q.asked_by || q.asker || "agent";
+  return `<div class="collab-q-item" data-qid="${escapeHtml(q.qid)}">
+    <div class="collab-q-head">
+      <span class="collab-q-section">${escapeHtml(q.section || "?")}</span>
+      <span class="collab-q-asker">${escapeHtml(asker)}</span>
+      <button type="button" class="collab-answer-btn" data-qid="${escapeHtml(q.qid)}">回答</button>
+    </div>
+    <div class="collab-q-body">${escapeHtml(q.question)}</div>
+    <div class="collab-answer-form" style="display:none;">
+      <textarea placeholder="输入回答 (回车提交, Shift+回车换行)" rows="2"></textarea>
+      <div class="collab-answer-actions">
+        <button type="button" class="collab-answer-send" data-qid="${escapeHtml(q.qid)}">发送</button>
+        <button type="button" class="collab-answer-cancel" data-qid="${escapeHtml(q.qid)}">取消</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderAnsweredItem(q) {
+  // 2026-07-01: GET /collab 返 asked_by/answered_by (markdown 解析), SSE 推 asker/answerer (端点参数)
+  // 这里兼容两种来源
+  const asker = q.asked_by || q.asker || "agent";
+  const answerer = q.answered_by || q.answerer || "VP";
+  return `<div class="collab-q-item answered" data-qid="${escapeHtml(q.qid)}">
+    <div class="collab-q-head">
+      <span class="collab-q-section">${escapeHtml(q.section || "?")}</span>
+      <span class="collab-q-asker">问: ${escapeHtml(asker)}</span>
+      <span class="collab-q-answerer">答: ${escapeHtml(answerer)}</span>
+    </div>
+    <div class="collab-q-body">${escapeHtml(q.question)}</div>
+    <div class="collab-q-answer">→ ${escapeHtml(q.answer || "")}</div>
+  </div>`;
+}
+
+function showAnswerInline(qid) {
+  const item = pendingWrap_for(qid);
+  if (!item) return;
+  const form = item.querySelector(".collab-answer-form");
+  form.style.display = "";
+  const ta = form.querySelector("textarea");
+  ta.focus();
+  ta.onkeydown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitAnswer(qid); }
+  };
+}
+
+function pendingWrap_for(qid) {
+  return document.querySelector(`#collab-pending .collab-q-item[data-qid="${CSS.escape(qid)}"]`);
+}
+
+async function submitAnswer(qid) {
+  if (!currentMeetingId) return;
+  const item = pendingWrap_for(qid);
+  if (!item) return;
+  const ta = item.querySelector(".collab-answer-form textarea");
+  const answer = (ta.value || "").trim();
+  if (!answer) return;
+  try {
+    const gpuUrlLocal = await getGpuUrl();
+    const url = `${gpuUrlLocal}/api/meetings/${encodeURIComponent(currentMeetingId)}/answer_question?qid=${encodeURIComponent(qid)}&answer=${encodeURIComponent(answer)}&answerer=VP`;
+    const resp = await fetch(url, { method: "POST" });
+    const result = await resp.json();
+    if (!resp.ok || !result.ok) throw new Error(result.error || "提交失败");
+    // SSE 会推 collab-update, 不必本地立即改 — 但清空输入框 + 隐藏表单
+    ta.value = "";
+    item.querySelector(".collab-answer-form").style.display = "none";
+  } catch (e) {
+    alert("回答失败: " + e);
+  }
+}
+
+async function refreshCollab() {
+  if (!currentMeetingId) return;
+  try {
+    const gpuUrlLocal = await getGpuUrl();
+    const url = `${gpuUrlLocal}/api/meetings/${encodeURIComponent(currentMeetingId)}/collab`;
+    const resp = await fetch(url);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    pendingQuestions = new Map((data.pending || []).map((q) => [q.qid, q]));
+    answeredQuestions = new Map((data.answered || []).map((q) => [q.qid, q]));
+    pendingCountDelta = 0; // 拉全量后, delta 重新开始
+    renderCollabPanel();
+  } catch (e) {
+    console.warn("拉取 collab 失败", e);
+  }
+}
+
+document.getElementById("collab-ask-btn").addEventListener("click", async () => {
+  if (!currentMeetingId) {
+    alert("请先开始会议");
+    return;
+  }
+  const section = document.getElementById("collab-section").value;
+  const qInput = document.getElementById("collab-q-input");
+  const question = (qInput.value || "").trim();
+  if (!question) return;
+  try {
+    const gpuUrlLocal = await getGpuUrl();
+    const url = `${gpuUrlLocal}/api/meetings/${encodeURIComponent(currentMeetingId)}/ask_question?section=${encodeURIComponent(section)}&question=${encodeURIComponent(question)}&asker=VP`;
+    const resp = await fetch(url, { method: "POST" });
+    const result = await resp.json();
+    if (!resp.ok || !result.ok) throw new Error(result.error || "提问失败");
+    qInput.value = "";
+    // SSE 会推 collab-update, 不用本地立即加
+  } catch (e) {
+    alert("提问失败: " + e);
+  }
+});
+
+document.getElementById("collab-q-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); document.getElementById("collab-ask-btn").click(); }
+});
+
 // 2026-06-26: GPU 服务器连接指示灯 (绿=在线, 红=离线, 黄=检测中)
 listen("gpu-connection", (e) => {
   const p = e.payload || {};
@@ -580,6 +805,54 @@ document.getElementById("kb-btn").addEventListener("click", async () => {
 });
 
 // === VP Chat ===
+// 2026-07-01 ADR-0023: 附件状态 + 选/删/预览 + fetch multipart 直发
+const chatAttachments = []; // [{ file: File, previewUrl?: string }]
+
+function renderChatAttachments() {
+  const wrap = document.getElementById("chat-attachments");
+  if (!wrap) return;
+  if (chatAttachments.length === 0) { wrap.innerHTML = ""; return; }
+  wrap.innerHTML = chatAttachments.map((a, i) => {
+    const isImg = a.file.type.startsWith("image/");
+    const sizeKb = Math.round(a.file.size / 1024);
+    const thumb = isImg && a.previewUrl
+      ? `<img src="${a.previewUrl}" class="chat-attach-thumb" />`
+      : `<span class="chat-attach-icon">${isImg ? "🖼️" : "📄"}</span>`;
+    return `<div class="chat-attach-chip">
+      ${thumb}
+      <span class="chat-attach-name" title="${escapeHtml(a.file.name)}">${escapeHtml(a.file.name)}</span>
+      <span class="chat-attach-size">${sizeKb}KB</span>
+      <button type="button" class="chat-attach-rm" data-idx="${i}" title="移除">×</button>
+    </div>`;
+  }).join("");
+  // 删按钮
+  wrap.querySelectorAll(".chat-attach-rm").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const i = parseInt(btn.dataset.idx, 10);
+      const a = chatAttachments[i];
+      if (a && a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+      chatAttachments.splice(i, 1);
+      renderChatAttachments();
+    });
+  });
+}
+
+document.getElementById("chat-attach").addEventListener("click", () => {
+  document.getElementById("chat-file").click();
+});
+document.getElementById("chat-file").addEventListener("change", (e) => {
+  const files = Array.from(e.target.files || []);
+  for (const f of files) {
+    const isImg = f.type.startsWith("image/");
+    chatAttachments.push({
+      file: f,
+      previewUrl: isImg ? URL.createObjectURL(f) : undefined,
+    });
+  }
+  e.target.value = ""; // 清空, 允许同文件再次选
+  renderChatAttachments();
+});
+
 document.getElementById("chat-send").addEventListener("click", sendChat);
 document.getElementById("chat-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
@@ -595,21 +868,44 @@ async function sendChat() {
   }
   const input = document.getElementById("chat-input");
   const message = input.value.trim();
-  if (!message) return;
+  // 至少要有文本或附件
+  if (!message && chatAttachments.length === 0) return;
+  const filesSnapshot = chatAttachments.slice();
   input.value = "";
-  document.getElementById("chat-status").textContent = "Hermes 正在思考...";
+  document.getElementById("chat-status").textContent = chatAttachments.length
+    ? `上传 ${chatAttachments.length} 个附件 + 问 Hermes...`
+    : "Hermes 正在思考...";
+
   try {
-    // 2026-06-26: 走 invoke (Rust reqwest), 不再 webview fetch
-    const result = await invoke("post_meeting_chat", {
-      meetingId: currentMeetingId,
-      message,
-      context: {
-        active_panel: document.querySelector(".bottom-nav button.active")?.dataset.panel || "chat",
-        selected_doc_kind: document.querySelector(".doc-block.stored")?.dataset.kind || null,
-      },
-    });
+    let result;
+    if (filesSnapshot.length > 0) {
+      // 2026-07-01 ADR-0023 Phase 6: multipart 直发, 不走 Rust invoke
+      // (reqwest multipart 拼接在 Rust 里要再 base64 一遍, webview fetch 直发更短)
+      const gpuUrlLocal = await getGpuUrl();
+      const fd = new FormData();
+      fd.append("text", message);
+      for (const a of filesSnapshot) fd.append("files", a.file, a.file.name);
+      const url = gpuUrlLocal + "/api/meetings/" + encodeURIComponent(currentMeetingId) + "/chat";
+      const resp = await fetch(url, { method: "POST", body: fd });
+      result = await resp.json();
+      if (!resp.ok) throw new Error(result.error || "upload chat 失败");
+    } else {
+      // 2026-06-26: 走 invoke (Rust reqwest), 不再 webview fetch
+      result = await invoke("post_meeting_chat", {
+        meetingId: currentMeetingId,
+        message,
+        context: {
+          active_panel: document.querySelector(".bottom-nav button.active")?.dataset.panel || "chat",
+          selected_doc_kind: document.querySelector(".doc-block.stored")?.dataset.kind || null,
+        },
+      });
+    }
     if (result.user_message) renderChatMessage(result.user_message);
     if (result.assistant_message) renderChatMessage(result.assistant_message);
+    // 清附件 + 释放 preview URL
+    for (const a of chatAttachments) if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+    chatAttachments.length = 0;
+    renderChatAttachments();
     document.getElementById("chat-status").textContent = "Hermes 已回复";
   } catch (e) {
     document.getElementById("chat-status").textContent = "Chat 失败：" + e;
@@ -634,11 +930,27 @@ function renderChatMessage(msg) {
   const empty = list.querySelector(".chat-empty");
   if (empty) empty.remove();
   const item = document.createElement("div");
-  item.className = `chat-msg ${msg.role || "assistant"} ${msg.status || "ok"}`;
-  const role = msg.role === "user" ? "VP" : (msg.source === "hermes" ? "Hermes" : "VPBuddy");
+  // 2026-07-01 ADR-0023 Phase 5: 主动消息加 proactive 样式 (浅黄底 + 🤖)
+  const proactiveClass = msg.is_proactive ? " proactive" : "";
+  item.className = `chat-msg ${msg.role || "assistant"} ${msg.status || "ok"}${proactiveClass}`;
+  const role = msg.role === "user"
+    ? "VP"
+    : (msg.is_proactive ? "🤖 VPBuddy" : (msg.source === "hermes" ? "Hermes" : "VPBuddy"));
+  // 主动消息前缀图标
+  const iconPrefix = msg.is_proactive ? "💬 " : "";
+  // 附件 chip (用户上传时)
+  const attachments = (msg.attachments && Array.isArray(msg.attachments)) ? msg.attachments : [];
+  const attachHtml = attachments.length
+    ? `<div class="chat-msg-attachs">${attachments.map((f) => {
+        const isImg = (f.content_type || "").startsWith("image/") ||
+                      /\.(png|jpe?g|gif|webp)$/i.test(f.filename || "");
+        return `<span class="chat-msg-attach-chip">${isImg ? "🖼️" : "📄"} ${escapeHtml(f.filename || "?")}</span>`;
+      }).join("")}</div>`
+    : "";
   item.innerHTML = `
     <div class="chat-meta"><span>${role}</span><span>${escapeHtml(msg.created_at || "")}</span></div>
-    <div class="chat-content">${escapeHtml(msg.content || "")}</div>
+    <div class="chat-content">${iconPrefix}${escapeHtml(msg.content || "")}</div>
+    ${attachHtml}
   `;
   list.appendChild(item);
   list.scrollTop = list.scrollHeight;

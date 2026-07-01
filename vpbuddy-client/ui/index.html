@@ -130,10 +130,47 @@
       <!-- VP Chat -->
       <section id="panel-chat" class="panel">
         <h2>VP Chat (Hermes)</h2>
+
+        <!-- 2026-07-01 ADR-0028 Commit 4: 协作提问折叠面板 (默认折叠, 有 N 个待答 Q 时显示徽标)
+             实时 SSE `collab-update` 推流: 新 Q 自动展开, 答案回填后折叠或转 Answered -->
+        <details id="collab-panel" class="collab-panel">
+          <summary>
+            <span class="collab-label">🤝 协作疑问</span>
+            <span id="collab-pending-count" class="collab-badge" style="display:none;">0</span>
+            <span id="collab-collapsed-info" class="collab-collapsed-info"></span>
+          </summary>
+          <div class="collab-body">
+            <div id="collab-pending" class="collab-pending">
+              <div class="collab-empty">暂无待答疑问。Agent 提问后会出现在这里。</div>
+            </div>
+            <div class="collab-ask-row">
+              <select id="collab-section">
+                <option value="req">需求</option>
+                <option value="arch">架构</option>
+                <option value="tasks">任务</option>
+                <option value="api">API</option>
+                <option value="risk">风险</option>
+                <option value="demo">演示</option>
+              </select>
+              <input type="text" id="collab-q-input" placeholder="主动追问 (例: 性能预算?)" maxlength="200" />
+              <button id="collab-ask-btn" type="button">提问</button>
+            </div>
+            <details class="collab-answered-toggle">
+              <summary>已回答 (<span id="collab-answered-count">0</span>)</summary>
+              <div id="collab-answered"></div>
+            </details>
+          </div>
+        </details>
+
         <div id="chat-list" class="chat-list">
           <div class="chat-empty">会议开始后，可以在这里向 Hermes 追问、改方向或调度 6 个子 agent。</div>
         </div>
+        <!-- 2026-07-01 ADR-0023: 附件预览区 (缩略图 + 文件名 + 大小 + 删按钮) -->
+        <div id="chat-attachments" class="chat-attachments"></div>
         <div class="chat-input-row">
+          <!-- 📎 按钮: 触发隐藏的 file input -->
+          <button id="chat-attach" title="上传文件 / 图片 (ADR-0023)" type="button">📎</button>
+          <input type="file" id="chat-file" multiple accept=".txt,.md,.pdf,image/png,image/jpeg,image/gif,image/webp" style="display:none" />
           <textarea id="chat-input" placeholder="例如：把 Demo 改成面向企业管理员的后台视角"></textarea>
           <button id="chat-send">发送</button>
         </div>
