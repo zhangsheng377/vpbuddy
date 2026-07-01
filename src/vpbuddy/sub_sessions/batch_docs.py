@@ -20,17 +20,17 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
+from ..storage import MeetingStorage
 from ..sub_session_controller import (
+    _AGENT_AVAILABLE,
     DATA_DIR,
     DOCS_DIR,
     PROMPTS_DIR,
-    format_state_summary,
     _get_or_create_agent,
-    _AGENT_AVAILABLE,
+    format_state_summary,
 )
-from ..storage import MeetingStorage
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 BATCH_DOC_KINDS = ["req", "arch", "tasks", "api", "risk"]
 
 
-def get_batch_doc_paths(meeting_id: str, docs_dir: Optional[Path] = None) -> Dict[str, Path]:
+def get_batch_doc_paths(meeting_id: str, docs_dir: Path | None = None) -> dict[str, Path]:
     """5 个文档路径. docs_dir 默认 DOCS_DIR."""
     base = (docs_dir or DOCS_DIR) / meeting_id
     return {
@@ -53,8 +53,8 @@ def get_batch_doc_paths(meeting_id: str, docs_dir: Optional[Path] = None) -> Dic
 def render_batch_prompt(
     meeting_id: str,
     state_summary: str,
-    last_docs: Dict[str, Optional[str]],
-    docs_dir: Optional[Path] = None,
+    last_docs: dict[str, str | None],
+    docs_dir: Path | None = None,
 ) -> str:
     """渲染 batch_docs.md prompt, 注入 5 文档路径 + 上次内容.
 
@@ -97,7 +97,7 @@ def trigger_batch_docs(
     meeting_id: str,
     dry_run: bool = False,
     timeout: int = 300,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """1 次触发 batch_docs agent. 返回 trigger 结果 + 5 文件状态.
 
     行为:
@@ -127,7 +127,7 @@ def trigger_batch_docs(
     """
     t0 = time.time()
     sid = f"meeting:{meeting_id}:batch_docs"
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "session_id": sid,
         "triggered": False,
         "files": {},
@@ -144,7 +144,7 @@ def trigger_batch_docs(
 
     # 2. 读 5 文档上次输出
     paths = get_batch_doc_paths(meeting_id)
-    last_docs: Dict[str, Optional[str]] = {}
+    last_docs: dict[str, str | None] = {}
     for kind, p in paths.items():
         last_docs[kind] = p.read_text(encoding="utf-8") if p.exists() else None
 
@@ -168,7 +168,7 @@ def trigger_batch_docs(
         result["error"] = "AIAgent not available"
         return result
 
-    holder: Dict[str, Any] = {"done": False, "result": None, "error": None}
+    holder: dict[str, Any] = {"done": False, "result": None, "error": None}
 
     def _runner():
         try:
@@ -251,7 +251,7 @@ def trigger_batch_docs(
 _DEPRECATED_KINDS = {"req", "arch", "tasks", "api", "risk"}
 
 
-def trigger_deprecated_kind(meeting_id: str, doc_kind: str) -> Dict[str, Any]:
+def trigger_deprecated_kind(meeting_id: str, doc_kind: str) -> dict[str, Any]:
     """兼容老调用方 (trigger_sub_session(mid, kind)). 老 kind 引导到 batch_docs."""
     return {
         "session_id": f"meeting:{meeting_id}:{doc_kind}",

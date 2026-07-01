@@ -18,16 +18,13 @@ VPBuddy 真正的部署目标 = VP 自己桌面客户端,会议平台(腾讯会�
 
 输出:16kHz mono PCM WAV 文件,funasr/funasr/paraformer-zh 直接吃。
 """
-import os
 import platform
 import shutil
 import subprocess
 import tempfile
-import time
 import wave
 from pathlib import Path
-from typing import List, Optional, Dict, Any
-
+from typing import Any
 
 # === 平台检测 ===
 _IS_LINUX = platform.system() == "Linux"
@@ -35,7 +32,7 @@ _IS_MACOS = platform.system() == "Darwin"
 _IS_WINDOWS = platform.system() == "Windows"
 
 
-def list_monitor_sources() -> List[Dict[str, str]]:
+def list_monitor_sources() -> list[dict[str, str]]:
     """列出可用的 monitor 源(Linux PipeWire/PulseAudio)
 
     Returns:
@@ -44,7 +41,7 @@ def list_monitor_sources() -> List[Dict[str, str]]:
             ...
         ]
     """
-    sources: List[Dict[str, str]] = []
+    sources: list[dict[str, str]] = []
 
     if not _IS_LINUX:
         return sources
@@ -227,8 +224,8 @@ def _capture_via_ffmpeg(
 
 def capture_loopback(
     duration_sec: float = 60.0,
-    output_path: Optional[Path] = None,
-    source_name: Optional[str] = None,
+    output_path: Path | None = None,
+    source_name: str | None = None,
     sample_rate: int = 16000,
     silence_fallback: bool = True,
 ) -> Path:
@@ -266,11 +263,10 @@ def capture_loopback(
                 raise RuntimeError("无可用 monitor source,设置 silence_fallback=True 或检查音频设备")
 
     # 2. 选 backend
-    has_pw = shutil.which("pw-dump") is not None
-    has_pa = shutil.which("pactl") is not None
     has_ffmpeg = shutil.which("ffmpeg") is not None
     has_parec = shutil.which("parec") is not None
     has_sox = shutil.which("sox") is not None
+    # (2026-07-02: 原本 has_pw / has_pa 两个变量被误写为 statement 死代码, ruff B015 报; 删除)
 
     # 3. 尝试捕获(优先级:pulse:// (PipeWire-pulse 兼容层) > parec+sox)
     # 注:ffmpeg 的 pipewire:// 协议需要显式 --enable-libpipewire,大多数发行版只启用了 libpulse
@@ -304,7 +300,7 @@ def _write_silence_wav(path: Path, duration_sec: float, sample_rate: int = 16000
     return path
 
 
-def list_audio_capabilities() -> Dict[str, Any]:
+def list_audio_capabilities() -> dict[str, Any]:
     """诊断:列出当前系统音频能力(供 CLI / UI 展示)"""
     return {
         "platform": platform.system(),

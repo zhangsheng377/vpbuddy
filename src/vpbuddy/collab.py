@@ -18,10 +18,10 @@ import os
 import re
 import threading
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Iterator, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,7 @@ def _default_docs_dir() -> Path:
     return DOCS_DIR
 
 
-def collab_path(meeting_id: str, docs_dir: Optional[Path] = None) -> Path:
+def collab_path(meeting_id: str, docs_dir: Path | None = None) -> Path:
     """collab.md 路径."""
     return (docs_dir or _default_docs_dir()) / meeting_id / "collab.md"
 
@@ -93,7 +93,7 @@ _QA_PATTERN = re.compile(
 )
 
 
-def read_collab(meeting_id: str, docs_dir: Optional[Path] = None) -> str:
+def read_collab(meeting_id: str, docs_dir: Path | None = None) -> str:
     """读 collab.md 全文. 不存在返空字符串.
 
     Args:
@@ -107,7 +107,7 @@ def read_collab(meeting_id: str, docs_dir: Optional[Path] = None) -> str:
     return p.read_text(encoding="utf-8") if p.exists() else ""
 
 
-def parse_questions(meeting_id: str, docs_dir: Optional[Path] = None) -> List[dict]:
+def parse_questions(meeting_id: str, docs_dir: Path | None = None) -> list[dict]:
     """解析 collab.md, 返所有 Q 块 (含 pending + answered).
 
     Returns:
@@ -135,9 +135,9 @@ def parse_questions(meeting_id: str, docs_dir: Optional[Path] = None) -> List[di
 
 def list_pending(
     meeting_id: str,
-    section: Optional[str] = None,
-    docs_dir: Optional[Path] = None,
-) -> List[dict]:
+    section: str | None = None,
+    docs_dir: Path | None = None,
+) -> list[dict]:
     """返未答问题列表. section=None 返全部.
 
     Returns:
@@ -151,9 +151,9 @@ def list_pending(
 
 def list_answered(
     meeting_id: str,
-    section: Optional[str] = None,
-    docs_dir: Optional[Path] = None,
-) -> List[dict]:
+    section: str | None = None,
+    docs_dir: Path | None = None,
+) -> list[dict]:
     """返已答问题列表 (按 answered_at 倒序)."""
     answered = [q for q in parse_questions(meeting_id, docs_dir) if "answered_by" in q]
     if section:
@@ -204,7 +204,7 @@ def ask_question(
     section: str,
     question: str,
     asker: str = "agent",
-    docs_dir: Optional[Path] = None,
+    docs_dir: Path | None = None,
 ) -> dict:
     """追加 1 条 pending 提问. 节流: 同 (mid, section, 相似问题) 跳过.
 
@@ -280,7 +280,7 @@ def answer_question(
     qid: str,
     answer: str,
     answerer: str = "VP",
-    docs_dir: Optional[Path] = None,
+    docs_dir: Path | None = None,
 ) -> dict:
     """把 qid 标记为 answered. 把块从 Pending 段移到 Answered 段.
 
@@ -336,7 +336,7 @@ def answer_question(
 def delete_question(
     meeting_id: str,
     qid: str,
-    docs_dir: Optional[Path] = None,
+    docs_dir: Path | None = None,
 ) -> dict:
     """删除某条 q (pending 或 answered 都能删). 谨慎用."""
     qid = qid.strip()
@@ -364,7 +364,7 @@ def delete_question(
 # ── 统计 ──
 
 
-def collab_stats(meeting_id: str, docs_dir: Optional[Path] = None) -> dict:
+def collab_stats(meeting_id: str, docs_dir: Path | None = None) -> dict:
     """返 collab.md 统计: pending/answered 各几条, 按 section 分组."""
     qs = parse_questions(meeting_id, docs_dir)
     pending = [q for q in qs if "answered_by" not in q]

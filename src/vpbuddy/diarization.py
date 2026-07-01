@@ -20,10 +20,10 @@
     export PYANNOTE_LOCAL_DIR=/tmp/pyannote_models
 """
 from __future__ import annotations
+
 import logging
 import os
 from pathlib import Path
-from typing import Optional, Union
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ def ensure_pyannote_models(local_dir: str = "/tmp/pyannote_models") -> dict:
     try:
         from modelscope import snapshot_download
     except ImportError:
-        raise ImportError("pip install modelscope")
+        raise ImportError("pip install modelscope") from None
 
     base.mkdir(parents=True, exist_ok=True)
     snapshot_download(
@@ -79,7 +79,7 @@ class PyannoteDiarizer:
     def __init__(
         self,
         model_name: str = "pyannote/speaker-diarization-3.1",
-        local_models_dir: Optional[str] = None,
+        local_models_dir: str | None = None,
         device: str = "cuda",
     ):
         self.model_name = model_name
@@ -110,8 +110,8 @@ class PyannoteDiarizer:
         huggingface_hub.file_download.hf_hub_download = _patched
 
         import torch
-        from omegaconf import OmegaConf
         from hydra.utils import instantiate
+        from omegaconf import OmegaConf
 
         # 读本地 config
         config_path = Path(paths["pipeline_dir"]) / "config.yaml"
@@ -159,10 +159,10 @@ class PyannoteDiarizer:
 
     def diarize(
         self,
-        audio_path: Union[str, Path],
-        num_speakers: Optional[int] = None,
-        min_speakers: Optional[int] = None,
-        max_speakers: Optional[int] = None,
+        audio_path: str | Path,
+        num_speakers: int | None = None,
+        min_speakers: int | None = None,
+        max_speakers: int | None = None,
     ):
         """说话人分离
 
@@ -199,7 +199,7 @@ class PyannoteDiarizer:
         logger.info(f"Diarization found {len(labels)} speakers: {sorted(labels)}")
         return diarization
 
-    def get_speaker_turns(self, audio_path: Union[str, Path], **kwargs) -> list:
+    def get_speaker_turns(self, audio_path: str | Path, **kwargs) -> list:
         """便利方法:直接返回 [(start, end, speaker_id), ...] 列表"""
         diarization = self.diarize(audio_path, **kwargs)
         turns = []

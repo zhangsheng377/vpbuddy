@@ -10,12 +10,8 @@ VPBuddy transcript → MeetingState 启发式 ingest 公共函数
 from __future__ import annotations
 
 import re
-from pathlib import Path
-from typing import Optional
 
-from .state import MeetingState, Platform, Priority, ItemStatus
-from pydantic import BaseModel
-
+from .state import MeetingState, Platform, Priority
 
 # 启发式分类规则
 REQ_PATTERNS = [
@@ -116,9 +112,9 @@ def infer_speaker_map(segments: list[dict]) -> dict[str, str]:
 def ingest_transcript(
     meeting_id: str,
     transcript: dict,
-    project_name: Optional[str] = None,
+    project_name: str | None = None,
     platform: Platform = Platform.LOCAL,
-    speaker_map: Optional[dict[str, str]] = None,
+    speaker_map: dict[str, str] | None = None,
     storage=None,
 ) -> MeetingState:
     """从 funasr 转写结果 → MeetingState, 启发式分类入 req/risk/question

@@ -22,7 +22,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vpbuddy"
-version = "0.7.2"
+version = "0.7.3"
 description = "人机协同会议操作系统级 AI 助手 — 运行在 Hermes Agent 之上"
 readme = "README.md"
 requires-python = ">=3.11"

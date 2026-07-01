@@ -14,10 +14,9 @@
         print(f"{cap.name}: {cap.description}")
 """
 from __future__ import annotations
-import os
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import List, Optional
 
 # 4 平台标识
 SUPPORTED_PLATFORMS = ["tencent", "dingtalk", "wecom"]
@@ -41,7 +40,7 @@ class PlatformMeta:
     auth_method: str  # oauth / app_credentials / webhook
     docs_url: str
     free_tier: str  # "300min/user/month" 等
-    capabilities: List[Capability] = field(default_factory=list)
+    capabilities: list[Capability] = field(default_factory=list)
 
 
 class PlatformAdapter(ABC):
@@ -52,12 +51,12 @@ class PlatformAdapter(ABC):
     def meta(self) -> PlatformMeta:
         ...
 
-    def list_capabilities(self) -> List[Capability]:
+    def list_capabilities(self) -> list[Capability]:
         return self.meta.capabilities
 
     # === 抽象方法(MVP 阶段只列接口,不实现) ===
 
-    def fetch_transcript(self, meeting_id: str) -> List[dict]:
+    def fetch_transcript(self, meeting_id: str) -> list[dict]:
         """拉取会议转写
 
         Returns: [{"start": 0.0, "end": 5.0, "speaker": "SPK_00", "text": "..."}]
@@ -68,7 +67,7 @@ class PlatformAdapter(ABC):
             f"需先在腾讯会议/钉钉/企微 后台开通转写 API (飞书已 ADR-0008 删除)"
         )
 
-    def list_recent_meetings(self, limit: int = 10) -> List[dict]:
+    def list_recent_meetings(self, limit: int = 10) -> list[dict]:
         """列出最近会议(YAGNI: 默认未实现)"""
         raise NotImplementedError(f"{self.meta.platform} list_recent_meetings 暂未实现")
 
@@ -179,12 +178,12 @@ def get_adapter(platform: str) -> PlatformAdapter:
     return _ADAPTERS[platform]()
 
 
-def list_supported() -> List[str]:
+def list_supported() -> list[str]:
     return list(SUPPORTED_PLATFORMS)
 
 
 # === CLI 工具 ===
-def _print_table(platforms: List[PlatformAdapter]) -> None:
+def _print_table(platforms: list[PlatformAdapter]) -> None:
     print(f"\n{'='*80}")
     print(f"📡 VPBuddy 多平台能力 ({len(platforms)} 平台)")
     print(f"{'='*80}\n")

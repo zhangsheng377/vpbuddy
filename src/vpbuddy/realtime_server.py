@@ -12,16 +12,16 @@
     push_event("MTG01", "transcript-segment", {"text": "...", "speaker_id": "..."})
 """
 from __future__ import annotations
+
 import json
 import queue
 import threading
 import time
 from collections import deque
-from typing import Dict, Any, List
 
 # meeting_id -> [subscriber_queue1, subscriber_queue2, ...]
-_subscribers: Dict[str, List[queue.Queue]] = {}
-_event_history: Dict[str, deque] = {}
+_subscribers: dict[str, list[queue.Queue]] = {}
+_event_history: dict[str, deque] = {}
 _subscribers_lock = threading.Lock()
 
 EVENT_TTL = 300
@@ -90,7 +90,7 @@ def push_event(meeting_id: str, event_type: str, payload: dict) -> int:
     return sent
 
 
-def get_event_history(meeting_id: str, since_id: str | None = None, limit: int = 200) -> List[dict]:
+def get_event_history(meeting_id: str, since_id: str | None = None, limit: int = 200) -> list[dict]:
     """返回会议近期事件历史, 用于断线重连后补偿。"""
     with _subscribers_lock:
         events = list(_event_history.get(meeting_id, []))
@@ -118,7 +118,7 @@ def close_meeting(meeting_id: str) -> int:
     实现: 把所有订阅者队列都放入一个 _POISON 事件, generator 一收到立即 break。
     Returns: 关闭的订阅者数量。
     """
-    _POISON = object()  # 哨兵, 不是 dict, generator 判断 isinstance 跳过
+    _POISON: object = object()  # noqa: N806 (sentinel constant)
     with _subscribers_lock:
         subs = list(_subscribers.get(meeting_id, []))
         if meeting_id in _subscribers:
@@ -177,7 +177,7 @@ def sse_generator(meeting_id: str, timeout: float = 5.0, last_event_id: str | No
 
     try:
         yield b"event: connected\n"
-        yield f"data: {json.dumps({'meeting_id': meeting_id, 'subscribers': get_subscriber_count(meeting_id)}, ensure_ascii=False)}\n\n".encode("utf-8")
+        yield f"data: {json.dumps({'meeting_id': meeting_id, 'subscribers': get_subscriber_count(meeting_id)}, ensure_ascii=False)}\n\n".encode()
 
         # 先补发断线期间的历史事件
         for event in get_event_history(meeting_id, last_event_id, limit=200):

@@ -7,14 +7,14 @@
 - 输出 DiarizedSegment(带 speaker_id),不耦合 Step 1 MeetingState
 """
 from __future__ import annotations
-import logging
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import List, Optional, Union
 
-from .transcript import TranscriptSegment, DiarizedSegment, TranscriptResult
-from .whisper_provider import WhisperProvider
+import logging
+from datetime import UTC, datetime
+from pathlib import Path
+
 from .diarization import PyannoteDiarizer
+from .transcript import DiarizedSegment, TranscriptResult, TranscriptSegment
+from .whisper_provider import WhisperProvider
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +37,9 @@ class TranscriptionEngine:
         model_size: str = "large-v3",
         device: str = "cuda",
         compute_type: str = "float16",
-        hf_token: Optional[str] = None,  # 兼容旧 API(已弃用,见 ADR-0004)
-        pyannote_local_dir: Optional[str] = None,
-    ) -> "TranscriptionEngine":
+        hf_token: str | None = None,  # 兼容旧 API(已弃用,见 ADR-0004)
+        pyannote_local_dir: str | None = None,
+    ) -> TranscriptionEngine:
         """便利工厂:用推荐配置初始化
 
         Args:
@@ -81,11 +81,11 @@ class TranscriptionEngine:
 
     def process(
         self,
-        audio_path: Union[str, Path],
-        language: Optional[str] = None,
-        num_speakers: Optional[int] = None,
-        min_speakers: Optional[int] = None,
-        max_speakers: Optional[int] = None,
+        audio_path: str | Path,
+        language: str | None = None,
+        num_speakers: int | None = None,
+        min_speakers: int | None = None,
+        max_speakers: int | None = None,
     ) -> TranscriptResult:
         """完整流程:whisper 转写 + pyannote 说话人 + 融合"""
         audio_path = str(audio_path)
@@ -93,7 +93,7 @@ class TranscriptionEngine:
 
         # 1) Whisper 转写
         logger.info("[1/3] Running Whisper...")
-        whisper_segs: List[TranscriptSegment] = self.whisper.transcribe_file(
+        whisper_segs: list[TranscriptSegment] = self.whisper.transcribe_file(
             audio_path, language=language
         )
         logger.info(f"[1/3] Whisper produced {len(whisper_segs)} segments.")
@@ -110,7 +110,7 @@ class TranscriptionEngine:
 
         # 3) 融合
         logger.info("[3/3] Merging...")
-        diarized: List[DiarizedSegment] = []
+        diarized: list[DiarizedSegment] = []
         for seg in whisper_segs:
             speaker_id = self._assign_speaker(seg, turns)
             diarized.append(DiarizedSegment(
@@ -138,7 +138,7 @@ class TranscriptionEngine:
             device=self.whisper.device,
             compute_type=self.whisper.compute_type,
             diarization_model=self.diarizer.model_name,
-            created_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
         )
         logger.info(f"Done. {result.stats()}")
         return result

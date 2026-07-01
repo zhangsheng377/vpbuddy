@@ -12,9 +12,9 @@ Hermes TUI 是 Hermes 自己的 dev 工具,不是 VPBuddy 入口 — 别混了�
   vpbuddy version       # 打印版本
 """
 from __future__ import annotations
+
 import argparse
 import sys
-from typing import List, Optional
 
 
 def cmd_ui(args: argparse.Namespace) -> int:
@@ -76,14 +76,14 @@ def cmd_kb_status(args: argparse.Namespace) -> int:
     summary = data["summary"]
     items = data["items"]
 
-    print(f"KB 状态摘要:")
+    print("KB 状态摘要:")
     print(f"  total:    {summary.get('total', 0)}")
     print(f"  stored:   {summary.get('stored', 0)}")
     print(f"  queued:   {summary.get('queued', 0)}")
     print(f"  retrying: {summary.get('retrying', 0)}")
     print(f"  failed:   {summary.get('failed', 0)}")
     if items:
-        print(f"\n详情:")
+        print("\n详情:")
         for it in items:
             err = f" [{it['error'][:50]}]" if it.get("error") else ""
             print(f"  - {it['meeting_id']}/{it['doc_kind']}: {it['status']} (attempts={it.get('attempts', 0)}){err}")
@@ -148,7 +148,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """CLI 主入口 — `vpbuddy` 命令"""
     parser = build_parser()
     args = parser.parse_args(argv)

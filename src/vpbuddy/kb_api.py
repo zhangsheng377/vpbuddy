@@ -11,16 +11,15 @@ Endpoint 签名(被 ui_server.py 调用):
 """
 
 from __future__ import annotations
+
 import json
 import logging
-import os
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Optional
-from urllib.parse import parse_qs
+from typing import Any
 
-from .rag_backend import get_rag, DATA_DIR
+from .rag_backend import DATA_DIR, get_rag
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +109,7 @@ def _extract_text(file_bytes: bytes, filename: str) -> str:
 
     if ext == ".pdf":
         from io import BytesIO
+
         import pypdf
         reader = pypdf.PdfReader(BytesIO(file_bytes))
         pages = []
@@ -144,7 +144,7 @@ def _validate_file(filename: str, file_bytes: bytes, *, allow_images: bool = Fal
         kinds = "txt/md/pdf" + ("/png/jpg/jpeg/gif/webp" if allow_images else "")
         raise ValueError(f"只支持 {kinds}, 收到 {ext}")
     if len(file_bytes) > MAX_FILE_SIZE:
-        raise ValueError(f"文件超过 50MB 限制")
+        raise ValueError("文件超过 50MB 限制")
 
 
 def _is_image(filename: str) -> bool:
@@ -201,7 +201,7 @@ def handle_kb_upload(body: bytes, content_type: str) -> dict:
     # 入库 Chroma
     rag = get_rag()
     doc_id = f"{meeting_id}:{file_uuid}"
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     rag.add(
         ids=[doc_id],
         documents=[text],
@@ -284,7 +284,7 @@ def handle_chat_upload(body: bytes, content_type: str, meeting_id: str) -> dict:
                 file_uuid = uuid.uuid4().hex[:12]
                 doc_id = f"{meeting_id}:chat-upload:{file_uuid}"
                 rag = get_rag()
-                now = datetime.now(timezone.utc).isoformat()
+                now = datetime.now(UTC).isoformat()
                 rag.add(
                     ids=[doc_id],
                     documents=[content],

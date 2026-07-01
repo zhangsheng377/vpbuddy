@@ -7,12 +7,12 @@
 - 简单参数(model_size/device/compute_type/language),不写 config(Y10)
 """
 from __future__ import annotations
-import logging
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import List, Optional, Union
 
-from .transcript import TranscriptSegment, TranscriptResult
+import logging
+from datetime import UTC, datetime
+from pathlib import Path
+
+from .transcript import TranscriptResult, TranscriptSegment
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +56,10 @@ class WhisperProvider:
 
     def transcribe_file(
         self,
-        audio_path: Union[str, Path],
-        language: Optional[str] = None,
+        audio_path: str | Path,
+        language: str | None = None,
         vad_filter: bool = True,
-    ) -> List[TranscriptSegment]:
+    ) -> list[TranscriptSegment]:
         """整文件转写
 
         Args:
@@ -84,7 +84,7 @@ class WhisperProvider:
         logger.info(f"Detected lang={info.language} prob={info.language_probability:.2f} "
                     f"duration={info.duration:.1f}s vad_after={info.duration_after_vad:.1f}s")
 
-        out: List[TranscriptSegment] = []
+        out: list[TranscriptSegment] = []
         for seg in segments_iter:
             # seg.avg_logprob ∈ [-1, 0] → exp 转 confidence
             import math
@@ -100,8 +100,8 @@ class WhisperProvider:
 
     def transcribe_to_result(
         self,
-        audio_path: Union[str, Path],
-        language: Optional[str] = None,
+        audio_path: str | Path,
+        language: str | None = None,
     ) -> TranscriptResult:
         """转写并包装成 TranscriptResult(方便统一序列化)
 
@@ -121,5 +121,5 @@ class WhisperProvider:
             device=self.device,
             compute_type=self.compute_type,
             diarization_model="",  # engine 填
-            created_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
         )

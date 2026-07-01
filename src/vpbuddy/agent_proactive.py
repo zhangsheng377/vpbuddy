@@ -18,14 +18,13 @@
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from .realtime_server import push_event
 
@@ -142,7 +141,7 @@ def trigger(
     meeting_id: str,
     trigger_type: str,
     **kwargs: Any,
-) -> Optional[dict[str, Any]]:
+) -> dict[str, Any] | None:
     """触发一次 agent 主动消息.
 
     Args:
@@ -193,7 +192,7 @@ def trigger(
 # ── 后台监控 (silence / time_node) ──
 # 单独线程, 每 60s 检查所有活跃会议.
 # 用线程事件优雅退出 (测试时可手动 stop).
-_MONITOR_THREAD: Optional[threading.Thread] = None
+_MONITOR_THREAD: threading.Thread | None = None
 _MONITOR_STOP = threading.Event()
 _MONITOR_INTERVAL = int(os.environ.get("VPBUDDY_PROACTIVE_INTERVAL", "60"))
 

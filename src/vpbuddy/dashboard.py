@@ -4,12 +4,11 @@
 生成单文件 HTML,内嵌 Linear Dark 风格,5s 自动刷新
 """
 from __future__ import annotations
+
 import argparse
 import os
-import sys
 import time
 from pathlib import Path
-from typing import Optional
 
 # 默认路径(可通过环境变量覆盖)
 DOCS_DIR = Path(os.environ.get("VPBUDDY_DOCS_DIR", "/home/zsd/vpbuddy/docs"))
@@ -25,7 +24,7 @@ DOC_KIND_META = [
 ]
 
 
-def read_doc(meeting_dir: Path, doc_kind: str) -> Optional[str]:
+def read_doc(meeting_dir: Path, doc_kind: str) -> str | None:
     """读一个 doc 文件,返回 markdown 原文(无则 None)"""
     if doc_kind == "demo":
         f = meeting_dir / "demo" / "demo.html"
@@ -36,7 +35,7 @@ def read_doc(meeting_dir: Path, doc_kind: str) -> Optional[str]:
     return None
 
 
-def read_doc_size(meeting_dir: Path, doc_kind: str) -> tuple[Optional[int], Optional[float]]:
+def read_doc_size(meeting_dir: Path, doc_kind: str) -> tuple[int | None, float | None]:
     """读 doc 大小 + mtime"""
     if doc_kind == "demo":
         f = meeting_dir / "demo" / "demo.html"
@@ -48,7 +47,7 @@ def read_doc_size(meeting_dir: Path, doc_kind: str) -> tuple[Optional[int], Opti
     return None, None
 
 
-def status_emoji(size: Optional[int]) -> str:
+def status_emoji(size: int | None) -> str:
     """根据大小返回状态"""
     if size is None:
         return "pending"
@@ -59,7 +58,7 @@ def status_emoji(size: Optional[int]) -> str:
     return "done"
 
 
-def build_dashboard(meeting_id: str, output: Optional[Path] = None) -> Path:
+def build_dashboard(meeting_id: str, output: Path | None = None) -> Path:
     """生成 dashboard HTML
 
     Args:

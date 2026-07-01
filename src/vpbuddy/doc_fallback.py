@@ -11,13 +11,12 @@
 """
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any
-
+from typing import Any
 
 # === 模板函数:每种 doc_kind 一份 ===
 # YAGNI:只做 MVP 必需的 6 种,arch/api/demo 简化但保留结构
 
-def _gen_req(state: Dict[str, Any]) -> str:
+def _gen_req(state: dict[str, Any]) -> str:
     facts = state.get("facts", {})
     reqs = facts.get("REQ", [])
     goals = facts.get("GOAL", [])
@@ -38,7 +37,7 @@ def _gen_req(state: Dict[str, Any]) -> str:
     return md
 
 
-def _gen_arch(state: Dict[str, Any]) -> str:
+def _gen_arch(state: dict[str, Any]) -> str:
     facts = state.get("facts", {})
     risks = facts.get("RISK", [])
     risks_block = "\n".join("- " + r for r in risks)
@@ -85,7 +84,7 @@ def _gen_arch(state: Dict[str, Any]) -> str:
 """
 
 
-def _gen_tasks(state: Dict[str, Any]) -> str:
+def _gen_tasks(state: dict[str, Any]) -> str:
     facts = state.get("facts", {})
     reqs = facts.get("REQ", [])
     md = f"""# 任务列表
@@ -101,8 +100,8 @@ def _gen_tasks(state: Dict[str, Any]) -> str:
     return md
 
 
-def _gen_api(state: Dict[str, Any]) -> str:
-    facts = state.get("facts", {})
+def _gen_api(state: dict[str, Any]) -> str:
+    state.get("facts", {})
     return f"""# API 设计
 
 **会议**:{state.get("title", state.get("meeting_id", "?"))}
@@ -159,7 +158,7 @@ results:
 """
 
 
-def _gen_risk(state: Dict[str, Any]) -> str:
+def _gen_risk(state: dict[str, Any]) -> str:
     facts = state.get("facts", {})
     risks = facts.get("RISK", [])
     md = f"""# 风险评估
@@ -175,7 +174,7 @@ def _gen_risk(state: Dict[str, Any]) -> str:
     return md
 
 
-def _gen_demo(state: Dict[str, Any]) -> str:
+def _gen_demo(state: dict[str, Any]) -> str:
     """demo 是 HTML 主文件,目录结构见 trigger_sub_session"""
     facts = state.get("facts", {})
     reqs = facts.get("REQ", [])
@@ -231,7 +230,7 @@ _GENERATORS = {
 }
 
 
-def generate_doc(meeting_id: str, doc_kind: str, state: Dict[str, Any]) -> str:
+def generate_doc(meeting_id: str, doc_kind: str, state: dict[str, Any]) -> str:
     """根据 state + doc_kind 生成 markdown/HTML 内容
 
     Args:
@@ -250,7 +249,7 @@ def generate_doc(meeting_id: str, doc_kind: str, state: Dict[str, Any]) -> str:
     return _GENERATORS[doc_kind](state)
 
 
-def meeting_state_to_dict(state) -> Dict[str, Any]:
+def meeting_state_to_dict(state) -> dict[str, Any]:
     """把 MeetingState(BaseModel) 转成 doc_fallback 用的 dict
 
     MeetingState 字段:requirements/goals/features/risks/open_questions (BaseModel 对象列表)

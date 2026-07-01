@@ -7,9 +7,9 @@
 - 简单,不要数据库 / 不要锁
 """
 from __future__ import annotations
+
 import json
 from pathlib import Path
-from typing import List, Optional
 
 from .state import MeetingState
 
@@ -54,7 +54,7 @@ class MeetingStorage:
     def exists(self, meeting_id: str) -> bool:
         return self._path(meeting_id).exists()
 
-    def list_meetings(self) -> List[str]:
+    def list_meetings(self) -> list[str]:
         """列出所有会议 ID(按修改时间倒序)"""
         files = sorted(self.data_dir.glob("*.json"),
                        key=lambda p: p.stat().st_mtime,
@@ -70,7 +70,7 @@ class MeetingStorage:
         return False
 
 
-def create_storage(data_dir: Optional[str] = None) -> MeetingStorage:
+def create_storage(data_dir: str | None = None) -> MeetingStorage:
     """工厂函数(便于测试时传临时目录)"""
     if data_dir is None:
         data_dir = "/home/zsd/vpbuddy/data/meetings"

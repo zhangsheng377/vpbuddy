@@ -17,15 +17,13 @@ Hermes 通过 `[project.entry-points."hermes.skills"]` 发现本 skill,
     state = skill.get_state("PHASE2_TEST")
 """
 from __future__ import annotations
-from typing import Dict, List, Optional
 
 from . import __version__
-from .state import MeetingState
 from .storage import MeetingStorage
 from .sub_session_controller import (
+    DOC_KINDS,
     list_active_meetings,
     trigger_sub_session,
-    DOC_KINDS,
 )
 
 
@@ -42,21 +40,21 @@ class VPBuddySkill:
     VERSION = __version__
 
     def __init__(self) -> None:
-        self._storage: Optional[MeetingStorage] = None
+        self._storage: MeetingStorage | None = None
 
     @property
     def storage(self) -> MeetingStorage:
         """延迟初始化存储(YAGNI:不预加载 state)"""
         if self._storage is None:
-            from pathlib import Path
             import os
+            from pathlib import Path
             data_dir = Path(os.environ.get("VPBUDDY_DATA_DIR", "/home/zsd/vpbuddy/data/meetings"))
             self._storage = MeetingStorage(data_dir=str(data_dir))
         return self._storage
 
     # === Hermes 调用的方法(skill 协议) ===
 
-    def status(self) -> Dict:
+    def status(self) -> dict:
         """VPBuddy runtime 状态 — Hermes 启动时调用,确认 skill 可用"""
         return {
             "name": self.NAME,
@@ -66,11 +64,11 @@ class VPBuddySkill:
             "meetings_count": len(list_active_meetings()),
         }
 
-    def list_meetings(self) -> List[str]:
+    def list_meetings(self) -> list[str]:
         """列出活跃会议 ID(Hermes 用于 cron 决策)"""
         return list_active_meetings()
 
-    def get_state(self, meeting_id: str) -> Optional[Dict]:
+    def get_state(self, meeting_id: str) -> dict | None:
         """读取会议状态(返回 dict 给 Hermes,不是 Pydantic)"""
         try:
             state = self.storage.load(meeting_id)
@@ -78,7 +76,7 @@ class VPBuddySkill:
         except FileNotFoundError:
             return None
 
-    def trigger_doc(self, meeting_id: str, doc_kind: str, dry_run: bool = False) -> Dict:
+    def trigger_doc(self, meeting_id: str, doc_kind: str, dry_run: bool = False) -> dict:
         """触发单个 doc_kind 生成(controller 的一部分,Hermes 可以直接调)
 
         Args:

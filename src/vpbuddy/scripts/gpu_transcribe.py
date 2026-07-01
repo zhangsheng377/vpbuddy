@@ -13,11 +13,12 @@
 2026-06-21 张胜东 + Hermes 写
 """
 from __future__ import annotations
+
 import argparse
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -98,8 +99,8 @@ def process(audio_path: str, asr: str = DEFAULT_FUNASR_MODEL, device: str = DEFA
     sentences = transcribe(audio, sr, asr=asr, device=device)
     print(f"  → {len(sentences)} sentences in {time.time()-t1:.1f}s")
 
-    t2 = time.time()
-    print(f"[3/3] format VPBuddy transcript.json")
+    time.time()
+    print("[3/3] format VPBuddy transcript.json")
     from collections import defaultdict
     spk_dur = defaultdict(float)
     for s in sentences:
@@ -135,7 +136,7 @@ def process(audio_path: str, asr: str = DEFAULT_FUNASR_MODEL, device: str = DEFA
         "device": device,
         "compute_type": "float16",
         "diarization_model": DEFAULT_SPK,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
     }
     print(f"  → {len(segments)} segments, {len(distinct_speakers)} speakers: {distinct_speakers}")
     print(f"  → done in {time.time()-t0:.1f}s total (RTF = {(time.time()-t1)/duration*1000:.4f})")

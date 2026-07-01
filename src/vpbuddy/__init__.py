@@ -18,22 +18,31 @@ __version__ = "0.6.0"  # v0.6 — 8 项需求合入设计稿 (ADR-0019 ~ 0025)
 # === 必须在 import 任何 huggingface/sentence_transformers 之前 ===
 # 🔒 HF 模型离线铁律 (2026-06-23 ADR-0011):
 # 国内 huggingface.co 被墙,启动时强制默认走本地 cache。
-# 用户装新模型时临时设 HF_HUB_OFFLINE=0 即可。
-import os
+import os  # noqa: E402 (env vars must be set before sub-imports per ADR-0011)
+
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
 # === Step 1 ===
-from .state import (
-    MeetingState, Platform, Priority, ItemStatus,
-    Requirement, Goal, Feature, Risk, Question,
+# 2026-07-02 ruff: E402 是 fastapi lazy-load 故意设计 (env vars / Step 段落标记)
+# noqa: E402 抑制 file-level 误报
+from .state import (  # noqa: E402
+    Feature,
+    Goal,
+    ItemStatus,
+    MeetingState,
+    Platform,
+    Priority,
+    Question,
+    Requirement,
+    Risk,
 )
-from .storage import MeetingStorage, create_storage
+from .storage import MeetingStorage, create_storage  # noqa: E402
 
 # === Step 2 ===
 # transcript.py — 纯 dataclass,无外部依赖
-from .transcript import TranscriptSegment, DiarizedSegment, TranscriptResult
+from .transcript import DiarizedSegment, TranscriptResult, TranscriptSegment  # noqa: E402
 
 # whisper_provider.py — 需要 faster-whisper
 try:

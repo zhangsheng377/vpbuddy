@@ -7,8 +7,9 @@
 - speaker_name 默认 None(后续人工/stt_map 填入;2026-06-21 ADR-0008 Superseded 后,不再依赖飞书妙记)
 """
 from __future__ import annotations
-from dataclasses import dataclass, field, asdict
-from typing import List, Optional, Dict, Any
+
+from dataclasses import asdict, dataclass, field
+from typing import Any
 from uuid import uuid4
 
 
@@ -25,11 +26,11 @@ class TranscriptSegment:
     def duration(self) -> float:
         return max(0.0, self.end_sec - self.start_sec)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "TranscriptSegment":
+    def from_dict(cls, d: dict[str, Any]) -> TranscriptSegment:
         # 兼容 segment_id 缺失(老数据)
         if "segment_id" not in d:
             d = {**d, "segment_id": f"SEG-{uuid4().hex[:6].upper()}"}
@@ -47,17 +48,17 @@ class DiarizedSegment:
     language: str = "zh"
     # === 说话人(Step 2 核心新增)===
     speaker_id: str = "SPEAKER_UNKNOWN"  # pyannote 输出 SPEAKER_00/01/...
-    speaker_name: Optional[str] = None   # 后续人工/stt_map 填入(ADR-0008 Superseded: 不再依赖飞书妙记)
+    speaker_name: str | None = None   # 后续人工/stt_map 填入(ADR-0008 Superseded: 不再依赖飞书妙记)
     source: str = "whisper+pyannote"     # 来源标记(双轨时会区分)
 
     def duration(self) -> float:
         return max(0.0, self.end_sec - self.start_sec)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "DiarizedSegment":
+    def from_dict(cls, d: dict[str, Any]) -> DiarizedSegment:
         if "segment_id" not in d:
             d = {**d, "segment_id": f"SEG-{uuid4().hex[:6].upper()}"}
         return cls(**d)
@@ -70,7 +71,7 @@ class TranscriptResult:
     language: str = "zh"
     duration_sec: float = 0.0
     num_speakers: int = 0
-    segments: List[DiarizedSegment] = field(default_factory=list)
+    segments: list[DiarizedSegment] = field(default_factory=list)
     # === 元数据 ===
     model_name: str = ""           # whisper 模型
     device: str = ""               # cuda/cpu
@@ -78,7 +79,7 @@ class TranscriptResult:
     diarization_model: str = ""    # pyannote 模型
     created_at: str = ""           # ISO timestamp
 
-    def stats(self) -> Dict[str, int]:
+    def stats(self) -> dict[str, int]:
         """统计信息"""
         speaker_ids = set(s.speaker_id for s in self.segments)
         return {
@@ -88,7 +89,7 @@ class TranscriptResult:
             "speech_duration_sec": int(sum(s.duration() for s in self.segments)),
         }
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "audio_path": self.audio_path,
             "language": self.language,
@@ -105,7 +106,7 @@ class TranscriptResult:
         }
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "TranscriptResult":
+    def from_dict(cls, d: dict[str, Any]) -> TranscriptResult:
         meta = d.pop("metadata", {})
         segments = [DiarizedSegment.from_dict(s) for s in d.pop("segments", [])]
         return cls(segments=segments, **{**d, **meta})

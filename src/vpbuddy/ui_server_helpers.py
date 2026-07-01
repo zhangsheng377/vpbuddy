@@ -9,13 +9,11 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import List
 
 logger = logging.getLogger(__name__)
 
 
-def check_all_docs_stored_notify(meeting_id: str, doc_kinds: List[str] | None = None) -> bool:
+def check_all_docs_stored_notify(meeting_id: str, doc_kinds: list[str] | None = None) -> bool:
     """检查 6 个文档是否全部 stored (文件存在且非空), 是则:
 
     1. push_event("docs-complete", {...}) — 让客户端收到信号, UI 显示"✅ 6 文档已生成"
@@ -29,7 +27,7 @@ def check_all_docs_stored_notify(meeting_id: str, doc_kinds: List[str] | None = 
 
     会议真正结束走 close_meeting_endpoint (POST /api/meetings/{id}/close).
     """
-    from .ui_server import DOCS_DIR, _doc_path
+    from .ui_server import _doc_path
     if doc_kinds is None:
         doc_kinds = ["req", "arch", "tasks", "api", "risk", "demo"]
     all_stored = True
@@ -83,7 +81,7 @@ def check_all_docs_stored_notify(meeting_id: str, doc_kinds: List[str] | None = 
 # ── 2026-07-01 ADR-0022: 兼容别名 ──
 # 老代码引用 check_all_docs_stored_and_close, 旧语义 = 推 meeting-complete + close_meeting
 # 现在拆成 notify + 独立 close endpoint, 但保留别名只做 notify 部分(防 silent semantic break).
-def check_all_docs_stored_and_close(meeting_id: str, doc_kinds: List[str] | None = None) -> bool:
+def check_all_docs_stored_and_close(meeting_id: str, doc_kinds: list[str] | None = None) -> bool:
     """⚠️ DEPRECATED 2026-07-01 (ADR-0022). 用 check_all_docs_stored_notify 替代.
 
     老逻辑 (推 meeting-complete + close_meeting) 已废弃 — 6 docs 完成不再触发会议关闭.

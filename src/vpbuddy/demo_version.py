@@ -24,9 +24,8 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -81,14 +80,14 @@ def load_manifest(meeting_id: str, docs_dir: Path | None = None) -> list[dict]:
     if legacy.exists() and legacy.stat().st_size > 0:
         logger.info(f"[{meeting_id}] 发现老格式 demo/demo.html, 迁移成 v1")
         html = legacy.read_text(encoding="utf-8", errors="replace")
-        mtime = datetime.fromtimestamp(legacy.stat().st_mtime, tz=timezone.utc).isoformat()
+        mtime = datetime.fromtimestamp(legacy.stat().st_mtime, tz=UTC).isoformat()
         manifest = [{
             "version": 1,
             "created_at": mtime,
             "trigger": "legacy_migration",
             "summary": _extract_summary(html),
             "file_size": legacy.stat().st_size,
-            "file": f"demo_v1.html",
+            "file": "demo_v1.html",
         }]
         # 写 v1 + manifest + symlink
         try:
@@ -192,7 +191,7 @@ def write_demo_version(
 
         # 3. 更新 manifest
         summary = _extract_summary(html)
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         manifest = load_manifest(meeting_id, docs_dir)
         manifest.append({
             "version": v,

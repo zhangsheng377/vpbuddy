@@ -11,9 +11,9 @@ v1.16:5 类核心累积(requirements/goals/features/risks/open_questions)+ 6 项
 - YAGNI:不引入状态机、不引入 workflow 框架
 """
 from __future__ import annotations
-from datetime import datetime, timezone
+
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Dict, List, Optional
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -56,7 +56,7 @@ class ItemStatus(str, Enum):
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _new_id(prefix: str) -> str:
@@ -70,13 +70,13 @@ class TrackedItem(BaseModel):
     text: str
     priority: Priority = Priority.MEDIUM
     status: ItemStatus = ItemStatus.PENDING
-    speaker_id: Optional[str] = None  # 谁说的(从 ASR 段带过来)
-    speaker_name: Optional[str] = None
-    source_segment_id: Optional[str] = None  # 来自哪个转写段
+    speaker_id: str | None = None  # 谁说的(从 ASR 段带过来)
+    speaker_name: str | None = None
+    source_segment_id: str | None = None  # 来自哪个转写段
     created_at: str = Field(default_factory=_now)
     updated_at: str = Field(default_factory=_now)
 
-    def confirm(self, speaker_name: Optional[str] = None) -> None:
+    def confirm(self, speaker_name: str | None = None) -> None:
         self.status = ItemStatus.CONFIRMED
         if speaker_name:
             self.speaker_name = speaker_name
@@ -131,25 +131,25 @@ class MeetingState(BaseModel):
     meeting_id: str = Field(default_factory=lambda: uuid4().hex[:12].upper())
     platform: Platform = Platform.LOCAL  # 默认 LOCAL (VP 桌面客户端麦克风/系统音频, ADR-0004)
     audio_source: AudioSourceKind = AudioSourceKind.MICROPHONE  # 2026-07-01 ADR-0021: 麦克风/内录/双轨
-    project_name: Optional[str] = None
+    project_name: str | None = None
     started_at: str = Field(default_factory=_now)
 
     # === 累积项(单一可信源的核心) ===
-    requirements: List[Requirement] = Field(default_factory=list)
-    goals: List[Goal] = Field(default_factory=list)
-    features: List[Feature] = Field(default_factory=list)
-    risks: List[Risk] = Field(default_factory=list)
-    open_questions: List[Question] = Field(default_factory=list)
+    requirements: list[Requirement] = Field(default_factory=list)
+    goals: list[Goal] = Field(default_factory=list)
+    features: list[Feature] = Field(default_factory=list)
+    risks: list[Risk] = Field(default_factory=list)
+    open_questions: list[Question] = Field(default_factory=list)
 
     # === 元数据 ===
-    speaker_map: Dict[str, str] = Field(default_factory=dict)  # speaker_id -> speaker_name
+    speaker_map: dict[str, str] = Field(default_factory=dict)  # speaker_id -> speaker_name
     last_updated: str = Field(default_factory=_now)
     vpbuddy_version: str = "0.1.0"  # 记录生成此 state 的 VPBuddy 版本
 
     # === CRUD:添加 ===
     def add_requirement(self, text: str, priority: Priority = Priority.MEDIUM,
-                       speaker_id: Optional[str] = None,
-                       source_segment_id: Optional[str] = None) -> Requirement:
+                       speaker_id: str | None = None,
+                       source_segment_id: str | None = None) -> Requirement:
         req = Requirement(text=text, priority=priority,
                           speaker_id=speaker_id,
                           source_segment_id=source_segment_id)
@@ -198,7 +198,7 @@ class MeetingState(BaseModel):
         return q
 
     # === CRUD:更新 ===
-    def confirm_item(self, item_type: str, item_id: str, speaker_name: Optional[str] = None) -> TrackedItem:
+    def confirm_item(self, item_type: str, item_id: str, speaker_name: str | None = None) -> TrackedItem:
         item = self._find_item(item_type, item_id)
         item.confirm(speaker_name)
         self._touch()
@@ -228,9 +228,9 @@ class MeetingState(BaseModel):
         raise KeyError(f"{item_type} {item_id} not found")
 
     # === 查询 ===
-    def list_pending(self) -> List[TrackedItem]:
+    def list_pending(self) -> list[TrackedItem]:
         """所有 pending 项(按紧急度排序:高优先级优先)"""
-        all_items: List[TrackedItem] = (
+        all_items: list[TrackedItem] = (
             self.requirements + self.goals + self.features +
             self.risks + self.open_questions
         )
@@ -239,7 +239,7 @@ class MeetingState(BaseModel):
         pending.sort(key=lambda it: priority_order[it.priority])
         return pending
 
-    def stats(self) -> Dict[str, int]:
+    def stats(self) -> dict[str, int]:
         """统计各类型数量 + 状态分布"""
         return {
             "requirements": len(self.requirements),

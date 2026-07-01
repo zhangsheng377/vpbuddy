@@ -16,6 +16,7 @@ VPBuddy UI Server — 实时会议 AI 后端 API
 用法: python -m vpbuddy.ui_server [--port 8765]
 """
 from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -25,13 +26,12 @@ import tempfile
 import threading
 import time
 import uuid
-from typing import Any, List, Optional
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
+from typing import Any
+from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
-from urllib.error import URLError
 
 # 🔒 HF 模型离线铁律 (2026-06-23 ADR-0011):
 # 国内 huggingface.co 被墙,启动时强制默认走本地 cache。
@@ -113,7 +113,7 @@ def _is_duplicate_segment(segment: dict, seen_segments: list[dict]) -> bool:
     return False
 
 
-def _parse_multipart(body: bytes, content_type: str) -> tuple[dict[str, str], Optional[bytes]]:
+def _parse_multipart(body: bytes, content_type: str) -> tuple[dict[str, str], bytes | None]:
     boundary_match = re.search(r'boundary=(?:"([^"]+)"|([^\s;]+))', content_type)
     if not boundary_match:
         raise ValueError("Missing boundary")
@@ -195,7 +195,7 @@ def _append_chat_message(
     *,
     source: str = "vp-chat",
     status: str = "ok",
-    extra: Optional[dict[str, Any]] = None,
+    extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     message = {
         "id": f"chat-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}",
@@ -272,7 +272,7 @@ def _get_chat_agent(meeting_id: str):
         return _CHAT_AGENT_CACHE[session_id]
 
 
-def _run_vp_chat(meeting_id: str, message: str, client_context: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+def _run_vp_chat(meeting_id: str, message: str, client_context: dict[str, Any] | None = None) -> dict[str, Any]:
     ctx = _meeting_context_for_chat(meeting_id)
     prompt = "\n".join([
         "VP 在 VPBuddy 客户端输入了下面这句话。请结合当前会议上下文回答。",
@@ -340,7 +340,7 @@ def _get_clean_agent(meeting_id: str):
             os.path.dirname(os.path.abspath(__file__)), "prompts", "asr_clean.md"
         )
         try:
-            with open(prompt_path, "r", encoding="utf-8") as f:
+            with open(prompt_path, encoding="utf-8") as f:
                 prompt_template = f.read()
         except FileNotFoundError:
             prompt_template = "你是 VPBuddy 会议转写整理助手。"  # 兜底
@@ -358,7 +358,7 @@ def _get_clean_agent(meeting_id: str):
         return _CLEAN_AGENT_CACHE[session_id]
 
 
-def _run_asr_clean(meeting_id: str, raw_segments: List[dict], previous_cleaned: str = "") -> str:
+def _run_asr_clean(meeting_id: str, raw_segments: list[dict], previous_cleaned: str = "") -> str:
     """调 LLM 整理一段 funasr ASR 原始 segments.
 
     输入: raw_segments 列表 (每个含 start_sec, speaker_id, text)
@@ -391,7 +391,7 @@ def _run_asr_clean(meeting_id: str, raw_segments: List[dict], previous_cleaned: 
         os.path.dirname(os.path.abspath(__file__)), "prompts", "asr_clean.md"
     )
     try:
-        with open(prompt_path, "r", encoding="utf-8") as f:
+        with open(prompt_path, encoding="utf-8") as f:
             system_prompt = f.read()
     except FileNotFoundError:
         system_prompt = "你是 VPBuddy 会议转写整理助手。"
@@ -605,9 +605,9 @@ def get_status() -> dict:
     if DOCS_DIR.exists():
         for d in DOCS_DIR.iterdir():
             if d.is_dir() and d.name not in ("decisions", "research"):
-                for f in d.rglob("*.md"):
+                for _ in d.rglob("*.md"):
                     total_docs += 1
-                for f in d.rglob("*.html"):
+                for _ in d.rglob("*.html"):
                     total_docs += 1
 
     kb_docs = 0
@@ -627,7 +627,9 @@ def get_status() -> dict:
         "paths": {
             "data_dir": str(DATA_DIR),
             "docs_dir": str(DOCS_DIR),
-            "kb_path": str(KB_PATH),
+            # 2026-07-02: KB_PATH undefined 历史遗留 — KB 改 Chroma 嵌入式 (ADR-0019)
+            # 已无独立 KB_PATH 文件, 字段保留回传空字符串让前端兼容
+            "kb_path": "",
             "ui_dir": str(UI_DIR),
         },
         "meetings": meetings[:5],  # 最近 5 个
@@ -650,7 +652,7 @@ class Handler(BaseHTTPRequestHandler):
         """安静点(不打印每次请求)"""
         pass
 
-    def do_OPTIONS(self):
+    def do_OPTIONS(self):  # noqa: N802 (BaseHTTPRequestHandler)
         # CORS 预检 (2026-06-26): Tauri webview / 任何浏览器对
         # POST application/json 会先发 OPTIONS;没有这个 handler 就 501
         # → 前端 "Failed to fetch"
@@ -662,7 +664,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
-    def do_HEAD(self):
+    def do_HEAD(self):  # noqa: N802 (BaseHTTPRequestHandler)
         # HEAD 跟 GET 走一样的路由,只回头不回 body
         # (curl -I / 健康检查用)
         self.do_GET() if False else None  # 简化:直接 200 + 空 body
@@ -671,7 +673,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
-    def do_GET(self):
+    def do_GET(self):  # noqa: N802 (BaseHTTPRequestHandler)
         url = urlparse(self.path)
         path = url.path
         params = parse_qs(url.query)
@@ -783,7 +785,7 @@ class Handler(BaseHTTPRequestHandler):
 
         return self._404(path)
 
-    def do_POST(self):
+    def do_POST(self):  # noqa: N802 (BaseHTTPRequestHandler)
         url = urlparse(self.path)
         path = url.path
 
@@ -1017,9 +1019,10 @@ class Handler(BaseHTTPRequestHandler):
         - ADR-0021: 接受 ?audio_source=microphone|loopback|both, 默认 microphone.
             老客户端不传 → 向后兼容.
         """
-        from .state import AudioSourceKind  # 动态 import, ui_server 顶层不依赖 state
         # 1. 解析 audio_source + meeting_id (query string)
-        from urllib.parse import urlparse, parse_qs
+        from urllib.parse import parse_qs, urlparse
+
+        from .state import AudioSourceKind  # 动态 import, ui_server 顶层不依赖 state
         parsed = urlparse(self.path)
         qs = parse_qs(parsed.query)
 
@@ -1045,8 +1048,8 @@ class Handler(BaseHTTPRequestHandler):
             meeting_id = f"STREAM_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
 
         # 3. 写 state (复用 or 创建)
-        from .storage import MeetingStorage
         from .state import MeetingState, Platform
+        from .storage import MeetingStorage
         storage = MeetingStorage(DATA_DIR)
         reused = bool(meeting_id_in) and storage.exists(meeting_id)
         try:
@@ -1168,9 +1171,9 @@ class Handler(BaseHTTPRequestHandler):
                     new_segs.append(abs_seg)
 
             # 2. 累加到 meeting state (load 已有 + 追加新 segments)
-            from .storage import MeetingStorage
-            from .state import MeetingState, Platform, Priority
             from .ingest import _classify, infer_speaker_map
+            from .state import MeetingState, Platform, Priority
+            from .storage import MeetingStorage
             storage = MeetingStorage(DATA_DIR)
             if storage.exists(meeting_id):
                 state = storage.load(meeting_id)
@@ -1238,6 +1241,7 @@ class Handler(BaseHTTPRequestHandler):
             # demo agent 单独拎出来, 跟其他 5 个并行触发 (2026-06-23 张胜东纠正)
             # 不禁止 fetch/eval (2026-06-23 二次纠正), 先看效果
             from concurrent.futures import ThreadPoolExecutor
+
             from .sub_session_controller import trigger_sub_session
             doc_kinds = DOC_KINDS
 
@@ -1343,9 +1347,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not _is_duplicate_segment(abs_seg, seen_segments + new_segs):
                     new_segs.append(abs_seg)
 
-            from .storage import MeetingStorage
-            from .state import MeetingState, Platform, Priority
             from .ingest import _classify, infer_speaker_map
+            from .state import MeetingState, Platform, Priority
+            from .storage import MeetingStorage
             storage = MeetingStorage(DATA_DIR)
             if storage.exists(meeting_id):
                 state = storage.load(meeting_id)
@@ -1406,6 +1410,7 @@ class Handler(BaseHTTPRequestHandler):
             # 原因: 6 docs 各跑 30-100s 调云端 LLM, 阻塞会拖慢 transcript-segment 推送
             # 张胜东反馈: "asr的前几句才出来, 但demo 早就出来了, 说明不是 asr 慢而是推送/接收慢"
             from concurrent.futures import ThreadPoolExecutor
+
             from .sub_session_controller import trigger_sub_session
             doc_kinds = DOC_KINDS
 
@@ -1592,7 +1597,7 @@ class Handler(BaseHTTPRequestHandler):
 
             # 2. ingest 到 MeetingState (复用 ingest.ingest_transcript)
             from .ingest import ingest_transcript
-            from .state import Platform, AudioSourceKind
+            from .state import Platform
             state = ingest_transcript(
                 meeting_id=meeting_id,
                 transcript=transcript,
@@ -1659,7 +1664,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(404)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
-        self.wfile.write(f"404 Not Found: {what}".encode("utf-8"))
+        self.wfile.write(f"404 Not Found: {what}".encode())
 
     def _handle_sse_events(self, meeting_id: str):
             """SSE 实时事件流: 客户端连接后持续接收转写/文档/状态更新"""
@@ -1723,10 +1728,10 @@ class Handler(BaseHTTPRequestHandler):
         """
         try:
             from .collab import (
-                read_collab,
-                list_pending,
-                list_answered,
                 collab_stats,
+                list_answered,
+                list_pending,
+                read_collab,
             )
             return self._json({
                 "meeting_id": meeting_id,
@@ -1818,7 +1823,7 @@ class Handler(BaseHTTPRequestHandler):
         调用方: UI 手动按钮 / 客户端断开前 / 切会议时 (前一个会议).
         """
         try:
-            from .realtime_server import push_event, close_meeting
+            from .realtime_server import close_meeting, push_event
             push_event(meeting_id, "meeting-complete", {
                 "meeting_id": meeting_id,
                 "status": "user_closed",
@@ -1845,10 +1850,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(500)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
-        self.wfile.write(f"500: {msg}".encode("utf-8"))
+        self.wfile.write(f"500: {msg}".encode())
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """UI server 主入口 — `python -m vpbuddy.ui_server` 或 `vpbuddy ui`"""
     parser = argparse.ArgumentParser(description="VPBuddy UI server")
     parser.add_argument("--port", type=int, default=8765, help="端口(默认 8765)")
@@ -1859,7 +1864,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         from .rag_backend import get_rag
         get_rag().count()
-    except Exception as e:
+    except Exception:
         pass
 
     # 2026-06-28: 启动时打印版本号 — 一眼看出是否最新 release
@@ -1868,7 +1873,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     except Exception:
         __version__ = "unknown"
     print(f"🏷️  VPBuddy UI server version: {__version__}", flush=True)
-    print(f"🚀 VPBuddy UI server 启动", flush=True)
+    print("🚀 VPBuddy UI server 启动", flush=True)
     print(f"   UI:    http://{args.host}:{args.port}/", flush=True)
     print(f"   DATA:  {DATA_DIR}", flush=True)
     print(f"   DOCS:  {DOCS_DIR}", flush=True)

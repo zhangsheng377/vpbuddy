@@ -15,6 +15,7 @@
     python -m vpbuddy.sub_session_controller --meeting abc  # 单会议 6 doc
 """
 from __future__ import annotations
+
 import argparse
 import json
 import logging
@@ -26,7 +27,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 from .storage import MeetingStorage
 
@@ -57,17 +58,17 @@ SCHEDULED_KINDS = [BATCH_DOCS_KIND, DEMO_KIND]
 # === AIAgent 缓存(关键:跨轮询复用同一 AIAgent → 持久化 session) ===
 # 2026-06-22 ADR-0009 落地:每个 (meeting_id, doc_kind) 一个 AIAgent 实例
 # 同 session_id 多次触发 = 同一 session 历史 → LLM 跨次记得上下文
-_AGENT_CACHE: Dict[str, Any] = {}
+_AGENT_CACHE: dict[str, Any] = {}
 
 # === KB 状态共享字典(2026-06-22) ===
 # UI / controller / 日志都查这个,key = (meeting_id, doc_kind)
 # value = {status: queued|stored|failed|retrying, attempts, started_at, completed_at?, doc_id?, error?}
-_KB_STATUS: Dict[tuple, Dict[str, Any]] = {}
+_KB_STATUS: dict[tuple, dict[str, Any]] = {}
 _KB_STATUS_LOCK = threading.Lock()  # 防止并发触发时 key 还没设就 update
 
 # AIAgent 是否可用(2026-06-22: import 失败时 fallback 到 subprocess)
 _AGENT_AVAILABLE = False
-_AIAgent: Optional[type] = None
+_AIAgent: type | None = None
 try:
     from run_agent import AIAgent as _AIAgent  # type: ignore
     _AGENT_AVAILABLE = True
@@ -159,7 +160,7 @@ def _get_or_create_agent(meeting_id: str, doc_kind: str) -> Any:
     return _AGENT_CACHE[sid]
 
 
-def _dispatch_kind(meeting_id: str, kind: str, dry_run: bool = False) -> Dict[str, Any]:
+def _dispatch_kind(meeting_id: str, kind: str, dry_run: bool = False) -> dict[str, Any]:
     """按 kind 路由到对应 trigger 函数 (ADR-0029 Commit 3).
 
     Routing:
@@ -186,14 +187,14 @@ def _dispatch_kind(meeting_id: str, kind: str, dry_run: bool = False) -> Dict[st
     }
 
 
-def list_active_meetings() -> List[str]:
+def list_active_meetings() -> list[str]:
     """列出活跃会议(有 MeetingState JSON 文件就算活跃)"""
     if not DATA_DIR.exists():
         return []
     return [p.stem for p in DATA_DIR.glob("*.json")]
 
 
-def cleanup_inactive_agents(inactive_minutes: int = 30, dry_run: bool = False) -> Dict[str, Any]:
+def cleanup_inactive_agents(inactive_minutes: int = 30, dry_run: bool = False) -> dict[str, Any]:
     """清理长期不活跃会议的 AIAgent 缓存 (2026-06-24 张胜东要求,防内存泄漏)
 
     判据: meeting_state JSON 文件 mtime > inactive_minutes 分钟前的会议视为已结束
@@ -213,9 +214,9 @@ def cleanup_inactive_agents(inactive_minutes: int = 30, dry_run: bool = False) -
     now = _time.time()
     threshold_sec = inactive_minutes * 60
 
-    cleaned: List[str] = []
-    kept: List[str] = []
-    skipped: List[str] = []
+    cleaned: list[str] = []
+    kept: list[str] = []
+    skipped: list[str] = []
 
     # 取所有已 cache 的 meeting_id
     cached_mids = set()
@@ -311,14 +312,14 @@ def format_state_summary(state) -> str:
         parts.append("")
 
     if state.speaker_map:
-        parts.append(f"## 说话人映射")
+        parts.append("## 说话人映射")
         for sid, name in state.speaker_map.items():
             parts.append(f"- {sid} → {name}")
 
     return "\n".join(parts)
 
 
-def render_prompt(doc_kind: str, meeting_id: str, state_summary: str, last_doc: Optional[str]) -> str:
+def render_prompt(doc_kind: str, meeting_id: str, state_summary: str, last_doc: str | None) -> str:
     """渲染子 session 的 prompt(优先用专属模板,fallback 通用模板)
 
     ⚠️ 2026-06-23 bug 修: prompt 模板里如果出现 `{` 或 `}`(比如 CSS 代码块
@@ -370,7 +371,7 @@ session_id 固定: meeting:{meeting_id}:{doc_kind}
 """
 
 
-def _trigger_via_subprocess(prompt: str, meeting_id: str, doc_kind: str, timeout: int = 300) -> Dict:
+def _trigger_via_subprocess(prompt: str, meeting_id: str, doc_kind: str, timeout: int = 300) -> dict:
     """Fallback 路径:subprocess.run('hermes chat')
 
     当 AIAgent 未 import 成功时使用。每次都是新 UUID session,无历史持久化。
@@ -392,7 +393,7 @@ def _trigger_via_subprocess(prompt: str, meeting_id: str, doc_kind: str, timeout
         return {"triggered": False, "session_id": _agent_session_id(meeting_id, doc_kind), "error": f"{type(e).__name__}: {e}"}
 
 
-def _trigger_via_aiagent(prompt: str, meeting_id: str, doc_kind: str, timeout: int = 180) -> Dict:
+def _trigger_via_aiagent(prompt: str, meeting_id: str, doc_kind: str, timeout: int = 180) -> dict:
     """主路径:in-process AIAgent(2026-06-22 落地,真 session 持久化)
 
     同 (meeting_id, doc_kind) 多次调用复用同一 AIAgent → 跨轮询 LLM 记得上次输出
@@ -402,7 +403,7 @@ def _trigger_via_aiagent(prompt: str, meeting_id: str, doc_kind: str, timeout: i
     t_start = time.time()
     logger.info(f"[{meeting_id}/{doc_kind}] _trigger_via_aiagent start, prompt_len={len(prompt)}")
 
-    holder: Dict[str, Any] = {"done": False, "result": None, "error": None}
+    holder: dict[str, Any] = {"done": False, "result": None, "error": None}
 
     def _runner():
         try:
@@ -444,7 +445,7 @@ def _trigger_via_aiagent(prompt: str, meeting_id: str, doc_kind: str, timeout: i
     }
 
 
-def trigger_sub_session(meeting_id: str, doc_kind: str, dry_run: bool = False) -> Dict[str, Any]:
+def trigger_sub_session(meeting_id: str, doc_kind: str, dry_run: bool = False) -> dict[str, Any]:
     """触发一个子 session(2026-06-22 落地 in-process AIAgent + ThreadPoolExecutor 真并行)
 
     Args:
@@ -465,7 +466,7 @@ def trigger_sub_session(meeting_id: str, doc_kind: str, dry_run: bool = False) -
     import time as _t
     t0 = _t.time()
     sid = _agent_session_id(meeting_id, doc_kind)
-    result: Dict[str, Any] = {"session_id": sid, "triggered": False, "error": None}
+    result: dict[str, Any] = {"session_id": sid, "triggered": False, "error": None}
 
     # 1. 读累积
     logger.info(f"[{meeting_id}/{doc_kind}] load state...")
@@ -588,16 +589,16 @@ def trigger_sub_session(meeting_id: str, doc_kind: str, dry_run: bool = False) -
     return result
 
 
-def get_kb_status(meeting_id: Optional[str] = None) -> Dict[str, Any]:
+def get_kb_status(meeting_id: str | None = None) -> dict[str, Any]:
     """ADR-0020: KB 自动 ingest 已废弃, 返回空. 保留 stub 兼容 cli.py."""
     return {"summary": {"total": 0, "stored": 0, "failed": 0, "queued": 0, "retrying": 0}, "items": []}
 
 
 def run_one_round(
-    meeting_ids: Optional[List[str]] = None,
+    meeting_ids: list[str] | None = None,
     dry_run: bool = False,
     parallel: bool = True,
-) -> List[dict]:
+) -> list[dict]:
     """跑一轮:对每个会议触发 batch_docs + demo (2 个 sub-session 并行).
 
     2026-07-01 ADR-0029: 6 kinds (req/arch/tasks/api/risk/demo) 合并为 2 kinds
@@ -645,7 +646,7 @@ def run_one_round(
 
 def main_loop() -> None:
     """主循环:每 POLL_INTERVAL 秒跑一轮,每小时清理一次 inactive agents"""
-    print(f"VPBuddy sub-session controller started")
+    print("VPBuddy sub-session controller started")
     print(f"  DATA_DIR: {DATA_DIR}")
     print(f"  DOCS_DIR: {DOCS_DIR}")
     print(f"  POLL_INTERVAL: {POLL_INTERVAL}s")
@@ -664,7 +665,7 @@ def main_loop() -> None:
 
     print()
     cleanup_counter = 0
-    CLEANUP_EVERY = max(1, int(3600 / POLL_INTERVAL))  # 每小时清理一次
+    CLEANUP_EVERY: int = max(1, int(3600 / POLL_INTERVAL))  # noqa: N806 (period seconds)
     while True:
         run_one_round()
         cleanup_counter += 1
@@ -683,7 +684,7 @@ def main_loop() -> None:
         time.sleep(POLL_INTERVAL)
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """Controller CLI 主入口 — `python -m vpbuddy.sub_session_controller`"""
     global PARALLEL_WORKERS
     parser = argparse.ArgumentParser(description="VPBuddy sub-session controller")
