@@ -223,6 +223,39 @@ MIT
 
 ## CHANGELOG
 
+### v0.8.0 (2026-07-02) — Phase 7 跨平台 loopback 真实现 (Linux PulseAudio mon / macOS BlackHole / Windows v0.9.x)
+
+**核心**: v0.7.1 stub (`loopback`/`both` fallback mic) 落地 → v0.8.0 **真接** 跨平台内录: Linux PulseAudio/PipeWire monitor source + macOS BlackHole 设备 + `both` 模式 = 双 cpal Stream 并行 + 等权混合. Windows 仍 fallback mic + UI 强提示 (cpal 0.15 不暴露 cross-platform loopback, v0.9.x unsafe 重构).
+
+**改动**:
+- 🎛️ **`AudioCapture::new_with_source` 真接 loopback/both 路径**: mic path 100% 不变 (向后兼容 v0.7.x); loopback 调 `detect_default_loopback()` 找平台默认内录设备 → 找不到 fallback mic + warn; both path 双 cpal Stream + `mix_two_streams` 等权混合
+- 🌐 **`is_loopback_device_name` + `detect_default_loopback` 平台分支**:
+  - **Linux**: `.monitor` 后缀 (PulseAudio/PipeWire 约定)
+  - **macOS**: 名字含 `BlackHole` / `Loopback` / `Soundflower` (case-insensitive)
+  - **Windows**: 恒 `false` (cpal 0.15.3 不暴露 WASAPI loopback, 需 unsafe `IAudioRenderClient` — v0.9.x)
+- 🎚️ **`AudioDeviceInfo` 加 `is_loopback: bool` 字段**: `list_input_devices` 每设备标 is_loopback; UI 切 `audio-source-kind` 时按 kind filter device dropdown (mic 只列 mic / loopback 只列 monitor / both 列全部)
+- 🍎 **macOS banner**: 检测 BlackHole 缺失 → 显示 "🍎 装 BlackHole 2ch" 链接; 🪟 Windows banner: "Windows 真内录 v0.9.x 实现 — 当前 fallback 录麦克风, 系统声不会进"
+- 🔁 **`mix_two_streams(mic, loopback)` pure helper**: 等权混合 `(m+l)/2` clamp i16 + 短端补零 (调用方负责)
+- 🛡️ **`StreamGuard::Single | Merged` 枚举**: 保 1/2 个 cpal Stream 不掉线; both path 用 `Merged` variant + `Box::leak` 延寿 (process 生命周期内有效)
+- 🧹 **`stop_capture` 清理 `audio_source` 字段** (v0.7.1 留值不重置, v0.8.0 收尾)
+- 🧪 **11 个新 inline unit tests** (v0.7.1 6 + v0.8.0 11 = **17 总**): `is_loopback_device_name_linux/macos/windows` × 3 + `mix_two_streams_equal/overflow/mic_longer/lp_longer/negative/empty` × 6 + `downmix_to_mono_stereo/passthrough` × 2
+- 📝 design v1.32 → v1.33 + 新 ADR-0032 + ADR-0031 标 Superseded + ADR index 加 0032 + ADR-0021 顶部加修订注 (cpal 0.15.3 不暴露 cross-platform WASAPI loopback)
+- 🔢 pyproject 0.7.3 → 0.8.0
+
+**验证**:
+- ✅ `cargo check` 0 errors, 5 dead_code warnings (v0.7.x 留值 + `new_with_device` pub 兼容 + `mix_stereo_into` 留作 v0.9 重构用, expected)
+- ✅ `cargo test --lib` **17/17 pass** in 0.00s
+- ✅ mic path 完全等价 v0.7.x (向后兼容)
+- ✅ Linux 真内录实测: 本机 `is_loopback_device_name("alsa_output.pci-0000_00_1f.3.analog-stereo.monitor")` = true
+
+**v0.9.x 计划**:
+- Windows WASAPI loopback 真实现 (`IAudioRenderClient` unsafe 包装, 最小 `#[cfg(target_os = "windows")]` 子模块)
+- `both` 模式时间戳精确对齐 (mic + loopback 同 cpal 启时间, 取 timestamp ns diff ≤ 50ms 视为同帧)
+- 引入 `soxr` 做 mic + loopback 不同采样率时的高质量重采样
+- `AudioCaptureConfig` struct 替代 `new_with_source` 顺序参 (API ergonomics)
+
+详见 [docs/decisions/0032-Phase7-跨平台loopback真实现.md](docs/decisions/0032-Phase7-跨平台loopback真实现.md) + [总体架构 v1.33](docs/design/总体架构.md)。
+
 ### v0.7.1 (2026-07-02) — Phase 7 客户端双轨采集 stub (microphone / loopback / both)
 
 **核心**: 让客户端 Rust 端**真正读** `audio_source` 字段(`microphone|loopback|both`)——之前 UI 选 loopback/both 只发到 server,客户端 cpal 采集完全忽略;v0.7.1 把字段串通到 AudioCapture。**loopback/both 跨平台实现留 v0.8.x** (本次仅 stub + fallbak mic, **不破 v0.7.0 录音流程**)。

@@ -956,33 +956,116 @@ function renderChatMessage(msg) {
   list.scrollTop = list.scrollHeight;
 }
 
+// 2026-07-02 Phase 7 v0.8.0: 缓存所有设备, 按 audio-source-kind 动态 filter 渲染
+//   - microphone: 只列 is_loopback=false (普通麦克风)
+//   - loopback:   只列 is_loopback=true  (Linux .monitor / macOS BlackHole); 没设备 → 提示
+//   - both:       列全部 (mic + loopback), 但 UI 提示默认行为 (v0.8.0 简化: 用默认 mic + 默认 loopback)
+let allAudioDevices = [];
+
 async function initAudioDevices() {
   try {
-    const select = document.getElementById("audio-device");
     const devices = await invoke("list_audio_devices");
-    // 2026-06-27: 0 设备要醒目提示 (常见于: Win 隐私设置禁麦克风 / 没插麦)
-    if (devices.length === 0) {
-      const opt = document.createElement("option");
-      opt.value = "";
-      opt.textContent = "⚠️ 未检测到任何输入设备";
-      select.appendChild(opt);
-      const recStatus = document.getElementById("rec-status");
-      if (recStatus) recStatus.textContent = "⚠️ 无输入设备 — 检查 Windows 麦克风隐私设置";
-      return;
-    }
-    for (const d of devices) {
-      const opt = document.createElement("option");
-      opt.value = d.id;
-      opt.textContent = d.is_default ? `${d.name}（默认）` : d.name;
-      select.appendChild(opt);
-    }
+    allAudioDevices = devices || [];
+    renderAudioDevices();
   } catch (e) {
     console.warn("获取音频设备失败", e);
-    // 2026-06-27: invoke 失败也提示 (cpal 初始化错误)
     const recStatus = document.getElementById("rec-status");
     if (recStatus) recStatus.textContent = "❌ 音频设备枚举失败: " + e;
   }
 }
+
+// 2026-07-02 Phase 7 v0.8.0: 按 audio-source-kind filter + 渲染 device dropdown
+// 同步: 检测 macOS loopback 缺失 → 显示 "装 BlackHole" banner
+function renderAudioDevices() {
+  const select = document.getElementById("audio-device");
+  const kind = document.getElementById("audio-source-kind").value || "microphone";
+  // 清空现有 options (保留 placeholder)
+  select.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = kind === "loopback" ? "默认 loopback 设备" : "默认音频设备";
+  select.appendChild(placeholder);
+
+  if (allAudioDevices.length === 0) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "⚠️ 未检测到任何输入设备";
+    select.appendChild(opt);
+    const recStatus = document.getElementById("rec-status");
+    if (recStatus) recStatus.textContent = "⚠️ 无输入设备 — 检查 Windows 麦克风隐私设置";
+    return;
+  }
+
+  // 按 kind filter
+  const filtered = allAudioDevices.filter((d) => {
+    if (kind === "microphone" || kind === "mic") return !d.is_loopback;
+    if (kind === "loopback") return d.is_loopback;
+    if (kind === "both") return true;  // both: 列全部 (UI 简化: 用默认)
+    return !d.is_loopback;  // fallback
+  });
+
+  for (const d of filtered) {
+    const opt = document.createElement("option");
+    opt.value = d.id;
+    const kindTag = d.is_loopback ? " 🔁" : " 🎤";
+    opt.textContent = d.is_default ? `${d.name}（默认）${kindTag}` : `${d.name}${kindTag}`;
+    select.appendChild(opt);
+  }
+
+  // 2026-07-02 Phase 7 v0.8.0: macOS loopback 缺失 banner
+  updateLoopbackBanner(kind, filtered);
+}
+
+// 2026-07-02 Phase 7 v0.8.0: 平台分支 banner
+//   - macOS + 选 loopback/both + 无 BlackHole 设备: 提示装 BlackHole
+//   - Windows + 选 loopback/both: 提示 v0.9.x 实现 (当前 fallback mic)
+//   - Linux: 无 banner (PulseAudio/PipeWire 自带 .monitor)
+function updateLoopbackBanner(kind, filtered) {
+  let banner = document.getElementById("loopback-hint");
+  if (!banner) {
+    banner = document.createElement("div");
+    banner.id = "loopback-hint";
+    banner.className = "stream-info";
+    banner.style.color = "var(--warning)";
+    // 插在 rec-controls 后
+    const recControls = document.querySelector(".rec-controls");
+    if (recControls) recControls.after(banner);
+  }
+  if (kind !== "loopback" && kind !== "both") {
+    banner.style.display = "none";
+    return;
+  }
+  // 平台探测: navigator.userAgent 区分
+  const ua = navigator.userAgent || "";
+  const isMac = /Mac/i.test(ua) && !/iPhone|iPad/.test(ua);
+  const isWin = /Windows/i.test(ua);
+
+  // macOS + 没 loopback 设备 → 提示装 BlackHole
+  if (isMac) {
+    const hasLoopback = filtered.some((d) => d.is_loopback);
+    if (!hasLoopback) {
+      banner.style.display = "";
+      banner.innerHTML =
+        '🍎 macOS 未检测到 BlackHole — 内录需先装 <a href="https://github.com/ExistentialAudio/BlackHole/releases" target="_blank">BlackHole 2ch</a> ' +
+        '(免费开源, 装完在「音频 MIDI 设置」设为输出即可)';
+      return;
+    }
+  }
+  // Windows: 提示 v0.9.x
+  if (isWin) {
+    banner.style.display = "";
+    banner.innerHTML =
+      '🪟 Windows 真内录 (WASAPI loopback) v0.9.x 实现 — 当前 fallback 录麦克风, 系统声不会进';
+    return;
+  }
+  // Linux: 无 banner (PulseAudio/PipeWire 自带 .monitor)
+  banner.style.display = "none";
+}
+
+// 2026-07-02 Phase 7 v0.8.0: audio-source-kind 切换 → 重新 render device dropdown
+document.getElementById("audio-source-kind").addEventListener("change", () => {
+  renderAudioDevices();
+});
 
 document.getElementById("ui-lang").value = lang;
 document.getElementById("ui-lang").addEventListener("change", (e) => {

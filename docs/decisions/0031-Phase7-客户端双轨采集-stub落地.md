@@ -1,6 +1,8 @@
 # 0031. Phase 7 客户端双轨采集 stub 落地 (microphone / loopback / both)
 
-- **状态**: 已接受 (Stub 阶段)
+> **📌 Superseded by [ADR-0032](./0032-Phase7-跨平台loopback真实现.md) (2026-07-02)**: 本 ADR 写的是 stub (loopback/both fallback mic), v0.8.0 真实现 (Linux PulseAudio mon / macOS BlackHole) 见 ADR-0032. 保留本 ADR 作历史快照 (v0.7.1 release 已 publish).
+
+- **状态**: 已接受 (Stub 阶段) → Superseded by [ADR-0032](./0032-Phase7-跨平台loopback真实现.md)
 - **日期**: 2026-07-02
 - **作者**: 张胜东 (起草: Hermes)
 - **替代**: 无 (新增 stub)

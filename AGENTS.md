@@ -102,11 +102,11 @@
 
 ## 三. 跨平台部署注意
 
-- **Linux (开发/服务端主)**: PipeWire / PulseAudio 内录可用 (`src/vpbuddy/loopback.py`)
-- **macOS (Tauri 客户端)**: BlackHole / Soundflower 需用户安装, Tauri 端 `audio.rs` 待加 loopback 选项
-- **Windows (Tauri 客户端)**: WASAPI loopback 待实现 (Tauri 2.6+ 用 `cpal` host WASAPI)
+- **Linux (开发/服务端主)**: PipeWire / PulseAudio 内录 (`vpbuddy-client/src-tauri/src/audio.rs` `is_loopback_device_name` 走 `.monitor` 后缀名匹配, v0.8.0 真实现)
+- **macOS (Tauri 客户端)**: BlackHole 需用户装, `is_loopback_device_name` 走名字含 `BlackHole`/`Loopback`/`Soundflower` 匹配, v0.8.0 真实现 (UI 检测缺失时显示 banner)
+- **Windows (Tauri 客户端)**: WASAPI loopback **v0.9.x 计划**, v0.8.0 cpal 0.15.3 不暴露 cross-platform API, 当前 fallback mic + UI 强提示
 
-`is_loopback_supported()` 平台分支在 `vpbuddy-client/src-tauri/src/audio.rs` 待加, 详见 ADR-0021。
+`is_loopback_device_name()` + `detect_default_loopback()` + `mix_two_streams()` 平台分支在 `vpbuddy-client/src-tauri/src/audio.rs` 已实现, 详见 ADR-0032 (取代 ADR-0021 + ADR-0031 stub)。
 
 ---
 

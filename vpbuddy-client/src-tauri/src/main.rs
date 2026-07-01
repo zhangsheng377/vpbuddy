@@ -340,6 +340,11 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
     } else {
         log::warn!("  meeting_id 为空, 没有活跃会议");
     }
+    // 2026-07-02 Phase 7 v0.8.0 cleanup: 重置 audio_source 状态
+    // (v0.7.1 留值不重置, ADR-0032 写明本 PR 收尾)
+    *state.audio_source.lock().await = None;
+    log::debug!("  ✓ audio_source state 重置为 None (v0.8.0 cleanup)");
+
     // 注意: sse_handle 不 await — SSE 继续等 GPU 6 docs 完成 + close_meeting
     log::info!("=== stop_capture 完成 ===");
     Ok(())
