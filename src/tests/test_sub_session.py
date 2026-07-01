@@ -136,15 +136,24 @@ class TestFormatStateSummary:
 
 class TestRenderPrompt:
     def test_uses_specific_template(self):
-        """2026-07-01 ADR-0029: 只校验 v0.7 真用 2 kinds 对应 prompt 模板各自带自己名字 + 都不指定具体工具名"""
+        """2026-07-01 ADR-0029: v0.7 真用 2 kinds,各 prompt 模板带自己名字;
+        按 kind 是否需要文件 IO 分别校验工具名:
+          - batch_docs: 必须指定 read_file + write_file(1 次 LLM 写 5 文件)
+          - demo: 不应指定具体工具名(HTML 单文件直接文字输出)
+        """
         for kind in SCHEDULED_KINDS:
             p = render_prompt(kind, "MID", "## 累积", None)
             # 每种 doc_kind 模板都提到自己
             assert kind in p.lower() or kind in p
-            # 都不指定具体工具名(用户的纠错)
-            assert "read_file" not in p
-            assert "write_file" not in p
-            assert "patch" not in p or "use patch" not in p
+            if kind == BATCH_DOCS_KIND:
+                # batch agent 真需要 file toolset 读写 5 个 Markdown
+                assert "read_file" in p, f"{kind} prompt 缺 read_file (需读 state + 旧文档)"
+                assert "write_file" in p, f"{kind} prompt 缺 write_file (需写 5 个 Markdown)"
+            elif kind == DEMO_KIND:
+                # demo agent 只产单 HTML 文件,文字响应即可,不该硬指定工具名
+                assert "read_file" not in p, f"{kind} prompt 不该指定 read_file"
+                assert "write_file" not in p, f"{kind} prompt 不该指定 write_file"
+                assert "patch" not in p, f"{kind} prompt 不该指定 patch"
 
     def test_includes_meeting_id(self):
         """prompt 包含 meeting_id(用于 session_id)"""
