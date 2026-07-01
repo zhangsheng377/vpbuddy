@@ -103,7 +103,9 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  # ── 3. macOS 构建 (x86_64, --no-bundle) ──
+  # ── 3. macOS 构建 (x86_64 .app + .dmg) ──
+  # 2026-07-01: 去掉 --no-bundle, bundle.targets="all" 走原生 .app + .dmg
+  # 详见 ADR-0026
   build-macos:
     name: Build macOS
     runs-on: macos-14
@@ -125,14 +127,23 @@ jobs:
       - name: Add rustup targets
         run: rustup target add x86_64-apple-darwin
       - name: Tauri build (macOS)
+        # 2026-07-01: 不传 --no-bundle 也不传 --bundles, 走 tauri.conf.json bundle.targets="all"
+        # 产出 .app (release/bundle/macos/) + .dmg (release/bundle/dmg/)
         working-directory: vpbuddy-client/src-tauri
-        run: npx tauri build --target x86_64-apple-darwin --no-bundle
+        run: npx tauri build --target x86_64-apple-darwin
       - name: Upload .app artifact
         uses: actions/upload-artifact@v4
         with:
-          name: vpbuddy-client-macos
+          name: vpbuddy-client-macos-app
           path: vpbuddy-client/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app
-          if-no-files-found: warn
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload .dmg artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vpbuddy-client-macos-dmg
+          path: vpbuddy-client/src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error
           retention-days: 30
 
   # ── 4. Windows 构建 (.msi + .exe) ──

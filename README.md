@@ -57,7 +57,7 @@ VPBuddy 桌面客户端通过 GitHub Actions 自动编译（三平台），产�
 | 平台 | 下载 | 安装方法 |
 |------|------|----------|
 | **Linux** | `vpbuddy-client-linux` (zip, 内含 .deb) | `sudo dpkg -i vpbuddy-client_*.deb` <br> 或双击安装 |
-| **macOS** | `vpbuddy-client-macos` (zip, 内含 .app) | 解压后拖到 `应用程序` 文件夹 |
+| **macOS** | `vpbuddy-client-macos-app` (.app) + `vpbuddy-client-macos-dmg` (.dmg) | 下载后拖到 `应用程序` 文件夹 (Apple Silicon 需 Rosetta, 详见 ADR-0026) |
 | **Windows** | `vpbuddy-client-windows` (zip, 内含 .exe) | 直接运行 vpbuddy-client.exe |
 
 **启动客户端**（编译或解压后）:
