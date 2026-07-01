@@ -61,6 +61,22 @@ def check_all_docs_stored_notify(meeting_id: str, doc_kinds: List[str] | None = 
         )
     except Exception as e:
         logger.warning(f"[{meeting_id}] docs-complete push failed: {e}")
+
+    # 2026-07-01 ADR-0023 Phase 5: 6 docs 全部生成 → agent 主动 chat 通知
+    try:
+        from .agent_proactive import trigger as _proactive_trigger
+        # state_summary: 拉当前 state 拼一个简短摘要 (fallback: 文档大小)
+        state_summary = ""
+        try:
+            from .storage import MeetingStorage
+            from .sub_session_controller import format_state_summary
+            st = MeetingStorage().load(meeting_id)
+            state_summary = format_state_summary(st)
+        except Exception:
+            pass
+        _proactive_trigger(meeting_id, "docs_complete", state_summary=state_summary)
+    except Exception as e:
+        logger.warning(f"[{meeting_id}] proactive docs_complete trigger failed: {e}")
     return True
 
 

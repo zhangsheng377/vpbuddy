@@ -28,18 +28,33 @@ logger = logging.getLogger(__name__)
 UPLOADS_DIR = DATA_DIR / "uploads"
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
 ALLOWED_EXTENSIONS = {".txt", ".md", ".pdf"}
+# 2026-07-01 ADR-0023: chat 上传额外允许图片
+ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+ALLOWED_CHAT_EXTENSIONS = ALLOWED_EXTENSIONS | ALLOWED_IMAGE_EXTENSIONS
 CHROMA_DIR = DATA_DIR / "chroma"
 
 
 def _parse_multipart(body: bytes, content_type: str) -> dict[str, Any]:
-    """手写超轻 multipart/form-data 解析(约 50 行, 不引第三方)."""
+    """手写超轻 multipart/form-data 解析(支持多文件 + 多 key, 不引第三方).
+
+    返回结构:
+        {
+            "text_field": str          # 普通字段值 (最后一个同名覆盖)
+            "files": [
+                {"filename": str, "data": bytes, "content_type": str}, ...
+            ],
+        }
+
+    2026-07-01 ADR-0023: 升级支持多文件 (chat 附件批量上传). 老调用方传单文件
+    时走 `parts["files"][0]`, 代码迁移成本最低.
+    """
     import re
 
     match = re.search(r'boundary=(?:"([^"]+)"|([^;]+))', content_type)
     if not match:
         raise ValueError("no boundary in Content-Type")
     boundary = (match.group(1) or match.group(2)).encode()
-    parts: dict[str, Any] = {}
+    parts: dict[str, Any] = {"files": []}
 
     # 标准 multipart: body 以 --{boundary} 开头, 用 \r\n--{boundary} 分隔各分节
     # 第一个分隔前的内容 (preamble) 忽略
@@ -72,9 +87,15 @@ def _parse_multipart(body: bytes, content_type: str) -> dict[str, Any]:
 
         if "filename=" in raw_headers:
             fname_match = re.search(r'filename="([^"]*)"', raw_headers)
-            parts["file"] = data
-            parts["filename"] = fname_match.group(1) if fname_match else "unknown"
+            ct_match = re.search(r"Content-Type:\s*([^\r\n]+)", raw_headers, re.IGNORECASE)
+            parts["files"].append({
+                "name": name,
+                "filename": fname_match.group(1) if fname_match else "unknown",
+                "data": data,
+                "content_type": ct_match.group(1).strip() if ct_match else "application/octet-stream",
+            })
         else:
+            # 普通字段: 同名覆盖 (HTML 表单语义)
             parts[name] = data.decode(errors="replace")
 
     return parts
@@ -100,12 +121,34 @@ def _extract_text(file_bytes: bytes, filename: str) -> str:
     raise ValueError(f"不支持的文件类型: {ext}")
 
 
-def _validate_file(filename: str, file_bytes: bytes) -> None:
+def _image_to_b64_data_uri(file_bytes: bytes, content_type: str) -> str:
+    """图片转 data URI (base64) — 给 chat 多模态 LLM 喂图用.
+
+    2026-07-01 ADR-0023 Phase 6: chat 上传图片不写入 KB, 走 ollama /api/chat
+    images 字段. 太大 (>5MB) 拒绝, 避免 LLM 上下文爆.
+    """
+    import base64
+    if len(file_bytes) > 5 * 1024 * 1024:
+        raise ValueError(f"图片超过 5MB (当前 {len(file_bytes) // 1024 // 1024}MB)")
+    b64 = base64.b64encode(file_bytes).decode("ascii")
+    # 兜底 content_type (前端可能没传)
+    ct = content_type if content_type.startswith("image/") else "image/png"
+    return f"data:{ct};base64,{b64}"
+
+
+def _validate_file(filename: str, file_bytes: bytes, *, allow_images: bool = False) -> None:
+    """校验上传文件: 扩展名白名单 + 大小上限."""
     ext = Path(filename).suffix.lower()
-    if ext not in ALLOWED_EXTENSIONS:
-        raise ValueError(f"只支持 .txt / .md / .pdf, 收到 {ext}")
+    allowed = ALLOWED_CHAT_EXTENSIONS if allow_images else ALLOWED_EXTENSIONS
+    if ext not in allowed:
+        kinds = "txt/md/pdf" + ("/png/jpg/jpeg/gif/webp" if allow_images else "")
+        raise ValueError(f"只支持 {kinds}, 收到 {ext}")
     if len(file_bytes) > MAX_FILE_SIZE:
         raise ValueError(f"文件超过 50MB 限制")
+
+
+def _is_image(filename: str) -> bool:
+    return Path(filename).suffix.lower() in ALLOWED_IMAGE_EXTENSIONS
 
 
 def handle_kb_upload(body: bytes, content_type: str) -> dict:
@@ -113,7 +156,10 @@ def handle_kb_upload(body: bytes, content_type: str) -> dict:
 
     multipart/form-data:
         meeting_id: str (必填)
-        file: binary (必填, .txt/.md/.pdf)
+        file: binary (必填, .txt/.md/.pdf) — 单文件 (向后兼容老调用方)
+
+    2026-07-01 ADR-0023: _parse_multipart 升级支持多文件, 这里为向后兼容仍只取
+    files[0]. 多文件上传请走 handle_chat_upload (POST /api/meetings/{id}/chat).
     """
     try:
         parts = _parse_multipart(body, content_type)
@@ -121,13 +167,15 @@ def handle_kb_upload(body: bytes, content_type: str) -> dict:
         return {"error": f"解析请求失败: {e}", "status": 400}
 
     meeting_id = parts.get("meeting_id", "").strip()
-    file_bytes = parts.get("file")
-    filename = parts.get("filename", "unknown")
+    files = parts.get("files") or []
+    if not files:
+        return {"error": "file 必填", "status": 400}
+    first = files[0]
+    file_bytes = first["data"]
+    filename = first["filename"]
 
     if not meeting_id:
         return {"error": "meeting_id 必填", "status": 400}
-    if not file_bytes:
-        return {"error": "file 必填", "status": 400}
 
     try:
         _validate_file(filename, file_bytes)
@@ -176,6 +224,94 @@ def handle_kb_upload(body: bytes, content_type: str) -> dict:
         "filename": filename,
         "chunks": 1,
         "char_count": len(text),
+    }
+
+
+def handle_chat_upload(body: bytes, content_type: str, meeting_id: str) -> dict:
+    """POST /api/meetings/{id}/chat (multipart) — chat 多文件上传 (ADR-0023).
+
+    行为:
+      - 文件 (.txt/.md/.pdf) → 抽文本 + 入 KB (Chroma)
+      - 图片 (.png/.jpg/.gif/.webp) → 转 base64 data URI, 不入 KB, 走 LLM vision
+      - 返回每文件处理结果 (status/filename/error), chat agent 拿到 images 列表后
+        在 ollama /api/chat 调用里喂给 LLM.
+
+    multipart/form-data:
+        text: str (可选, 用户问的文本)
+        files: list[file] (可选, 多个)
+    """
+    try:
+        parts = _parse_multipart(body, content_type)
+    except ValueError as e:
+        return {"error": f"解析请求失败: {e}", "status": 400}
+
+    text = (parts.get("text") or "").strip()
+    files = parts.get("files") or []
+    if not text and not files:
+        return {"error": "text 或 files 至少一个非空", "status": 400}
+
+    # 每个文件单独处理
+    results: list[dict[str, Any]] = []
+    kb_doc_ids: list[str] = []
+    image_data_uris: list[str] = []
+
+    for f in files:
+        fname = f["filename"]
+        data = f["data"]
+        ct = f.get("content_type", "application/octet-stream")
+
+        try:
+            _validate_file(fname, data, allow_images=True)
+        except ValueError as e:
+            results.append({"filename": fname, "status": "rejected", "error": str(e)})
+            continue
+
+        if _is_image(fname):
+            # 图片 → base64, 不入库
+            try:
+                uri = _image_to_b64_data_uri(data, ct)
+                image_data_uris.append(uri)
+                results.append({"filename": fname, "status": "image", "data_uri_length": len(uri)})
+            except ValueError as e:
+                results.append({"filename": fname, "status": "rejected", "error": str(e)})
+        else:
+            # 文本类 → 入 KB
+            try:
+                content = _extract_text(data, fname)
+                if not content.strip():
+                    results.append({"filename": fname, "status": "empty"})
+                    continue
+                file_uuid = uuid.uuid4().hex[:12]
+                doc_id = f"{meeting_id}:chat-upload:{file_uuid}"
+                rag = get_rag()
+                now = datetime.now(timezone.utc).isoformat()
+                rag.add(
+                    ids=[doc_id],
+                    documents=[content],
+                    metadatas=[{
+                        "meeting_id": meeting_id,
+                        "source": f"chat-upload:{fname}",
+                        "uploaded_at": now,
+                        "chunk_index": 0,
+                        "file_size": len(data),
+                        "file_ext": Path(fname).suffix.lower().lstrip("."),
+                    }],
+                )
+                kb_doc_ids.append(doc_id)
+                results.append({"filename": fname, "status": "kb-stored", "doc_id": doc_id, "chars": len(content)})
+                logger.info("chat upload: meeting=%s file=%s doc_id=%s chars=%d", meeting_id, fname, doc_id, len(content))
+            except Exception as e:
+                logger.exception("chat upload failed: %s", fname)
+                results.append({"filename": fname, "status": "error", "error": str(e)})
+
+    return {
+        "status": 200,
+        "meeting_id": meeting_id,
+        "text": text,
+        "files": results,
+        "kb_doc_ids": kb_doc_ids,
+        "image_count": len(image_data_uris),
+        # 图片不直接返 data URI (太大), 由调用方按需从 chat 上下文拿
     }
 
 

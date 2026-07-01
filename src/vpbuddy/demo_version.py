@@ -211,6 +211,20 @@ def write_demo_version(
             f"[{meeting_id}] demo v{v} 已写 ({out.stat().st_size}B, "
             f"trigger={trigger}, summary={summary[:30]!r})"
         )
+
+        # 2026-07-01 ADR-0023 Phase 5: demo 新版本生成 → agent 主动 chat 通知
+        # sub_session_controller 已经推 SSE demo-new-version, 这里只补 chat 主动消息.
+        try:
+            from .agent_proactive import trigger as _proactive_trigger
+            _proactive_trigger(
+                meeting_id,
+                "demo_new_version",
+                version=v,
+                summary=summary,
+            )
+        except Exception:
+            pass  # 不影响主流程
+
         return {
             "ok": True,
             "version": v,

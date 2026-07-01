@@ -173,6 +173,22 @@ class MeetingState(BaseModel):
         risk = Risk(text=text, **kwargs)
         self.risks.append(risk)
         self._touch()
+
+        # 2026-07-01 ADR-0023 Phase 5: RISK 累计 >= 3 触发 agent 主动通知
+        # 阈值检查放这里, 跟 _touch 一起. 只算 MEDIUM/HIGH (LOW 不计).
+        try:
+            meaningful = [r for r in self.risks if r.severity.value in ("medium", "high")]
+            if len(meaningful) >= 3:
+                from .agent_proactive import trigger as _proactive_trigger
+                risk_list = [f"[{r.severity.value.upper()}] {r.text}" for r in meaningful[:5]]
+                _proactive_trigger(
+                    self.meeting_id,
+                    "risk_threshold",
+                    risk_list=risk_list,
+                )
+        except Exception:
+            pass  # proactive 失败不影响主流程
+
         return risk
 
     def add_question(self, text: str, is_urgent: bool = False, **kwargs) -> Question:
