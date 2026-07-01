@@ -25,6 +25,10 @@ pub struct AudioDeviceInfo {
 
 /// 2026-07-02 Phase 7 v0.8.0: 保活 cpal Stream (单/双 stream)
 /// `Single` 是 v0.7.x 老 path; `Merged` 是 v0.8.0 新 both path (双 stream 必须并存不掉线)
+// 注: `Single.0` 字段从不 read — cpal::Stream 仅靠保活工作 (持有 ≠ 调用字段),
+// 但 tuple variant 必带至少一个字段 (否则编译器让改成 unit variant 而 enum 语法变).
+// 加 allow(dead_code) 抑制警告, 保留 enum 二态语义 (Single | Merged) 清晰.
+#[allow(dead_code)]
 enum StreamGuard {
     Single(cpal::Stream),
     Merged {
@@ -45,6 +49,10 @@ pub struct AudioCapture {
 }
 
 impl AudioCapture {
+    // 2026-07-02: 三个 v0.7.x 留 pub API 不再被新代码调用, 但保留作向后兼容 + 文档化 KISS 入口
+    // `new` = 默认 mic path 便捷构造; `new_with_device` = v0.7.x 老签名; `is_loopback_active` = 给前端 status 面板预留
+    // 不删 (后续 v0.9 重构 AudioCaptureConfig struct 时一并删 + 替换)
+    #[allow(dead_code)]
     pub fn new() -> Result<Self> {
         Self::new_with_source(None, "microphone")
     }
@@ -106,6 +114,7 @@ impl AudioCapture {
     /// 2026-06-25: cherry-pick from feature/requirements-architecture-update
     /// 2026-06-27: 用设备原生采样率, 主循环 resample 到 16kHz
     /// 2026-07-02 Phase 7 v0.8.0: 仍 pub 保留向后兼容 (v0.7.x 调用方), 但内部 impl 全走 new_with_source
+    #[allow(dead_code)]  // 2026-07-02: v0.7.x 老签名, 新代码走 new_with_source. v0.9 重构 AudioCaptureConfig 时一并清理
     pub fn new_with_device(device_id: Option<String>, audio_source: &str) -> Result<Self> {
         log::debug!("audio_source={audio_source} (本期仅 log, mic path 仍走 new_with_device_inner)");
         let _ = audio_source; // suppress unused
@@ -339,6 +348,7 @@ impl AudioCapture {
 
     /// 2026-07-02 Phase 7 v0.8.0: 给外部判断当前采集是否含系统声 (loopback/both → true)
     /// run_capture_loop 用它在静音诊断 banner 区分 (loopback 静音可能正常, mic 静音异常)
+    #[allow(dead_code)]  // 2026-07-02: 当前 run_capture_loop 还未调用, 留作 v0.9 静音诊断 banner
     pub fn is_loopback_active(&self) -> bool { self.is_loopback }
 
     /// 读 N 秒 native 采样率 audio (blocking — 用于 spawn_blocking context)
@@ -500,6 +510,7 @@ pub fn mix_two_streams(mic: &[i16], loopback: &[i16]) -> Vec<i16> {
 ///
 /// v0.8.0 仍保留作 mic-only fallback 内部用 (multi-channel mic → mono downmix 时也可用)
 /// 实际新 both path 走 mix_two_streams (各 mono 之后混)
+#[allow(dead_code)]  // 2026-07-02: 当前 new_with_both_streams 走 mix_two_streams (各 mono), 留作 v0.9 soxr 重构时的备选
 pub fn mix_stereo_into(dst: &mut Vec<i16>, src: &[i16]) {
     debug_assert!(src.len() % 2 == 0, "mix_stereo_into expects even-length src (L/R frames)");
     let mut i = 0;
