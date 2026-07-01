@@ -131,11 +131,14 @@ jobs:
         # 产出 .app (release/bundle/macos/) + .dmg (release/bundle/dmg/)
         working-directory: vpbuddy-client/src-tauri
         run: npx tauri build --target x86_64-apple-darwin
-      - name: Upload .app artifact
+      - name: Package .app as zip (macOS bundle is a directory, release needs single file)
+        working-directory: vpbuddy-client/src-tauri/target/x86_64-apple-darwin/release/bundle/macos
+        run: zip -r VPBuddy.app.zip VPBuddy.app
+      - name: Upload .app.zip artifact
         uses: actions/upload-artifact@v4
         with:
           name: vpbuddy-client-macos-app
-          path: vpbuddy-client/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app
+          path: vpbuddy-client/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/VPBuddy.app.zip
           if-no-files-found: error
           retention-days: 30
       - name: Upload .dmg artifact
@@ -206,5 +209,6 @@ jobs:
           generate_release_notes: true
           files: |
             artifacts/**/*.deb
-            artifacts/**/*.app
+            artifacts/**/*.dmg
             artifacts/**/*.exe
+            artifacts/**/*.zip
