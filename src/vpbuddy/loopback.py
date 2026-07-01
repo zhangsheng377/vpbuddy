@@ -1,5 +1,12 @@
 """音频 loopback 采集(VPBuddy ADR-0004:不依赖会议平台 SDK,直接采集系统音频)
 
+⚠️ 2026-07-01 ADR-0021: 本文件**保留作开发/服务端备选**, 不是生产路径.
+生产 = Tauri 客户端 (`vpbuddy-client/src-tauri/src/audio.rs`) 在 VP 桌面直接采,
+通过 stream_chunk API 推到服务端. 本文件用法:
+  - 开发机调试: 不开客户端, 服务端直接采自己机器的音频
+  - Linux 服务器自采 (NVR 录像 / 现场设备)
+  - 不再扩展新功能, bug 修 OK, 新需求去 Tauri 端做
+
 支持平台:
 - Linux PipeWire / PulseAudio:monitor source
 - macOS:BlackHole / Soundflower / Loopback(待实现)

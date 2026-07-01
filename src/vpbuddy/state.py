@@ -32,6 +32,16 @@ class Platform(str, Enum):
     # FEISHU 在 2026-06-21 ADR-0008 中删除 — 不再是真实路径
 
 
+class AudioSourceKind(str, Enum):
+    """2026-07-01 ADR-0021: 客户端音频源类型 (麦克风 / 内录 / 双轨).
+
+    默认 MICROPHONE (兼容老客户端, 老 stream_start 不传 audio_source 时).
+    """
+    MICROPHONE = "microphone"   # 仅麦克风 (默认, 一期主流)
+    LOOPBACK = "loopback"       # 仅系统内录 (需平台支持: Linux .monitor / macOS BlackHole / Windows WASAPI loopback)
+    BOTH = "both"               # 双轨混合 (一期简化: 等权平均 mic+loopback)
+
+
 class Priority(str, Enum):
     HIGH = "high"
     MEDIUM = "medium"
@@ -120,6 +130,7 @@ class MeetingState(BaseModel):
     # === 基础信息 ===
     meeting_id: str = Field(default_factory=lambda: uuid4().hex[:12].upper())
     platform: Platform = Platform.LOCAL  # 默认 LOCAL (VP 桌面客户端麦克风/系统音频, ADR-0004)
+    audio_source: AudioSourceKind = AudioSourceKind.MICROPHONE  # 2026-07-01 ADR-0021: 麦克风/内录/双轨
     project_name: Optional[str] = None
     started_at: str = Field(default_factory=_now)
 

@@ -480,6 +480,10 @@ def _state_payload(state, include_items: bool = True) -> dict[str, Any]:
         "questions": len(state.open_questions),
         "last_updated": state.last_updated,
     }
+    # 2026-07-01 ADR-0021: 音频源类型, 默认 microphone
+    _as = getattr(state, "audio_source", None)
+    payload["audio_source"] = _as.value if _as else "microphone"
+    payload["platform"] = state.platform.value if hasattr(state, "platform") else "local"
     if include_items:
         payload["items"] = (
             _items(state.requirements, "req")
@@ -496,14 +500,26 @@ def list_meetings() -> list[dict]:
     if not DATA_DIR.exists():
         return []
     out = []
+    # 2026-07-01: 只列 STREAM_*.json (长连接会议) + 其它 *.json 排除 stream meta / chat history
+    # 实际: stream_start 创建 MeetingState, 存到 {mid}.json; chat history 存到 {mid}.chat.json
+    # 老格式 (2026-06 之前) 也用 {mid}.json. 所以 glob 全部 *.json, 跳过 *.chat.json
     for f in sorted(DATA_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        if f.suffix != ".json":
+            continue
+        # 跳过 chat history
+        if f.name.endswith(".chat.json"):
+            continue
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
+            # 必须是 meeting state 格式 (有 meeting_id 字段)
+            if "meeting_id" not in data:
+                continue
             item_count = sum(len(data.get(k, [])) for k in
                              ["requirements", "goals", "features", "risks", "open_questions"])
             out.append({
                 "meeting_id": data.get("meeting_id", f.stem),
                 "platform": data.get("platform", "unknown"),
+                "audio_source": data.get("audio_source", "microphone"),  # 2026-07-01 ADR-0021
                 "project_name": data.get("project_name"),
                 "started_at": data.get("started_at"),
                 "last_updated": data.get("last_updated"),
@@ -910,7 +926,24 @@ class Handler(BaseHTTPRequestHandler):
         })
 
     def _handle_stream_start(self):
-        """Tauri 客户端调用: 创建"持续接收"会议, 后续每 30s 推 chunk"""
+        """Tauri 客户端调用: 创建"持续接收"会议, 后续每 30s 推 chunk
+
+        2026-07-01 ADR-0021: 接受 audio_source 参数 (?audio_source=microphone|loopback|both),
+        存到 MeetingState.audio_source. 老客户端不传 → 默认 MICROPHONE (向后兼容).
+        """
+        from .state import AudioSourceKind  # 动态 import, ui_server 顶层不依赖 state
+        # 1. 解析 audio_source (query string, 老客户端不传 OK)
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(self.path)
+        qs = parse_qs(parsed.query)
+        audio_source_str = qs.get("audio_source", [""])[0].strip().lower() or AudioSourceKind.MICROPHONE.value
+        # 校验值, 非法 → fallback 默认 + warning
+        try:
+            audio_source = AudioSourceKind(audio_source_str)
+        except ValueError:
+            print(f"[ui_server] stream_start: invalid audio_source={audio_source_str!r}, fallback to microphone")
+            audio_source = AudioSourceKind.MICROPHONE
+
         meeting_id = f"STREAM_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
         # 占位 state (空), 后续 chunk 会更新
         try:
@@ -920,6 +953,7 @@ class Handler(BaseHTTPRequestHandler):
             state = MeetingState(
                 meeting_id=meeting_id,
                 platform=Platform.LOCAL,
+                audio_source=audio_source,
                 project_name=f"长连接会议 {meeting_id}",
             )
             storage.save(state)
@@ -928,12 +962,14 @@ class Handler(BaseHTTPRequestHandler):
                 "transcript_segments": [],
                 "metrics": [],
                 "created_at": datetime.now().isoformat(),
+                "audio_source": audio_source.value,
             })
         except Exception as e:
             return self._json({"error": f"create state failed: {e}"}, 500)
         return self._json({
             "meeting_id": meeting_id,
             "chunk_interval_sec": 30,
+            "audio_source": audio_source.value,
             "message": "Stream started, send 30s WAV chunks to /api/meetings/{id}/stream_chunk",
         })
 
@@ -1447,7 +1483,7 @@ class Handler(BaseHTTPRequestHandler):
 
             # 2. ingest 到 MeetingState (复用 ingest.ingest_transcript)
             from .ingest import ingest_transcript
-            from .state import Platform
+            from .state import Platform, AudioSourceKind
             state = ingest_transcript(
                 meeting_id=meeting_id,
                 transcript=transcript,
