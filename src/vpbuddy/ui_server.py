@@ -514,6 +514,16 @@ def list_meetings() -> list[dict]:
     return out
 
 
+def _validate_meeting_id(mid: str) -> tuple[bool, str]:
+    """校验 meeting_id 格式 (ADR-0022). 返 (ok, err_msg)."""
+    import re
+    if not (3 <= len(mid) <= 32):
+        return False, "会议名长度 3-32 字符"
+    if not re.match(r"^[A-Za-z0-9_\-]+$", mid):
+        return False, "会议名只能含字母数字下划线连字符, 无空格/中文"
+    return True, ""
+
+
 def get_timeline() -> list[dict]:
     """全部累积项按 created_at 倒序(时间线)"""
     events = []
@@ -668,6 +678,18 @@ class Handler(BaseHTTPRequestHandler):
             meetings = list_meetings()
             return self._json({"meetings": meetings, "count": len(meetings)})
 
+        # API: meeting ID 重名校验 (ADR-0022 — 首页建会议前先查)
+        # GET /api/meetings/check_id?id=XXX → {"id": "XXX", "exists": bool}
+        if path == "/api/meetings/check_id":
+            mid = params.get("id", [""])[0].strip()
+            if not mid:
+                return self._json({"error": "id 必填", "status": 400}, 400)
+            ok, err = _validate_meeting_id(mid)
+            if not ok:
+                return self._json({"id": mid, "valid": False, "error": err}, 400)
+            meeting_data_path = DATA_DIR / f"{mid}.json"
+            return self._json({"id": mid, "valid": True, "exists": meeting_data_path.exists()})
+
         # API: timeline
         if path == "/api/timeline":
             events = get_timeline()
@@ -747,6 +769,13 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/meetings/") and path.endswith("/stream_stop"):
             meeting_id = path.split("/")[3]
             return self._handle_stream_stop(meeting_id)
+
+        # API: 手动 [结束会议] 按钮 (ADR-0022)
+        # POST /api/meetings/{id}/close → 推 meeting-complete + close_meeting
+        # 与 stream_stop 区别: stream_stop = 停录音 (SSE 还活), close = 真结束会议
+        if path.startswith("/api/meetings/") and path.endswith("/close"):
+            meeting_id = path.split("/")[3]
+            return self._handle_meeting_close(meeting_id)
 
         # API: 流式 chunk — 接收 30s 切片 + 立即触发 6 docs
         # 2026-06-25: 默认走原同步模式 (向后兼容). 加 ?sync=false 走异步 fire-and-forget,
@@ -1516,7 +1545,12 @@ class Handler(BaseHTTPRequestHandler):
                 print(f"[SSE] {meeting_id} error: {e}")
 
     def _handle_stream_stop(self, meeting_id: str):
-        """2026-06-27: 客户端 stop_capture 调用, 关闭 SSE + 清残留"""
+        """2026-06-27: 客户端 stop_capture 调用, 关闭 SSE + 清残留
+
+        ⚠️ 2026-07-01 ADR-0022 语义: stream_stop = 停录音 (SSE 还活)
+        真结束会议走 _handle_meeting_close (POST /api/meetings/{id}/close).
+        老调用方 (stop_capture) 走这里 — 兼容保留, 不主动推 meeting-complete.
+        """
         try:
             from .realtime_server import close_meeting
             closed = close_meeting(meeting_id)
@@ -1527,6 +1561,32 @@ class Handler(BaseHTTPRequestHandler):
             "closed_subscribers": closed,
             "message": "Stream stopped, SSE subscribers closed",
         })
+
+    def _handle_meeting_close(self, meeting_id: str):
+        """2026-07-01 ADR-0022: 用户主动 [结束会议] 按钮调
+
+        行为:
+        1. push_event("meeting-complete", {...}) — 客户端 SSE 收到, 状态切 'closed'
+        2. close_meeting(meeting_id) — 服务端 SSE 订阅者退出
+
+        调用方: UI 手动按钮 / 客户端断开前 / 切会议时 (前一个会议).
+        """
+        try:
+            from .realtime_server import push_event, close_meeting
+            push_event(meeting_id, "meeting-complete", {
+                "meeting_id": meeting_id,
+                "status": "user_closed",
+                "note": "用户主动结束 (ADR-0022)",
+            })
+            closed = close_meeting(meeting_id)
+            print(f"[ui_server] 用户主动 close_meeting: {meeting_id}, 关闭 {closed} 个 SSE 订阅者")
+            return self._json({
+                "meeting_id": meeting_id,
+                "closed_subscribers": closed,
+                "status": "closed",
+            })
+        except Exception as e:
+            return self._json({"error": str(e)}, 500)
 
     def _500(self, msg):
         self.send_response(500)

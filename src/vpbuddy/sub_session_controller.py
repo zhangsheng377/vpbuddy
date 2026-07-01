@@ -519,13 +519,13 @@ def trigger_sub_session(meeting_id: str, doc_kind: str, dry_run: bool = False) -
     # 7. ADR-0020: 废弃 6 docs 自动入 KB. 文档写完只推 SSE + 检查全文档完成.
     # 旧 KB 逻辑 (_kb_bg 自动 ingest) 已删除. 用户主动上传走 /api/kb/upload.
     if result.get("triggered") and doc_path.exists():
-        # 2026-06-28: ADR-0018 — 6 docs 全 stored 后, 推 meeting-complete + close_meeting
-        # 让客户端 SSE 自然退出 (不再需要前端轮询文档状态)
+        # 2026-07-01: ADR-0022 — 6 docs 全 stored 推 docs-complete, **不** 关会议
+        # 会议结束 = 切会议 / 关客户端 / 用户手动 [结束会议] (POST /api/meetings/{id}/close)
         try:
-            from .ui_server_helpers import check_all_docs_stored_and_close
-            check_all_docs_stored_and_close(meeting_id)
+            from .ui_server_helpers import check_all_docs_stored_notify
+            check_all_docs_stored_notify(meeting_id)
         except Exception as e:
-            logger.warning(f"[{meeting_id}/{doc_kind}] check_all_docs_stored_and_close failed: {e}")
+            logger.warning(f"[{meeting_id}/{doc_kind}] check_all_docs_stored_notify failed: {e}")
 
     return result
 
