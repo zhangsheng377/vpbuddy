@@ -44,7 +44,6 @@ os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 DOCS_DIR = Path(os.environ.get("VPBUDDY_DOCS_DIR", "/home/zsd/vpbuddy/docs"))
 DATA_DIR = Path(os.environ.get("VPBUDDY_DATA_DIR", "/home/zsd/vpbuddy/data/meetings"))
 UI_DIR = Path(os.environ.get("VPBUDDY_UI_DIR", "/home/zsd/vpbuddy/ui"))
-KB_PATH = Path(os.environ.get("VPBUDDY_KB_DB", "/home/zsd/vpbuddy/data/knowledge.db"))
 CONTROLLER_PID_FILE = Path("/tmp/vpbuddy_controller.pid")
 CONTROLLER_LOG = Path("/tmp/vpbuddy_controller.log")
 
@@ -546,23 +545,7 @@ def get_timeline() -> list[dict]:
     return events
 
 
-def search_kb(query: str, top_k: int = 5) -> list[dict]:
-    """跨会议 RAG 检索"""
-    if not KB_PATH.exists() or not query.strip():
-        return []
-    try:
-        sys.path.insert(0, str(Path(__file__).parent))
-        from .knowledge_base import KnowledgeBase
-        kb = KnowledgeBase(db_path=str(KB_PATH))
-        results = kb.search(query, top_k=top_k)
-        kb.close()
-        return results
-    except Exception as e:
-        return [{"error": str(e)}]
-
-
 def get_status() -> dict:
-    """Controller + 数据状态"""
     # Controller 状态
     controller = {
         "running": False,
@@ -602,20 +585,9 @@ def get_status() -> dict:
                     total_docs += 1
 
     kb_docs = 0
-    kb_failed = 0
-    if KB_PATH.exists():
-        try:
-            import sqlite3
-            conn = sqlite3.connect(str(KB_PATH))
-            cur = conn.execute("SELECT COUNT(*) FROM documents")
-            kb_docs = cur.fetchone()[0]
-            conn.close()
-        except Exception:
-            pass
-    # 2026-06-22 加 failed 计数 (sub_session_controller 的 _KB_STATUS)
     try:
-        from .sub_session_controller import get_kb_status
-        kb_failed = get_kb_status().get("summary", {}).get("failed", 0)
+        from .rag_backend import get_rag
+        kb_docs = get_rag().count()
     except Exception:
         pass
 
@@ -625,7 +597,6 @@ def get_status() -> dict:
             "active_meetings": len(meetings),
             "total_docs": total_docs,
             "kb_docs": kb_docs,
-            "kb_failed": kb_failed,
         },
         "paths": {
             "data_dir": str(DATA_DIR),
@@ -704,18 +675,28 @@ class Handler(BaseHTTPRequestHandler):
 
         # API: kb search
         if path == "/api/kb/search":
-            q = params.get("q", [""])[0]
-            top_k = int(params.get("top_k", ["5"])[0])
-            if not q.strip():
-                return self._json({"query": "", "results": []})
-            results = search_kb(q, top_k=top_k)
-            return self._json({"query": q, "results": results, "count": len(results)})
+            if self.command == "GET":
+                q = params.get("q", [""])[0]
+                meeting_id = params.get("meeting_id", [None])[0]
+                if not q.strip():
+                    return self._json({"results": []})
+                from .kb_api import handle_kb_search
+                result = handle_kb_search(params, b"")
+                return self._json(result)
+            else:
+                # POST body handled in do_POST
+                return self._json({"error": "use POST with JSON body"}, 405)
 
-        # API: kb status (2026-06-22 — 跨会议 KB 写入状态)
-        if path == "/api/kb/status":
-            from .sub_session_controller import get_kb_status
-            meeting_id = params.get("meeting_id", [None])[0]
-            return self._json(get_kb_status(meeting_id=meeting_id))
+        # API: kb list
+        if path == "/api/kb/list":
+            from .kb_api import handle_kb_list
+            return self._json(handle_kb_list(params))
+
+        # API: kb delete
+        kb_del_match = re.match(r"^/api/kb/([a-zA-Z0-9:_-]+)$", path)
+        if kb_del_match and self.command == "DELETE":
+            from .kb_api import handle_kb_delete
+            return self._json(handle_kb_delete(path))
 
         # API: status
         if path == "/api/status":
@@ -783,6 +764,23 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/meetings/") and path.endswith("/chat"):
             meeting_id = path.split("/")[3]
             return self._handle_chat(meeting_id)
+
+        # API: KB upload (multipart)
+        if path == "/api/kb/upload":
+            content_type = self.headers.get("Content-Type", "")
+            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            from .kb_api import handle_kb_upload
+            result = handle_kb_upload(body, content_type)
+            return self._json(result, result.get("status", 200))
+
+        # API: KB search (POST with JSON body)
+        if path == "/api/kb/search":
+            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            parsed = urlparse(self.path)
+            qs = parse_qs(parsed.query)
+            from .kb_api import handle_kb_search
+            result = handle_kb_search(qs, body)
+            return self._json(result)
 
         return self._404(path)
 
@@ -1544,17 +1542,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--host", default="0.0.0.0", help="绑定地址(默认 0.0.0.0)")
     args = parser.parse_args(argv)
 
-    # KB embedding 模型首次加载慢,启动时预热
-    if KB_PATH.exists():
-        try:
-            print(f"预热 KB embedding 模型...", flush=True)
-            from .knowledge_base import KnowledgeBase
-            kb = KnowledgeBase(db_path=str(KB_PATH))
-            _ = kb._get_model()  # 触发加载
-            kb.close()
-            print(f"✅ KB 模型预热完成", flush=True)
-        except Exception as e:
-            print(f"⚠️ KB 预热失败(忽略): {e}", flush=True)
+    # KB Chroma 首次加载 embedding 模型 ~1s, 启动时预热
+    try:
+        from .rag_backend import get_rag
+        get_rag().count()
+    except Exception as e:
+        pass
 
     # 2026-06-28: 启动时打印版本号 — 一眼看出是否最新 release
     try:
@@ -1566,7 +1559,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"   UI:    http://{args.host}:{args.port}/", flush=True)
     print(f"   DATA:  {DATA_DIR}", flush=True)
     print(f"   DOCS:  {DOCS_DIR}", flush=True)
-    print(f"   KB:    {KB_PATH}", flush=True)
+    from .rag_backend import ChromaRAG
+    print(f"   KB:    {ChromaRAG.__module__} (Chroma 嵌入式)", flush=True)
     # 2026-06-27: IPv6 dual-stack — 默认 --host=:: 让 v4+v6 同时可连
     # 老的 0.0.0.0 仅 IPv4; 用户的域名 gpu.zhangshengdong.com 只有 AAAA 记录
     if args.host == "0.0.0.0":

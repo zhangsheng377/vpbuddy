@@ -120,6 +120,7 @@
 | Tauri 2.6.3 去掉 `window.__TAURI__`, 必须用 ESM `import` from `@tauri-apps/api` | Vite 构建 OK, 直接 `index.html` 加载会失败 | 2026-06-26 |
 | 飞书子 session prompt 泄露 VPBuddy 身份 | 子 agent prompt 改为"你是本次会议的助手"+ 数据隔离 | commit `c412abe` |
 | 客户端 `gpu.zhangshengdong.com` IPv6-only 域名在 V 家网 (IPv4 单栈) 解析不到 | LAN 直连 `http://192.168.10.63:8765` | 2026-07-01 |
+| Chroma 第一次 query 加载 embedding 模型 ~1s | 启动时预热 `get_rag().count()` | ADR-0019 |
 
 ---
 

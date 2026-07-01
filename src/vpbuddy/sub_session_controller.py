@@ -506,140 +506,23 @@ def trigger_sub_session(meeting_id: str, doc_kind: str, dry_run: bool = False) -
         except Exception as e:
             logger.warning(f"[{meeting_id}/{doc_kind}] push SSE doc-update failed: {e}")
 
-    # 7. 写完文档后,自动存进知识库(2026-06-22 增强:kb_status + 3 次 retry)
+    # 7. ADR-0020: 废弃 6 docs 自动入 KB. 文档写完只推 SSE + 检查全文档完成.
+    # 旧 KB 逻辑 (_kb_bg 自动 ingest) 已删除. 用户主动上传走 /api/kb/upload.
     if result.get("triggered") and doc_path.exists():
-        content = doc_path.read_text(encoding="utf-8")
-        # 把 KB 状态挂在 _KB_STATUS 全局 dict,UI / controller / log 都能查
-        # key = (meeting_id, doc_kind),value = {status, error, attempts, ts}
-        with _KB_STATUS_LOCK:
-            _KB_STATUS[(meeting_id, doc_kind)] = {
-                "status": "queued",
-                "attempts": 0,
-                "started_at": datetime.now().isoformat(),
-                "error": None,
-            }
-        result["kb_queued"] = True
-        result["kb_status_key"] = [meeting_id, doc_kind]
-
-        # KB 存 background thread 跑,sentence-transformers 冷加载 40s 不阻塞 trigger
-        # 失败自动 retry 3 次(指数退避: 5s / 25s / 125s)
-        def _kb_bg():
-            max_retries = 3
-            for attempt in range(1, max_retries + 1):
-                try:
-                    from .knowledge_base import get_kb
-                    kb = get_kb()
-                    doc_id = kb.add_document(meeting_id, doc_kind, content)
-                    with _KB_STATUS_LOCK:
-                        _KB_STATUS[(meeting_id, doc_kind)] = {
-                            "status": "stored",
-                            "attempts": attempt,
-                            "started_at": _KB_STATUS[(meeting_id, doc_kind)]["started_at"],
-                            "completed_at": datetime.now().isoformat(),
-                            "doc_id": doc_id,
-                            "error": None,
-                        }
-                    # 推送 SSE: KB 入库完成
-                    try:
-                        from .realtime_server import push_event
-                        push_event(meeting_id, "doc-update", {
-                            "kind": doc_kind,
-                            "status": "stored",
-                            "meeting_id": meeting_id,
-                            "doc_id": doc_id,
-                            "kb_stored": True,
-                        })
-                        # 2026-06-28: ADR-0018 — 6 docs 全 stored 后, 推 meeting-complete + close_meeting
-                        # 让客户端 SSE 自然退出 (不再需要前端轮询文档状态)
-                        from .ui_server_helpers import check_all_docs_stored_and_close
-                        check_all_docs_stored_and_close(meeting_id)
-                    except Exception as e:
-                        logger.warning(f"[{meeting_id}/{doc_kind}] push SSE kb-stored failed: {e}")
-                    logger.info(f"[{meeting_id}/{doc_kind}] KB stored (doc_id={doc_id}, attempt {attempt})")
-                    return
-                except Exception as e:
-                    err_msg = f"{type(e).__name__}: {str(e)[:200]}"
-                    logger.warning(f"[{meeting_id}/{doc_kind}] KB store attempt {attempt}/{max_retries} failed: {err_msg}")
-                    with _KB_STATUS_LOCK:
-                        # 防御:key 可能被外部 _KB_STATUS.clear() 清掉,用 setdefault 保住
-                        _KB_STATUS.setdefault((meeting_id, doc_kind), {
-                            "status": "queued", "attempts": 0,
-                            "started_at": datetime.now().isoformat(), "error": None,
-                        })
-                        _KB_STATUS[(meeting_id, doc_kind)].update({
-                            "status": "retrying" if attempt < max_retries else "failed",
-                            "attempts": attempt,
-                            "error": err_msg,
-                        })
-                    if attempt < max_retries:
-                        import time as _t
-                        _t.sleep(5 ** attempt)
-            logger.error(f"[{meeting_id}/{doc_kind}] KB store FAILED after {max_retries} attempts: {_KB_STATUS.get((meeting_id, doc_kind), {}).get('error')}")
-
-        threading.Thread(target=_kb_bg, daemon=True).start()
+        # 2026-06-28: ADR-0018 — 6 docs 全 stored 后, 推 meeting-complete + close_meeting
+        # 让客户端 SSE 自然退出 (不再需要前端轮询文档状态)
+        try:
+            from .ui_server_helpers import check_all_docs_stored_and_close
+            check_all_docs_stored_and_close(meeting_id)
+        except Exception as e:
+            logger.warning(f"[{meeting_id}/{doc_kind}] check_all_docs_stored_and_close failed: {e}")
 
     return result
 
 
 def get_kb_status(meeting_id: Optional[str] = None) -> Dict[str, Any]:
-    """获取 KB 状态摘要(给 UI / CLI / log 用)
-
-    Args:
-        meeting_id: 只看某个会议的状态,None = 全部
-
-    Returns:
-        {
-          "summary": {"total": N, "stored": X, "failed": Y, "queued": Z, "retrying": W},
-          "items": [
-            {"meeting_id": ..., "doc_kind": ..., "status": ..., "attempts": ..., "error": ...},
-            ...
-          ]
-        }
-    """
-    items = []
-    summary = {"total": 0, "stored": 0, "failed": 0, "queued": 0, "retrying": 0}
-    with _KB_STATUS_LOCK:
-        snapshot = list(_KB_STATUS.items())
-    for (mid, kind), st in snapshot:
-        if meeting_id and mid != meeting_id:
-            continue
-        item = {"meeting_id": mid, "doc_kind": kind, **st}
-        items.append(item)
-        summary["total"] += 1
-        status_key = st.get("status", "queued")
-        summary[status_key] = summary.get(status_key, 0) + 1
-
-    # === 2026-06-22 修复:_KB_STATUS 是 process-local,CLI/UI 在新进程里 = 0 ===
-    # fallback:从 KB DB 查 documents 数量(已落库的)
-    if summary["total"] == 0:
-        try:
-            import sqlite3
-            from .knowledge_base import get_kb
-            kb = get_kb()
-            conn = sqlite3.connect(kb.db_path)
-            conn.enable_load_extension(True)
-            try:
-                import sqlite_vec
-                sqlite_vec.load(conn)
-            except Exception:
-                pass
-            c = conn.cursor()
-            if meeting_id:
-                c.execute("SELECT doc_kind FROM documents WHERE meeting_id=?", (meeting_id,))
-                for (kind,) in c.fetchall():
-                    items.append({"meeting_id": meeting_id, "doc_kind": kind, "status": "stored", "attempts": 0, "error": None, "source": "kb_db"})
-                    summary["stored"] += 1
-            else:
-                c.execute("SELECT meeting_id, doc_kind FROM documents")
-                for mid, kind in c.fetchall():
-                    items.append({"meeting_id": mid, "doc_kind": kind, "status": "stored", "attempts": 0, "error": None, "source": "kb_db"})
-                    summary["stored"] += 1
-            conn.close()
-            summary["total"] = summary["stored"]
-        except Exception as e:
-            logger.warning(f"[kb_status] fallback to KB DB failed: {e}")
-
-    return {"summary": summary, "items": items}
+    """ADR-0020: KB 自动 ingest 已废弃, 返回空. 保留 stub 兼容 cli.py."""
+    return {"summary": {"total": 0, "stored": 0, "failed": 0, "queued": 0, "retrying": 0}, "items": []}
 
 
 def run_one_round(
