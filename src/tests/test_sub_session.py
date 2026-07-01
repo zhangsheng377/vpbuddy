@@ -28,10 +28,13 @@ os.environ["VPBUDDY_DOCS_DIR"] = TEST_DOCS
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from vpbuddy.sub_session_controller import (
-    DOC_KINDS,
+    DOC_KINDS,           # 6 老 kinds (deprecated identifier, commit 3 保留兼容 stub)
     DOCS_DIR,
     DATA_DIR,
     PROMPTS_DIR,
+    BATCH_DOCS_KIND,     # 2026-07-01 ADR-0029 新加
+    DEMO_KIND,           # 2026-07-01 ADR-0029 新加
+    SCHEDULED_KINDS,     # 2026-07-01 ADR-0029 新加: [batch_docs, demo]
     format_state_summary,
     get_doc_path,
     list_active_meetings,
@@ -92,15 +95,14 @@ class TestMeetingListing:
 
 class TestDocPath:
     def test_markdown_doc(self, populated_meeting):
-        """req/arch/tasks/api/risk → .md"""
-        for kind in ["req", "arch", "tasks", "api", "risk"]:
-            p = get_doc_path(populated_meeting, kind)
-            assert p.suffix == ".md"
-            assert populated_meeting in str(p)
+        """2026-07-01 ADR-0029: v0.7 batch_docs → .md (1 次 LLM 输出 5 文档含 markdown)"""
+        p = get_doc_path(populated_meeting, BATCH_DOCS_KIND)
+        assert p.suffix == ".md"
+        assert populated_meeting in str(p)
 
     def test_demo_doc(self, populated_meeting):
         """demo → demo.html 在子目录"""
-        p = get_doc_path(populated_meeting, "demo")
+        p = get_doc_path(populated_meeting, DEMO_KIND)
         assert p.name == "demo.html"
         assert "demo" in str(p)
 
@@ -134,8 +136,8 @@ class TestFormatStateSummary:
 
 class TestRenderPrompt:
     def test_uses_specific_template(self):
-        """req/arch/tasks/api/risk/demo 有各自模板"""
-        for kind in DOC_KINDS:
+        """2026-07-01 ADR-0029: 只校验 v0.7 真用 2 kinds 对应 prompt 模板各自带自己名字 + 都不指定具体工具名"""
+        for kind in SCHEDULED_KINDS:
             p = render_prompt(kind, "MID", "## 累积", None)
             # 每种 doc_kind 模板都提到自己
             assert kind in p.lower() or kind in p
@@ -151,7 +153,7 @@ class TestRenderPrompt:
 
     def test_includes_state_summary(self):
         """prompt 包含累积摘要"""
-        p = render_prompt("req", "MID", "## 累积\n- 需求 1", None)
+        p = render_prompt(BATCH_DOCS_KIND, "MID", "## 累积\n- 需求 1", None)
         assert "需求 1" in p
 
     def test_first_run_shows_no_previous(self):
@@ -161,7 +163,7 @@ class TestRenderPrompt:
 
     def test_subsequent_run_includes_previous(self):
         """非首次运行,包含上次输出"""
-        p = render_prompt("req", "MID", "## 累积", "## 上次的 req 文档")
+        p = render_prompt(BATCH_DOCS_KIND, "MID", "## 累积", "## 上次的 req 文档")
         assert "上次的 req 文档" in p
 
 
@@ -187,12 +189,12 @@ class TestTriggerDryRun:
 
 
 class TestRunOneRound:
-    def test_runs_all_kinds_for_one_meeting(self, populated_meeting):
-        """一个会议触发 6 种 doc_kind(都 dry_run)"""
+    def test_runs_scheduled_kinds_for_one_meeting(self, populated_meeting):
+        """2026-07-01 ADR-0029: 1 个会议触发 SCHEDULED_KINDS=2 (batch_docs + demo), dry_run"""
         results = run_one_round(meeting_ids=[populated_meeting], dry_run=True)
-        assert len(results) == 6
+        assert len(results) == len(SCHEDULED_KINDS)
         kinds = {r["session_id"].split(":")[-1] for r in results}
-        assert kinds == set(DOC_KINDS)
+        assert kinds == set(SCHEDULED_KINDS)
 
     def test_empty_no_meetings_no_results(self):
         """空目录无会议 → 0 results"""
@@ -201,22 +203,34 @@ class TestRunOneRound:
 
 
 class TestDocKinds:
-    def test_exactly_six_kinds(self):
-        """MVP 固定 6 种(架构 v1.16 决定)"""
+    def test_legacy_six_kinds_identifier_preserved(self):
+        """2026-07-01 ADR-0029 落地: DOC_KINDS 6 老 kinds 保留作 deprecated identifier
+        (controller 老 _dispatch_kind 兼容 stub 引用), 但 run_one_round 真用 SCHEDULED_KINDS=2.
+        此测试保证 DOC_KINDS 字符串列表不退化 (历史兼容 stub 不能被静默删).
+        """
         assert len(DOC_KINDS) == 6
         assert set(DOC_KINDS) == {"req", "arch", "tasks", "api", "risk", "demo"}
 
+    def test_scheduled_kinds_v_0_7(self):
+        """ADR-0029 钉死的 v0.7 调度: 2 kinds (batch_docs + demo)."""
+        assert SCHEDULED_KINDS == [BATCH_DOCS_KIND, DEMO_KIND]
+        assert set(SCHEDULED_KINDS) == {"batch_docs", "demo"}
+        assert "batch_docs" not in DOC_KINDS  # 新 kind 不混进 deprecated identifier
+        assert "demo" in DOC_KINDS  # demo 同时是两套
+
 
 class TestPromptTemplates:
-    def test_all_templates_exist(self):
-        """6 个 prompt 模板都存在"""
-        for kind in DOC_KINDS:
+    """2026-07-01 ADR-0029 修正: 只校验 v0.7 真用的 2 个 prompt + 物理在场的少量 ones."""
+
+    def test_scheduled_templates_exist(self):
+        """v0.7 真调度 2 kinds (batch_docs + demo) 对应 prompt 文件存在"""
+        for kind in SCHEDULED_KINDS:
             p = PROMPTS_DIR / f"{kind}.md"
-            assert p.exists(), f"Missing prompt: {p}"
+            assert p.exists(), f"Missing prompt for v0.7 scheduled kind: {p}"
 
     def test_templates_no_tool_specification(self):
-        """模板不指定具体工具名(用户纠错)"""
-        for kind in DOC_KINDS:
+        """模板不指定具体工具名(用户纠错, 跨版本适用)"""
+        for kind in SCHEDULED_KINDS:
             content = (PROMPTS_DIR / f"{kind}.md").read_text(encoding="utf-8")
             # 不应该有"用 read_file" / "用 write_file" 这种工具指定
             bad_patterns = [
@@ -232,7 +246,7 @@ class TestPromptTemplates:
 
     def test_templates_mention_yagni(self):
         """模板都有 YAGNI 提醒(避免过度生成)"""
-        for kind in DOC_KINDS:
+        for kind in SCHEDULED_KINDS:
             content = (PROMPTS_DIR / f"{kind}.md").read_text(encoding="utf-8")
             assert "YAGNI" in content or "不主动" in content
 
@@ -249,10 +263,10 @@ class TestAgentCache:
             pytest.skip("AIAgent not available (no hermes-agent)")
 
         _AGENT_CACHE.clear()  # 测试隔离
-        sid = _agent_session_id("CACHE_TEST_001", "req")
+        sid = _agent_session_id("CACHE_TEST_001", BATCH_DOCS_KIND)
 
-        a1 = _get_or_create_agent("CACHE_TEST_001", "req")
-        a2 = _get_or_create_agent("CACHE_TEST_001", "req")
+        a1 = _get_or_create_agent("CACHE_TEST_001", BATCH_DOCS_KIND)
+        a2 = _get_or_create_agent("CACHE_TEST_001", BATCH_DOCS_KIND)
         assert a1 is a2, "Expected same AIAgent instance for same (mid, kind)"
         assert sid in _AGENT_CACHE
 
@@ -264,16 +278,16 @@ class TestAgentCache:
             pytest.skip("AIAgent not available")
 
         _AGENT_CACHE.clear()
-        a_req = _get_or_create_agent("CACHE_TEST_002", "req")
-        a_arch = _get_or_create_agent("CACHE_TEST_002", "arch")
+        a_req = _get_or_create_agent("CACHE_TEST_002", BATCH_DOCS_KIND)
+        a_arch = _get_or_create_agent("CACHE_TEST_002", DEMO_KIND)
         assert a_req is not a_arch
         assert len(_AGENT_CACHE) == 2
 
     def test_session_id_format(self):
         """session_id 格式 = meeting:{mid}:{kind}(不依赖 AIAgent)"""
         from vpbuddy.sub_session_controller import _agent_session_id
-        assert _agent_session_id("MTG123", "req") == "meeting:MTG123:req"
-        assert _agent_session_id("PHASE2_TEST", "demo") == "meeting:PHASE2_TEST:demo"
+        assert _agent_session_id("MTG123", BATCH_DOCS_KIND) == "meeting:MTG123:batch_docs"
+        assert _agent_session_id("PHASE2_TEST", DEMO_KIND) == "meeting:PHASE2_TEST:demo"
 
 
 class TestVpbuddyDirectMode:
@@ -282,7 +296,7 @@ class TestVpbuddyDirectMode:
     def test_direct_mode_skips_llm(self, populated_meeting, monkeypatch):
         """VPBUDDY_DIRECT=1 时,trigger 不调 LLM,只返 prompt + doc_path"""
         monkeypatch.setenv("VPBUDDY_DIRECT", "1")
-        r = trigger_sub_session(populated_meeting, "req", dry_run=False)
+        r = trigger_sub_session(populated_meeting, BATCH_DOCS_KIND, dry_run=False)
         assert r["triggered"] is True
         assert r.get("agent_path") == "direct"
         assert "doc_path" in r
@@ -371,19 +385,19 @@ class TestKbStatus:
         """dry_run=True 不写 KB → _KB_STATUS 没该项"""
         from vpbuddy.sub_session_controller import _KB_STATUS, trigger_sub_session
         _KB_STATUS.clear()
-        trigger_sub_session(populated_meeting, "req", dry_run=True)
-        assert (populated_meeting, "req") not in _KB_STATUS
+        trigger_sub_session(populated_meeting, BATCH_DOCS_KIND, dry_run=True)
+        assert (populated_meeting, BATCH_DOCS_KIND) not in _KB_STATUS
 
     def test_kb_status_after_actual_trigger(self, populated_meeting):
         """ADR-0020: KB 自动 ingest 已废弃, 验证不再写入 _KB_STATUS"""
         from vpbuddy.sub_session_controller import _KB_STATUS, trigger_sub_session, get_doc_path
-        doc_path = get_doc_path(populated_meeting, "req")
+        doc_path = get_doc_path(populated_meeting, BATCH_DOCS_KIND)
         doc_path.parent.mkdir(parents=True, exist_ok=True)
         doc_path.write_text("# Test req doc\n", encoding="utf-8")
         try:
-            r = trigger_sub_session(populated_meeting, "req", dry_run=False)
+            r = trigger_sub_session(populated_meeting, BATCH_DOCS_KIND, dry_run=False)
             if r["triggered"]:
-                assert (populated_meeting, "req") not in _KB_STATUS, \
+                assert (populated_meeting, BATCH_DOCS_KIND) not in _KB_STATUS, \
                     "KB auto-ingest should be disabled by ADR-0020"
         finally:
             doc_path.unlink(missing_ok=True)
@@ -418,7 +432,7 @@ class TestTriggerWritesFile:
         """
         from vpbuddy import sub_session_controller as ctrl
         # 1. 删可能存在的旧文件
-        doc_path = get_doc_path(populated_meeting, "req")
+        doc_path = get_doc_path(populated_meeting, BATCH_DOCS_KIND)
         if doc_path.exists():
             doc_path.unlink()
         # 2. Mock _trigger_via_aiagent 让它返 triggered=True 但不写文件
@@ -434,7 +448,7 @@ class TestTriggerWritesFile:
         monkeypatch.setattr(ctrl, "_AGENT_AVAILABLE", True)
         monkeypatch.setenv("VPBUDDY_FALLBACK", "0")
         # 3. 调 trigger
-        r = trigger_sub_session(populated_meeting, "req", dry_run=False)
+        r = trigger_sub_session(populated_meeting, BATCH_DOCS_KIND, dry_run=False)
         # 4. 验证:triggered=False + error 信息
         assert r["triggered"] is False, f"应返 False 因为 FALLBACK=0 且文件没写,实得: {r}"
         assert "did not write" in r["error"]
