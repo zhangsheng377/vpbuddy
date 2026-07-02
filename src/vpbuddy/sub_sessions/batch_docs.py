@@ -142,8 +142,23 @@ def trigger_batch_docs(
         return result
     state_summary = format_state_summary(state)
 
-    # 2. 读 5 文档上次输出
+    # 2026-07-03 v0.8.4: 全新空会议 (state.facts 全空 + 5 docs 全无文件) → skip
+    # 空会议没说话, 不强制 LLM 写"未产出"骨架刷 doc panel.
+    # 客户端 6 docs 占位 empty, 等 state 有积累后再触发.
+    state_has_facts = bool(
+        state.requirements or state.goals or state.features
+        or state.risks or state.open_questions
+    )
     paths = get_batch_doc_paths(meeting_id)
+    any_doc_exists = any(p.exists() and p.stat().st_size > 50 for p in paths.values())
+    if not state_has_facts and not any_doc_exists:
+        result["skip"] = "empty_state_no_prior_docs"
+        result["agent_path"] = "skipped"
+        result["elapsed_sec"] = time.time() - t0
+        logger.info("batch_docs: skip empty meeting=%s (无 facts + 无 doc 文件)", meeting_id)
+        return result
+
+    # 2. 读 5 文档上次输出
     last_docs: dict[str, str | None] = {}
     for kind, p in paths.items():
         last_docs[kind] = p.read_text(encoding="utf-8") if p.exists() else None

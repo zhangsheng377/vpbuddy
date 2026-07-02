@@ -232,31 +232,48 @@ def test_monitor_idempotent():
 # ── 异步写 chat 历史 (用 monkeypatch push_event) ──
 
 
-def test_trigger_writes_chat_history(monkeypatch, tmp_path):
-    """trigger 异步调 _append_chat_message + push SSE."""
+def test_trigger_writes_collab_md_and_pushes_collab_update(monkeypatch, tmp_path):
+    """2026-07-03 v0.8.4: trigger 异步调 collab.ask_question + push SSE collab-update.
+
+    之前 v0.8.3 是写 chat.json + push chat-message; 改为落 collab.md + 推 collab-update.
+    chat 历史不再被主动消息污染.
+    """
     from vpbuddy import ui_server
-    # 2026-07-01 修复: 测试不污染真实 DATA_DIR — 用 tmp_path 隔离
+    # 测试不污染真实 DATA_DIR / DOCS_DIR — 用 tmp_path 隔离
     monkeypatch.setattr("vpbuddy.ui_server.DATA_DIR", tmp_path / "data")
-    pushed = []
+    monkeypatch.setattr("vpbuddy.ui_server.DOCS_DIR", tmp_path / "docs")
+    from vpbuddy import collab as collab_mod
+    from vpbuddy.sub_session_controller import DOCS_DIR as REAL_DOCS
+    monkeypatch.setattr(collab_mod, "DOCS_DIR", tmp_path / "docs")
     # agent_proactive 内部 `from .realtime_server import push_event` 引用的是模块里的,
     # monkeypatch 必须在 agent_proactive 命名空间替换.
     import vpbuddy.agent_proactive as ap_mod
+    pushed = []
     monkeypatch.setattr(ap_mod, "push_event", lambda mid, t, p: pushed.append((mid, t, p)))
 
     trigger("async_chat_mtg", "docs_complete", state_summary="x")
     time.sleep(0.2)  # 等 daemon thread 跑完
 
-    # chat 历史应有一条 assistant 消息
+    # collab.md 应有一条 (写落 docs/{mid}/collab.md)
+    collab_file = (tmp_path / "docs" / "async_chat_mtg" / "collab.md")
+    assert collab_file.exists(), f"collab.md 缺失 at {collab_file}"
+    collab_text = collab_file.read_text(encoding="utf-8")
+    assert "📄" in collab_text
+    assert "[docs]" in collab_text  # trigger type → section 'docs'
+    assert "agent-proactive:docs_complete" in collab_text  # asker
+    # chat 历史应**没有** proactive 消息 (v0.8.4 不写 chat)
     history = ui_server._load_chat_history("async_chat_mtg")
-    assert len(history) == 1
-    assert history[0]["role"] == "assistant"
-    assert history[0]["is_proactive"] is True
-    assert history[0]["trigger"] == "docs_complete"
-    assert "📄" in history[0]["content"]
-    # SSE 也推了
+    proactive_msgs = [m for m in history if m.get("is_proactive")]
+    assert proactive_msgs == [], f"不应有 is_proactive chat 历史, 实际: {proactive_msgs}"
+    # SSE 推 collab-update
     assert len(pushed) == 1
     assert pushed[0][0] == "async_chat_mtg"
-    assert pushed[0][1] == "chat-message"
+    assert pushed[0][1] == "collab-update"
+    payload = pushed[0][2]
+    assert payload["action"] == "ask"
+    assert payload["section"] == "docs"
+    assert "📄" in payload["question"]
+    assert payload["asker"] == "agent-proactive:docs_complete"
 
 
 def test_trigger_isolates_meeting_throttle():
@@ -627,14 +644,19 @@ def test_close_meeting_clears_proactive_throttle(http_server, monkeypatch):
     monkeypatch.setattr(realtime_server, "push_event", lambda *a: None)
     monkeypatch.setattr(realtime_server, "close_meeting", lambda mid: 0)
 
-    # 先触发 (monkeypatch 掉 chat 写入, 避免异步干扰)
+    # 先触发 (monkeypatch 掉 _run_async, 避免 collab.ask_question + 异步干扰)
+    from vpbuddy import agent_proactive as ap_mod
+    async_calls = []
     monkeypatch.setattr(
-        "vpbuddy.ui_server._append_chat_message",
-        lambda *a, **kw: {"id": "x", "role": "assistant", "content": "x", "is_proactive": True, "created_at": "now"},
+        ap_mod, "_run_async",
+        lambda mid, t, text: async_calls.append({"mid": mid, "trigger": t, "text": text}),
     )
     trigger("close_clear_mtg", "docs_complete")
     time.sleep(0.05)
     assert "close_clear_mtg:docs_complete" in _TRIGGERED
+    # 至少调了 _run_async 一次
+    assert len(async_calls) == 1
+    assert async_calls[0]["trigger"] == "docs_complete"
 
     import urllib.request
     req = urllib.request.Request(

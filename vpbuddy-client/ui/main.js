@@ -266,7 +266,10 @@ function status_recording_update(msg) {
 }
 
 // === 2026-07-01 ADR-0024: demo 版本切换 ===
+// 2026-07-03 v0.8.4: 修复用户反馈"demo 版本列表延迟 + 选择不跳转"
+// 根因: doc-status SSE kind=demo 自动 frame.srcdoc = content 覆盖了用户选择的老版本
 let demoVersions = [];  // [{version, created_at, summary, file_size}, ...]
+let selectedDemoVersion = null;  // 用户主动选中的版本 (null = 跟最新自动同步)
 
 async function loadDemoVersions() {
   if (!currentMeetingId) return;
@@ -278,10 +281,14 @@ async function loadDemoVersions() {
     demoVersions = data.versions || [];
     renderDemoVersionSelect();
     if (demoVersions.length > 0) {
-      // 自动选最新
+      // 切换会议 → reset 回最新
       const latest = demoVersions[0];  // 倒序, [0] 是最新
+      selectedDemoVersion = latest.version;
       loadDemoVersion(latest.version);
-      document.getElementById("demo-version-select").value = String(latest.version);
+      const sel = document.getElementById("demo-version-select");
+      if (sel) sel.value = String(latest.version);
+    } else {
+      selectedDemoVersion = null;
     }
   } catch (e) {
     console.warn("loadDemoVersions 失败:", e);
@@ -312,12 +319,26 @@ function formatTs(iso) {
 async function loadDemoVersion(version) {
   if (!currentMeetingId) return;
   const gpu = await getGpuUrl();
-  document.getElementById("demo-iframe").src = `${gpu}/docs/${currentMeetingId}/demo_v${version}.html`;
+  // 直接 fetch HTML 内容 (绕开 SSE 自动路径), 写到 iframe.srcdoc
+  const url = `${gpu}/docs/${currentMeetingId}/demo_v${version}.html`;
+  try {
+    const r = await fetch(url, { cache: "no-store" });
+    if (!r.ok) {
+      console.warn("loadDemoVersion HTTP", r.status, url);
+      return;
+    }
+    const html = await r.text();
+    const frame = document.getElementById("demo-iframe");
+    if (frame) frame.srcdoc = html;
+  } catch (e) {
+    console.warn("loadDemoVersion fetch fail:", e);
+  }
+  selectedDemoVersion = version;
   // 更新 info
   const v = demoVersions.find(x => x.version === version);
   const info = document.getElementById("demo-version-info");
   if (info && v) {
-    info.textContent = `大小: ${(v.file_size / 1024).toFixed(1)} KB`;
+    info.textContent = `v${v.version} · 大小: ${(v.file_size / 1024).toFixed(1)} KB`;
   }
 }
 
@@ -329,7 +350,8 @@ document.getElementById("demo-version-select")?.addEventListener("change", (e) =
 document.getElementById("demo-latest-btn")?.addEventListener("click", () => {
   if (demoVersions.length === 0) return;
   const latest = demoVersions[0];
-  document.getElementById("demo-version-select").value = String(latest.version);
+  const sel = document.getElementById("demo-version-select");
+  if (sel) sel.value = String(latest.version);
   loadDemoVersion(latest.version);
 });
 
@@ -466,10 +488,19 @@ listen("doc-status", (e) => {
   }
   if (kind && content) {
     docsByKind[kind] = { kind, status: docState, content, is_demo };
-    // 2026-06-27: demo 写到独立 panel-demo 的 iframe (全屏)
+    // 2026-07-03 v0.8.4: demo 自动同步 latest only (用户主动选老版本时不动 iframe)
     if (kind === "demo" && is_demo) {
+      const v = demoVersions[0]?.version;
+      if (selectedDemoVersion != null && selectedDemoVersion !== v) {
+        // 用户选的是非最新 → SSE 不覆盖, 等用户主动点 latest 按钮才切
+        return;
+      }
+      selectedDemoVersion = v;
       const frame = document.getElementById("demo-iframe");
       if (frame) frame.srcdoc = content;
+      // 同步 select
+      const sel = document.getElementById("demo-version-select");
+      if (sel && v != null) sel.value = String(v);
       return;
     }
     // 其他 5 类写到自己 doc-block 的 body
@@ -787,22 +818,89 @@ listen("error", (e) => {
 });
 
 // === KB 检索 ===
-document.getElementById("kb-btn").addEventListener("click", async () => {
+// 2026-07-03 v0.8.4: 兼容 rag 返回 {score, text, metadata} 字段; 缺失字段降级显示
+async function kbSearch() {
   const q = document.getElementById("kb-q").value.trim();
   if (!q) return;
-  const results = await invoke("kb_search", { query: q, topK: 5 });
-  const html = results.map((r, i) => `
+  const gpuUrlLocal = await getGpuUrl();
+  let results;
+  try {
+    const r = await fetch(`${gpuUrlLocal}/api/kb/search`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: q, top_k: 5, meeting_id: currentMeetingId || null, scope: currentMeetingId ? "current" : "all" }),
+    });
+    const data = await r.json();
+    results = data.results || [];
+  } catch (e) {
+    document.getElementById("kb-results").innerHTML = `<div style='color:var(--err);padding:8px;'>检索失败: ${escapeHtml(String(e))}</div>`;
+    return;
+  }
+  if (results.length === 0) {
+    document.getElementById("kb-results").innerHTML = `<div style='color:var(--text2);padding:20px;'>${t("noResult")}</div>`;
+    return;
+  }
+  const html = results.map((r, i) => {
+    const meta = r.metadata || {};
+    const dist = r.distance ?? r.score ?? null;
+    const distTxt = dist != null ? Number(dist).toFixed(3) : "-";
+    const snippet = r.snippet ?? r.text ?? r.document ?? "(无内容)";
+    const badge = `${meta.meeting_id || "?"}/${meta.doc_kind || meta.source || "kb"}`;
+    return `
     <div class="kb-result">
       <div class="head">
         <span class="badge">${i+1}</span>
-        <span>${r.meeting_id}/${r.doc_kind}</span>
-        <span>dist=${r.distance.toFixed(3)}</span>
+        <span>${escapeHtml(badge)}</span>
+        <span>dist=${distTxt}</span>
       </div>
-      <div>${escapeHtml(r.snippet).slice(0, 200)}</div>
+      <div>${escapeHtml(snippet).slice(0, 200)}</div>
     </div>
-  `).join("");
-  document.getElementById("kb-results").innerHTML = html || `<div style='color:var(--text2);padding:20px;'>${t("noResult")}</div>`;
+  `;
+  }).join("");
+  document.getElementById("kb-results").innerHTML = html;
+}
+document.getElementById("kb-btn").addEventListener("click", kbSearch);
+document.getElementById("kb-q").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") kbSearch();
 });
+
+// 2026-07-03 v0.8.4: KB 上传按钮 (走 /api/kb/upload multipart)
+async function kbUpload() {
+  if (!currentMeetingId) {
+    document.getElementById("kb-upload-status").textContent = "请先开始会议";
+    return;
+  }
+  const fileInput = document.getElementById("kb-file");
+  const f = fileInput.files[0];
+  if (!f) {
+    document.getElementById("kb-upload-status").textContent = "请选择 .txt / .md / .pdf 文件";
+    return;
+  }
+  const statusEl = document.getElementById("kb-upload-status");
+  statusEl.textContent = `上传中: ${f.name} (${Math.round(f.size/1024)}KB)`;
+  try {
+    const gpuUrlLocal = await getGpuUrl();
+    const fd = new FormData();
+    fd.append("meeting_id", currentMeetingId);
+    fd.append("file", f, f.name);
+    const r = await fetch(`${gpuUrlLocal}/api/kb/upload`, { method: "POST", body: fd });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || "upload kb 失败");
+    statusEl.textContent = `✓ 上传成功: ${data.filename || f.name} → doc_id=${data.doc_id || "?"} (${data.chars || data.char_count || 0} chars)`;
+    fileInput.value = "";
+  } catch (e) {
+    statusEl.textContent = "❌ 上传失败: " + e.message;
+  }
+}
+document.getElementById("kb-upload-btn").addEventListener("click", kbUpload);
+// 会议开始后启用上传按钮
+const _origApplyMeeting = applyMeeting || (() => {});
+function applyMeetingEnableKbUpload() {
+  const btn = document.getElementById("kb-upload-btn");
+  if (btn) btn.disabled = !currentMeetingId;
+}
+// 在 toggle 流程末尾 hook (用 MutationObserver 监听 currentMeetingId 变化成本太高, 直接定时扫)
+setInterval(applyMeetingEnableKbUpload, 1000);
 
 // === VP Chat ===
 // 2026-07-01 ADR-0023: 附件状态 + 选/删/预览 + fetch multipart 直发
@@ -901,7 +999,15 @@ async function sendChat() {
       });
     }
     if (result.user_message) renderChatMessage(result.user_message);
-    if (result.assistant_message) renderChatMessage(result.assistant_message);
+    if (result.assistant_message) {
+      renderChatMessage(result.assistant_message);
+      // 2026-07-03 v0.8.4: assistant_message.content 空时给显式提示 (LLM 失败时常见)
+      if (!result.assistant_message.content) {
+        const status = document.getElementById("chat-status");
+        const errMsg = result.error ? ` (${result.error})` : "";
+        status.textContent = `⚠️ 服务器没返答${errMsg}; 输入已记录到 chat 历史`;
+      }
+    }
     // 清附件 + 释放 preview URL
     for (const a of chatAttachments) if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
     chatAttachments.length = 0;
@@ -930,14 +1036,16 @@ function renderChatMessage(msg) {
   const empty = list.querySelector(".chat-empty");
   if (empty) empty.remove();
   const item = document.createElement("div");
-  // 2026-07-01 ADR-0023 Phase 5: 主动消息加 proactive 样式 (浅黄底 + 🤖)
-  const proactiveClass = msg.is_proactive ? " proactive" : "";
-  item.className = `chat-msg ${msg.role || "assistant"} ${msg.status || "ok"}${proactiveClass}`;
+  // 2026-07-03 v0.8.4: 主动消息 (is_proactive=True) 不再当 user-q, 改为 '💡 提示' (灰色, 不抢眼)
+  // 真问题走 collab panel (SSE collab-update), 不在这里
+  const isProactive = !!msg.is_proactive;
+  const proactiveClass = isProactive ? " proactive" : "";
   const role = msg.role === "user"
     ? "VP"
-    : (msg.is_proactive ? "🤖 VPBuddy" : (msg.source === "hermes" ? "Hermes" : "VPBuddy"));
-  // 主动消息前缀图标
-  const iconPrefix = msg.is_proactive ? "💬 " : "";
+    : (isProactive ? "💡 VPBuddy 提示" : (msg.source === "hermes" ? "Hermes" : "VPBuddy"));
+  // 主动消息前缀图标 + 灰色样式
+  const iconPrefix = isProactive ? "💡 " : "";
+  item.className = `chat-msg ${msg.role || "assistant"} ${msg.status || "ok"}${proactiveClass}`;
   // 附件 chip (用户上传时)
   const attachments = (msg.attachments && Array.isArray(msg.attachments)) ? msg.attachments : [];
   const attachHtml = attachments.length
@@ -1012,38 +1120,28 @@ function renderAudioDevices() {
     select.appendChild(opt);
   }
 
-  // 2026-07-02 Phase 7 v0.8.0: macOS loopback 缺失 banner
-  updateLoopbackBanner(kind, filtered);
-}
-
-// 2026-07-02 Phase 7 v0.8.0: 平台分支 banner
-//   - macOS + 选 loopback/both + 无 BlackHole 设备: 提示装 BlackHole
-//   - Windows + 选 loopback/both: 提示 v0.9.x 实现 (当前 fallback mic)
-//   - Linux: 无 banner (PulseAudio/PipeWire 自带 .monitor)
-function updateLoopbackBanner(kind, filtered) {
-  let banner = document.getElementById("loopback-hint");
-  if (!banner) {
-    banner = document.createElement("div");
-    banner.id = "loopback-hint";
-    banner.className = "stream-info";
-    banner.style.color = "var(--warning)";
-    // 插在 rec-controls 后
-    const recControls = document.querySelector(".rec-controls");
-    if (recControls) recControls.after(banner);
-  }
-  if (kind !== "loopback" && kind !== "both") {
-    banner.style.display = "none";
-    return;
-  }
-  // 平台探测: navigator.userAgent 区分
+  // 2026-07-03 v0.8.4: 实情显示 (老代码用 "v0.9.x 实现" 是我自己加的占位措辞, 用户上线跑 v0.8.x 看到跟自己版本不符会困惑; 现改为 "当前 wasm runtime 不支持" + "录 mic 兜底" + "想录系统声请装虚拟声卡" 客观描述)
+  // Detect: 平台 + filter 结果里有没有 true loopback 设备
   const ua = navigator.userAgent || "";
-  const isMac = /Mac/i.test(ua) && !/iPhone|iPad/.test(ua);
   const isWin = /Windows/i.test(ua);
+  const hasLoopback = filtered.some((d) => d.is_loopback);
 
-  // macOS + 没 loopback 设备 → 提示装 BlackHole
-  if (isMac) {
-    const hasLoopback = filtered.some((d) => d.is_loopback);
-    if (!hasLoopback) {
+  // Windows 永远 hasLoopback=false (Rust 端 is_loopback_device_name → 恒 false).
+  // 此时 banner 就显示 "cpal 在当前客户端不暴露 WASAPI loopback; 当前 fallback 录 mic"
+  if (kind === "loopback" || kind === "both") {
+    if (isWin && !hasLoopback) {
+      banner.style.display = "";
+      banner.innerHTML =
+        '🪟 Windows 内录 (系统声) 在当前客户端未支持 — cpal 抽象层不暴露 WASAPI loopback. ' +
+        '当前 fallback 录麦克风, 系统声不进。' +
+        '想录系统声: <strong>装虚拟声卡</strong> (e.g. <a href="https://vb-audio.com/Cable/" target="_blank">VB-Audio VoiceMeeter</a> / <a href="https://github.com/ExistentialAudio/BlackHole" target="_blank">BlackHole for Windows 移植</a>) 并在 Windows 声音设置把系统输出指向它。';
+      return;
+    }
+  }
+  // macOS + 没有 loopback 设备 → 提示装 BlackHole
+  if (kind === "loopback" || kind === "both") {
+    const isMac = /Mac/i.test(ua) && !/iPhone|iPad/.test(ua);
+    if (isMac && !hasLoopback) {
       banner.style.display = "";
       banner.innerHTML =
         '🍎 macOS 未检测到 BlackHole — 内录需先装 <a href="https://github.com/ExistentialAudio/BlackHole/releases" target="_blank">BlackHole 2ch</a> ' +
@@ -1051,14 +1149,7 @@ function updateLoopbackBanner(kind, filtered) {
       return;
     }
   }
-  // Windows: 提示 v0.9.x
-  if (isWin) {
-    banner.style.display = "";
-    banner.innerHTML =
-      '🪟 Windows 真内录 (WASAPI loopback) v0.9.x 实现 — 当前 fallback 录麦克风, 系统声不会进';
-    return;
-  }
-  // Linux: 无 banner (PulseAudio/PipeWire 自带 .monitor)
+  // Linux: 正常 (.monitor 自带) — 无 banner
   banner.style.display = "none";
 }
 

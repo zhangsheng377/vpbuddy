@@ -1,11 +1,12 @@
-"""agent 主动提问模块 (ADR-0023 Phase 5).
+"""agent 主动提问模块 (ADR-0023 Phase 5 + v0.8.4 调整).
 
 设计原则:
 - 触发场景: docs_complete / risk_threshold / demo_new_version / silence / time_node
 - 节流: 同 (meeting_id, trigger_type) 生命周期内只触发 1 次 (避免刷屏)
-- 写 chat 历史 (跟用户/agent 答混合), 推 SSE `chat-message` 让客户端渲染
-- UI 区分 (客户端拿 `is_proactive=True` 标 🤖 浅黄底)
-- 异步 (daemon thread), 不阻塞主流程 (sub_session_controller 主循环 / 风险检测)
+- 2026-07-03 v0.8.4: 不再推 chat-message (用户反馈 - 这些是 tip 不是 QA, 刷 chat 很乱)
+  改为走 collab.ask_question (落 collab.md + 推 SSE collab-update)
+  前端 🤝 协作疑问面板展开; 用户自选"当作已完成"在面板 dismiss
+- 异步 (daemon thread), 不阻塞主流程
 
 入口:
     trigger(meeting_id, trigger_type, **kwargs) -> Optional[dict]
@@ -44,47 +45,54 @@ TIME_NODE_SECONDS = [10 * 60, 30 * 60, 60 * 60]  # 10 / 30 / 60 分钟
 # ── trigger 消息模板 ──
 # 简单 key/value, 不引 jinja2 (KISS)
 
+# 2026-07-03 v0.8.4: trigger 推到 collab 面板, section 反映主题
+_TRIGGER_TO_SECTION = {
+    "docs_complete": "docs",
+    "risk_threshold": "risk",
+    "demo_new_version": "demo",
+    "silence": "docs",
+    "time_node": "docs",
+}
+
+
 def _trigger_docs_complete(meeting_id: str, **kwargs: Any) -> str:
-    """6 文档全部生成完成."""
-    # 拼主要变更: 拿最近 doc 摘要 (可空)
+    """6 文档全部生成完成 (提示, 非问题)."""
     state_summary = kwargs.get("state_summary", "")
     return "\n".join([
         "📄 6 文档已生成 (v1)。",
-        state_summary[:400] if state_summary else "请到 docs 面板查看。",
-        "需要我开始 demo 制作吗?",
+        state_summary[:300] if state_summary else "请到 docs 面板查看。",
     ]).strip()
 
 
 def _trigger_risk_threshold(meeting_id: str, **kwargs: Any) -> str:
-    """RISK 累计 >=3."""
+    """RISK 累计 >=3 (提示)."""
     risk_list = kwargs.get("risk_list", [])
-    items = "\n".join(f"- {r}" for r in risk_list[:5]) if risk_list else "- (未提供细节)"
+    items = "\n".join(f"- {r}" for r in risk_list[:3]) if risk_list else "- (未提供细节)"
     return "\n".join([
         f"⚠️ 当前会议已记录 {len(risk_list)} 条风险:",
         items,
-        "需要单独展开分析吗?",
     ]).strip()
 
 
 def _trigger_demo_new_version(meeting_id: str, **kwargs: Any) -> str:
-    """demo 新版本生成."""
+    """demo 新版本生成 (提示)."""
     version = kwargs.get("version", "?")
     summary = kwargs.get("summary", "")
-    return f"🎨 Demo v{version} 已生成: {summary}\n需要继续迭代吗?"
+    return f"🎨 Demo v{version} 已生成: {summary}"
 
 
 def _trigger_silence(meeting_id: str, **kwargs: Any) -> str:
-    """5 分钟沉默."""
+    """5 分钟沉默 (提示)."""
     silence_sec = int(kwargs.get("silence_sec", SILENCE_THRESHOLD_SEC))
-    return f"🤔 似乎大家在思考,已经沉默 {silence_sec // 60} 分钟。需要我总结一下当前累积的要点吗?"
+    return f"🤔 似乎大家在思考, 已经沉默 {silence_sec // 60} 分钟。"
 
 
 def _trigger_time_node(meeting_id: str, **kwargs: Any) -> str:
-    """会议节点 (10/30/60 分钟)."""
+    """会议节点 (10/30/60 分钟) (提示)."""
     elapsed_sec = int(kwargs.get("elapsed_sec", 0))
     minutes = elapsed_sec // 60
     facts_count = int(kwargs.get("facts_count", 0))
-    return f"⏱️ 会议进行 {minutes} 分钟, 已累积 {facts_count} 条事实。继续监看中..."
+    return f"⏱️ 会议进行 {minutes} 分钟, 已累积 {facts_count} 条事实。"
 
 
 _TRIGGER_BUILDERS = {
@@ -114,27 +122,38 @@ def clear_throttle(meeting_id: str) -> int:
 
 
 def _run_async(meeting_id: str, trigger_type: str, text: str) -> None:
-    """写 chat 历史 + 推 SSE. 失败不抛, 仅 log."""
-    from .ui_server import _append_chat_message
+    """落 collab.md + 推 SSE collab-update (2026-07-03 v0.8.4).
+
+    失败不抛, 仅 log. 走 collab.ask_question 写到 docs/{mid}/collab.md,
+    节流交给 collab 模块 (同 (mid, section, 相似问题) 1 次会议只 1 条).
+    """
+    from .collab import ask_question
+
+    section = _TRIGGER_TO_SECTION.get(trigger_type, "docs")
+    asker = f"agent-proactive:{trigger_type}"
     try:
-        msg = _append_chat_message(
-            meeting_id,
-            "assistant",
-            text,
-            source="proactive",
-            extra={
-                "is_proactive": True,
-                "trigger": trigger_type,
-                "created_at": datetime.now().isoformat(),
-            },
-        )
+        result = ask_question(meeting_id, section, text, asker=asker)
     except Exception as e:
-        logger.exception("proactive: append_chat_message failed mid=%s trigger=%s: %s", meeting_id, trigger_type, e)
+        logger.exception("proactive: ask_question failed mid=%s trigger=%s: %s", meeting_id, trigger_type, e)
+        return
+
+    # 推 SSE collab-update 让前端 🤝 协作疑问面板展开
+    # status=added 才是真新增; throttled / duplicate_exact 也推, 让前端知道节流工作
+    qid = result.get("qid")
+    if not qid:
+        logger.debug("proactive: ask_question returned no qid mid=%s: %s", meeting_id, result)
         return
     try:
-        push_event(meeting_id, "chat-message", msg)
+        push_event(meeting_id, "collab-update", {
+            "action": "ask",
+            "qid": qid,
+            "section": section,
+            "status": result.get("status", "added"),
+            "question": text,
+            "asker": asker,
+        })
     except Exception as e:
-        logger.warning("proactive: push_event failed mid=%s: %s", meeting_id, e)
+        logger.warning("proactive: push_event collab-update failed mid=%s: %s", meeting_id, e)
 
 
 def trigger(
@@ -142,7 +161,7 @@ def trigger(
     trigger_type: str,
     **kwargs: Any,
 ) -> dict[str, Any] | None:
-    """触发一次 agent 主动消息.
+    """触发一次 agent 主动消息 (2026-07-03 v0.8.4 → 推 collab panel).
 
     Args:
         meeting_id: 会议 ID
@@ -150,13 +169,14 @@ def trigger(
         **kwargs: 透传给模板构造器
 
     Returns:
-        None if 已节流跳过; 否则返回 dict (含 trigger_type / message / created_at)
+        None if 已节流跳过; 否则返回 dict (含 trigger_type / message / created_at /
+                collab_qid / section)
 
     行为:
         1. 节流 set 检查 (同 (mid, type) 跳过)
         2. 标记已触发
         3. 调 builder 构造消息文本
-        4. 异步 (daemon thread) 写 chat 历史 + 推 SSE
+        4. 异步 (daemon thread) 写 collab.md + 推 SSE collab-update
     """
     if trigger_type not in _TRIGGER_BUILDERS:
         logger.warning("proactive: unknown trigger_type=%s mid=%s", trigger_type, meeting_id)
@@ -181,10 +201,12 @@ def trigger(
     )
     t.start()
 
+    section = _TRIGGER_TO_SECTION.get(trigger_type, "docs")
     return {
         "trigger_type": trigger_type,
         "meeting_id": meeting_id,
         "message": text,
+        "section": section,
         "fired_at": datetime.now().isoformat(),
     }
 

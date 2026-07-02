@@ -115,18 +115,18 @@ class TestProactiveChatUI:
             }})();
         """)
 
-        # 验证: chat-msg 元素存在 + 有 .proactive class + role 含 🤖
+        # 验证: chat-msg 元素存在 + 有 .proactive class + role 含 💡 (2026-07-03 v0.8.4: 主动消息改 💡 提示)
         msg_elem = page.locator(f"#{msg_id}")
         assert msg_elem.count() == 1, "proactive message DOM 元素应存在"
-        # 1. 加 .proactive class
+        # 1. 加 .proactive class (CSS 上仍带浅色 highlight, 不显眼)
         classes = msg_elem.get_attribute("class") or ""
         assert "proactive" in classes, f"应有 .proactive class, 实际: {classes}"
-        # 2. role 元素含 🤖
+        # 2. role 元素含 💡 (v0.8.4 改, 不再用 🤖)
         meta_text = msg_elem.locator(".chat-meta").text_content() or ""
-        assert "🤖 VPBuddy" in meta_text, f"role 应是 🤖 VPBuddy, 实际: {meta_text!r}"
-        # 3. 内容前缀 💬
+        assert "💡" in meta_text, f"role 应含 💡 (v0.8.4), 实际: {meta_text!r}"
+        # 3. 内容前缀 💡
         content_text = msg_elem.locator(".chat-content").text_content() or ""
-        assert "💬" in content_text, f"内容应有 💬 prefix, 实际: {content_text!r}"
+        assert "💡" in content_text, f"内容应有 💡 prefix, 实际: {content_text!r}"
         assert "Q4 营收" in content_text
 
     def test_normal_assistant_message_renders_without_proactive_class(self, page):

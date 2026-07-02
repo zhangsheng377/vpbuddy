@@ -72,31 +72,34 @@
           <span class="last-seg-pill" id="last-seg">最新: 等待语音…</span>
         </div>
         <div id="stream-list" class="stream-list"></div>
+        <!-- 2026-07-03 v0.8.4: 音频设备警告 banner (Windows loopback 等真环境支持走 v0.9.x) -->
+        <div id="audio-warning" class="banner-warn" style="display:none; padding:8px 12px; margin:8px 16px; border-radius:6px; background:#fff3cd; color:#856404; border:1px solid #ffeeba;"></div>
       </section>
 
       <!-- 会议产物 (2026-06-27: 6 文档 6 块并列, SSE 自动推流; 原 "6 docs") -->
+      <!-- 2026-07-03 v0.8.4: 初始 placeholder, 等 SSE doc-status 推真实内容 -->
       <section id="panel-docs" class="panel">
         <h2>会议产物 (6 类文档 · SSE 自动刷新)</h2>
         <div id="docs-grid" class="docs-grid">
-          <div class="doc-block" data-kind="req">
+          <div class="doc-block doc-block-empty" data-kind="req">
             <div class="doc-head"><span class="doc-kind">需求</span><span class="doc-count">0</span><span class="doc-state">待生成</span></div>
-            <pre class="doc-body">等待 GPU 生成…</pre>
+            <pre class="doc-body">暂无产物; 说话 / 上传文本后自动生成</pre>
           </div>
-          <div class="doc-block" data-kind="arch">
+          <div class="doc-block doc-block-empty" data-kind="arch">
             <div class="doc-head"><span class="doc-kind">架构</span><span class="doc-count">0</span><span class="doc-state">待生成</span></div>
-            <pre class="doc-body">等待 GPU 生成…</pre>
+            <pre class="doc-body">暂无产物; 说话 / 上传文本后自动生成</pre>
           </div>
-          <div class="doc-block" data-kind="tasks">
+          <div class="doc-block doc-block-empty" data-kind="tasks">
             <div class="doc-head"><span class="doc-kind">任务</span><span class="doc-count">0</span><span class="doc-state">待生成</span></div>
-            <pre class="doc-body">等待 GPU 生成…</pre>
+            <pre class="doc-body">暂无产物; 说话 / 上传文本后自动生成</pre>
           </div>
-          <div class="doc-block" data-kind="api">
+          <div class="doc-block doc-block-empty" data-kind="api">
             <div class="doc-head"><span class="doc-kind">API</span><span class="doc-count">0</span><span class="doc-state">待生成</span></div>
-            <pre class="doc-body">等待 GPU 生成…</pre>
+            <pre class="doc-body">暂无产物; 说话 / 上传文本后自动生成</pre>
           </div>
-          <div class="doc-block" data-kind="risk">
+          <div class="doc-block doc-block-empty" data-kind="risk">
             <div class="doc-head"><span class="doc-kind">风险</span><span class="doc-count">0</span><span class="doc-state">待生成</span></div>
-            <pre class="doc-body">等待 GPU 生成…</pre>
+            <pre class="doc-body">暂无产物; 说话 / 上传文本后自动生成</pre>
           </div>
           <!-- 2026-06-27: demo 块独立成 panel, 此处只占位 -->
           <div class="doc-block doc-block-stub" data-kind="demo">
@@ -106,7 +109,8 @@
         </div>
       </section>
 
-      <!-- 演示 (2026-06-27: 独立页签, 全屏 iframe 展示; 2026-07-01 ADR-0024: 加版本下拉) -->
+      <!-- 演示 (2026-06-27: 独立页签, 全屏 iframe 展示; 2026-07-01 ADR-0024: 加版本下拉)
+           2026-07-03 v0.8.4: 初始 placeholder, 没版本时显示提醒; 版本 select 即时切 iframe.src -->
       <section id="panel-demo" class="panel">
         <h2>演示 (SSE 自动推流, 多版本切换)</h2>
         <div class="demo-controls" style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
@@ -117,13 +121,18 @@
         <iframe id="demo-iframe" class="demo-iframe-full" sandbox="allow-scripts allow-forms"></iframe>
       </section>
 
-      <!-- 知识库检索 -->
+      <!-- 知识库检索 (2026-07-03 v0.8.4: 加上传按钮 + 删除按钮列表) -->
       <section id="panel-kb" class="panel">
         <h2>知识库 RAG</h2>
         <div class="kb-search">
           <input type="text" id="kb-q" placeholder="输入查询..." />
           <button id="kb-btn">检索</button>
         </div>
+        <div class="kb-upload" style="margin:8px 0; display:flex; gap:6px; align-items:center;">
+          <input type="file" id="kb-file" accept=".txt,.md,.pdf" style="flex:1;" />
+          <button id="kb-upload-btn" type="button" disabled title="先开始会议再上传">上传入 KB</button>
+        </div>
+        <div id="kb-upload-status" style="color:var(--text-muted); font-size:12px; margin-bottom:8px;"></div>
         <div id="kb-results"></div>
       </section>
 
