@@ -33,9 +33,13 @@ from ..sub_session_controller import (
 )
 
 # 2026-07-03 v0.8.4: re-export _AGENT_AVAILABLE getter 用于测试 mock
-# (原 _AGENT_AVAILABLE 是从 sub_session_controller import 时 capture, 测试 monkeypatch 改原模块无效)
+# (原 _AGENT_AVAILABLE 是 import 时 capture, monkeypatch 改不回) —
+# 多个测试在两个 module 设, 故 read 时先 batch_docs 自身再 sub_session_controller
 def _is_agent_available() -> bool:
-    """返回 _AGENT_AVAILABLE 当前真值. 每次调取最新值, 测试可 monkeypatch."""
+    """返回 _AGENT_AVAILABLE 当前真值. 测试可能 monkeypatch 任一模块."""
+    a = globals().get("_AGENT_AVAILABLE")
+    if isinstance(a, bool):
+        return a
     from ..sub_session_controller import _AGENT_AVAILABLE as _cur
     return _cur
 
