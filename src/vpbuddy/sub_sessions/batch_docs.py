@@ -188,7 +188,7 @@ def trigger_batch_docs(
             return result
 
     # 5. 真触发 — 优先 in-process AIAgent (复用 cached session)
-    if not _AGENT_AVAILABLE:
+    if not _is_agent_available():
         result["error"] = "AIAgent not available"
         return result
 
