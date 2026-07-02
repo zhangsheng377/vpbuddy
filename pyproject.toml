@@ -94,10 +94,11 @@ dev = [
     "pytest>=7.4,<9",
     "pytest-asyncio>=0.21",
     "pytest-cov>=4.1",
+    "playwright>=1.50,<2",            # ADR-0036: e2e 浏览器
     "black>=23.0",
     "ruff>=0.1",
     "mypy>=1.7",
-]
+]  # 客户端本地 e2e 跑法: `playwright install chromium` (Linux) 后 `RUN_E2E=1 pytest src/tests/e2e/`
 
 # 全部 (开发用)
 all = [
@@ -137,7 +138,10 @@ markers = [
     "gpu: 需要 GPU 的测试",
     "integration: 集成测试",
     "slow: 慢测试",
+    "e2e: 端到端测试 (默认 skip, 需 RUN_RAG_E2E=1, 只在 GPU 服务器跑 — ADR-0036)",
 ]
+
+# ===== ruff =====
 
 # ===== ruff =====
 [tool.ruff]
