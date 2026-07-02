@@ -172,11 +172,15 @@ def test_high_risk_counts_toward_threshold():
 
 
 def test_docs_complete_triggers_proactive(tmp_path, monkeypatch):
-    """6 doc 写完 → 主动 trigger docs_complete."""
+    """6 doc 写完 → 主动 trigger docs_complete (chat 通知).
+
+    2026-07-02: 不再验 SSE push "docs-complete" (该事件已删除为死代码).
+    保留对 agent_proactive.trigger("docs_complete") 的触发断言 — chat 通道独立.
+    """
     from vpbuddy import ui_server_helpers, realtime_server
 
-    events = []
-    monkeypatch.setattr(realtime_server, "push_event", lambda mid, t, p: events.append(t))
+    # monkeypatch push_event 不让真推 SSE 出去, 但仍然能验 proactive 触发
+    monkeypatch.setattr(realtime_server, "push_event", lambda *a, **k: None)
 
     # 准备 6 doc
     docs = tmp_path / "docs"
@@ -191,7 +195,6 @@ def test_docs_complete_triggers_proactive(tmp_path, monkeypatch):
     # 给异步 thread 一点时间把节流标记置上
     time.sleep(0.05)
     assert "test_docs_complete_mtg:docs_complete" in _TRIGGERED
-    assert "docs-complete" in events  # SSE 推了
 
 
 # ── demo_new_version: write_demo_version 完成触发 ──
