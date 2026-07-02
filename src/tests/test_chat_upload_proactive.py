@@ -241,10 +241,11 @@ def test_trigger_writes_collab_md_and_pushes_collab_update(monkeypatch, tmp_path
     from vpbuddy import ui_server
     # 测试不污染真实 DATA_DIR / DOCS_DIR — 用 tmp_path 隔离
     monkeypatch.setattr("vpbuddy.ui_server.DATA_DIR", tmp_path / "data")
-    monkeypatch.setattr("vpbuddy.ui_server.DOCS_DIR", tmp_path / "docs")
-    from vpbuddy import collab as collab_mod
-    from vpbuddy.sub_session_controller import DOCS_DIR as REAL_DOCS
-    monkeypatch.setattr(collab_mod, "DOCS_DIR", tmp_path / "docs")
+    docs_dir = tmp_path / "docs"
+    monkeypatch.setattr("vpbuddy.ui_server.DOCS_DIR", docs_dir)
+    # collab._default_docs_dir() 走 sub_session_controller.DOCS_DIR
+    from vpbuddy import sub_session_controller
+    monkeypatch.setattr(sub_session_controller, "DOCS_DIR", docs_dir)
     # agent_proactive 内部 `from .realtime_server import push_event` 引用的是模块里的,
     # monkeypatch 必须在 agent_proactive 命名空间替换.
     import vpbuddy.agent_proactive as ap_mod
