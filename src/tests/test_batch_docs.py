@@ -195,7 +195,13 @@ def test_dispatch_kind_batch_docs(tmp_path, monkeypatch):
     monkeypatch.delenv("VPBUDDY_DIRECT", raising=False)
 
     result = _dispatch_kind("dispatch_batch", BATCH_DOCS_KIND)
-    assert result["agent_path"] == "in-process" or "AIAgent not available" in str(result.get("error", ""))
+    # 2026-07-03 v0.8.4: state 全空 + AIAgent 不可用 → 走 empty_state_no_prior_docs skip
+    # OR 走到 _is_agent_available()=False → AIAgent not available error
+    assert (
+        result.get("agent_path") == "in-process"
+        or "AIAgent not available" in str(result.get("error", ""))
+        or result.get("skip") == "empty_state_no_prior_docs"
+    )
 
 
 def test_dispatch_kind_deprecated(tmp_path, monkeypatch):
