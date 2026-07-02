@@ -783,21 +783,6 @@ class Handler(BaseHTTPRequestHandler):
             meeting_id = path.split("/")[3]  # /api/meetings/{id}/events
             return self._handle_sse_events(meeting_id)
 
-        # 2026-07-02 e2e 端点 (env-guarded, 默认 404): 触发 ui_server_helpers.check_all_docs_stored_notify
-        # 在**生产 server 进程内部**跑 check, 让 push_event 推给真 SSE 订阅者.
-        # 用法: curl -X POST 'http://gpu:8765/api/_e2e/check_docs_complete?mid=XXX'
-        # env: VPBUDDY_E2E=1 才暴露 (生产 deploy 不设这个 env, 默认 404)
-        if path == "/api/_e2e/check_docs_complete":
-            if os.environ.get("VPBUDDY_E2E") != "1":
-                return self._404(path)
-            from .ui_server_helpers import check_all_docs_stored_notify
-            qs = parse_qs(urlparse(self.path).query)
-            mid = qs.get("mid", [None])[0]
-            if not mid:
-                return self._json({"error": "missing ?mid=XXX"}, 400)
-            ok = check_all_docs_stored_notify(mid)
-            return self._json({"meeting_id": mid, "all_stored": ok})
-
         return self._404(path)
 
     def do_POST(self):  # noqa: N802 (BaseHTTPRequestHandler)
@@ -869,6 +854,21 @@ class Handler(BaseHTTPRequestHandler):
             from .kb_api import handle_kb_search
             result = handle_kb_search(qs, body)
             return self._json(result)
+
+        # 2026-07-02 e2e 端点 (env-guarded, 默认 404): 触发 ui_server_helpers.check_all_docs_stored_notify
+        # 在**生产 server 进程内部**跑 check, 让 push_event 推给真 SSE 订阅者.
+        # 用法: curl -X POST 'http://gpu:8765/api/_e2e/check_docs_complete?mid=XXX'
+        # env: VPBUDDY_E2E=1 才暴露 (生产 deploy 不设这个 env, 默认 404)
+        if path == "/api/_e2e/check_docs_complete":
+            if os.environ.get("VPBUDDY_E2E") != "1":
+                return self._404(path)
+            from .ui_server_helpers import check_all_docs_stored_notify
+            qs = parse_qs(urlparse(self.path).query)
+            mid = qs.get("mid", [None])[0]
+            if not mid:
+                return self._json({"error": "missing ?mid=XXX"}, 400)
+            ok = check_all_docs_stored_notify(mid)
+            return self._json({"meeting_id": mid, "all_stored": ok})
 
         return self._404(path)
 
