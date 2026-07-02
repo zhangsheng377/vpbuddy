@@ -42,6 +42,11 @@ from vpbuddy.sub_session_controller import (
     run_one_round,
     trigger_sub_session,
 )
+# 2026-07-02 ADR-0034: batch_docs 走专属 render_batch_prompt (last_docs dict 注入),
+# 不再走 controller.render_prompt (那个只支持单 last_doc, 用在 demo/kind 1-on-1 模板).
+# 修前 v0.7.0 ADR-0029 引入的隐性 bug: controller.render_prompt("batch_docs", ...) 把
+# {last_docs_block} plural 静默吞掉 (因 escape/format key 列表只有 {last_doc} singular).
+from vpbuddy.sub_sessions.batch_docs import render_batch_prompt
 from vpbuddy.state import (
     MeetingState, Platform, Priority, ItemStatus,
     Requirement, Risk, Question,
@@ -171,9 +176,25 @@ class TestRenderPrompt:
         assert "无" in p or "首次" in p
 
     def test_subsequent_run_includes_previous(self):
-        """非首次运行,包含上次输出"""
-        p = render_prompt(BATCH_DOCS_KIND, "MID", "## 累积", "## 上次的 req 文档")
-        assert "上次的 req 文档" in p
+        """非首次运行,batch_docs prompt 注入上次 5 文档内容 (5 个 kind 都注入, 走 render_batch_prompt)
+
+        历史: 2026-07-01 v0.7.0 ADR-0029 引入 batch_docs kind, 但测试仍调 controller.render_prompt
+        (单 last_doc), 跟 batch_docs.md 模板的 {last_docs_block} plural 不匹配 → 静默吞掉.
+        修: 2026-07-02 ADR-0034 改用 render_batch_prompt (last_docs: dict).
+        """
+        from typing import Optional
+        last_docs: dict[str, Optional[str]] = {
+            "req":   "## 上次的 req 文档",
+            "arch":  "## 上次的 arch 文档",
+            "tasks": "## 上次的 tasks 文档",
+            "api":   "## 上次的 api 文档",
+            "risk":  "## 上次的 risk 文档",
+        }
+        p = render_batch_prompt("MID", "## 累积", last_docs)
+        # 5 个 kind 都被注入到 prompt
+        for kind, content in last_docs.items():
+            assert content is not None  # 类型收窄, 让 pyright 闭嘴
+            assert content in p, f"batch_docs prompt 缺 last_docs['{kind}'] 注入"
 
 
 class TestTriggerDryRun:
@@ -315,28 +336,35 @@ class TestVpbuddyDirectMode:
 
 
 class TestParallelRun:
-    """2026-06-22 ADR-0009 落地:ThreadPoolExecutor 真并行触发 6 doc_kind"""
+    """2026-07-01 ADR-0029 落地:2 kinds (batch_docs + demo) 并行触发,非老 ADR-0009 的 6 kinds.
+
+    跑一 round 调 ThreadPoolExecutor 并发触发 SCHEDULED_KINDS (2 kinds) × N meetings.
+    """
 
     def test_run_one_round_parallel(self, populated_meeting):
-        """并行触发 → 6 个结果,每个有 session_id"""
+        """并行触发 → len(SCHEDULED_KINDS) 个结果 (2026-07-01 v0.7.0 ADR-0029: 6→2 kinds; 2026-07-02 ADR-0034 改用动态断言防未来再 stale)"""
         results = run_one_round(
             meeting_ids=[populated_meeting],
             dry_run=True,
             parallel=True,
         )
-        assert len(results) == 6
+        assert len(results) == len(SCHEDULED_KINDS)
+        kinds = {r["session_id"].split(":")[-1] for r in results}
+        assert kinds == set(SCHEDULED_KINDS)
         for r in results:
             assert "session_id" in r
             assert populated_meeting in r["session_id"]
 
     def test_run_one_round_serial(self, populated_meeting):
-        """serial=True 也跑 6 个"""
+        """serial=True 也跑 len(SCHEDULED_KINDS) 个 (2026-07-01 v0.7.0 ADR-0029: 6→2 kinds; 2026-07-02 ADR-0034 改用动态断言)"""
         results = run_one_round(
             meeting_ids=[populated_meeting],
             dry_run=True,
             parallel=False,
         )
-        assert len(results) == 6
+        assert len(results) == len(SCHEDULED_KINDS)
+        kinds = {r["session_id"].split(":")[-1] for r in results}
+        assert kinds == set(SCHEDULED_KINDS)
 
 
 class TestOfflineDefaults:
