@@ -14,18 +14,20 @@ logger = logging.getLogger(__name__)
 
 
 def check_all_docs_stored_notify(meeting_id: str, doc_kinds: list[str] | None = None) -> bool:
-    """检查 6 个文档是否全部 stored (文件存在且非空), 是则:
-
-    1. push_event("docs-complete", {...}) — 让客户端收到信号, UI 显示"✅ 6 文档已生成"
-    2. **不** 再调 close_meeting (ADR-0022 — 6 docs 完成 ≠ 会议结束)
+    """检查 6 个文档是否全部 stored (文件存在且非空).
 
     Returns: True if all 6 docs exist, False otherwise.
 
     2026-07-01 重命名 + 语义改 (前: check_all_docs_stored_and_close):
     - 前: 6 docs 全 stored → push meeting-complete + close_meeting (SSE 退出)
-    - 新: 6 docs 全 stored → push docs-complete (新事件), SSE 保持, 会议继续
+    - 新: 6 docs 全 stored → 静默返 True, 不推 SSE, 不关会议
+            (客户端通过 doc-status 事件已实时看到 6 块文档填充, 不需要重复通知)
 
     会议真正结束走 close_meeting_endpoint (POST /api/meetings/{id}/close).
+
+    2026-07-02 进一步简化: 不再 push_event("docs-complete", ...) — 该事件无客户端消费,
+    e2e 实测前端 main.js 0 引用, Tauri Rust 后端 SSE 也不透传. UI 靠 docs 面板实时
+    渲染即可知道完成状态, 不需要额外 banner.
     """
     from .ui_server import _doc_path
     if doc_kinds is None:
@@ -44,26 +46,15 @@ def check_all_docs_stored_notify(meeting_id: str, doc_kinds: list[str] | None = 
             sizes[kind] = path.stat().st_size
     if not all_stored:
         return False
-    # 全部 stored → 推 docs-complete (新事件, 不关会议)
-    try:
-        from .realtime_server import push_event
-        push_event(meeting_id, "docs-complete", {
-            "meeting_id": meeting_id,
-            "status": "all_docs_stored",
-            "doc_sizes": sizes,
-            "note": "6 docs 已生成, 会议继续 (ADR-0022). 切会议/关客户端/手动结束才真正关闭.",
-        })
-        logger.info(
-            f"[{meeting_id}] 6 docs 全部 stored ({sum(sizes.values())} bytes), "
-            f"推 docs-complete (不关会议, ADR-0022)"
-        )
-    except Exception as e:
-        logger.warning(f"[{meeting_id}] docs-complete push failed: {e}")
-
+    logger.info(
+        f"[{meeting_id}] 6 docs 全部 stored ({sum(sizes.values())} bytes), "
+        f"返 True 不推 docs-complete SSE 不关会议 (ADR-0022 + 2026-07-02 删 docs-complete 死代码)"
+    )
     # 2026-07-01 ADR-0023 Phase 5: 6 docs 全部生成 → agent 主动 chat 通知
+    # (保留 — 主动 chat 是 _append_chat_message + push_event("chat-message", ...) 走的另一条路,
+    #  跟 docs-complete 死代码无关, 不在本轮清理范围)
     try:
         from .agent_proactive import trigger as _proactive_trigger
-        # state_summary: 拉当前 state 拼一个简短摘要 (fallback: 文档大小)
         state_summary = ""
         try:
             from .storage import MeetingStorage

@@ -231,36 +231,22 @@ def test_close_handles_exception(http_server, monkeypatch):
     assert "error" in body
 
 
-# ── 区分: docs-complete (notify) vs meeting-complete (close) ──
+# ── 区分: 6 docs 完成 vs meeting-complete (close) ──
+# 2026-07-02: 6 docs 完成不再推任何 SSE 事件, 所以不再有 "docs-complete" 事件断言
+# 这里只保留 meeting-complete (用户主动 close 触发) 的核心行为测试
 
 
-def test_docs_complete_and_meeting_complete_are_distinct(http_server, tmp_path, monkeypatch):
-    """核心区别: docs-complete 是 6 doc 写完触发, meeting-complete 是用户主动 close 触发."""
+def test_meeting_close_pushes_meeting_complete(http_server, tmp_path, monkeypatch):
+    """核心: 用户手动 close 触发 meeting-complete SSE."""
     from vpbuddy import realtime_server
-    from vpbuddy import ui_server_helpers
 
     events = []
     monkeypatch.setattr(realtime_server, "push_event", lambda mid, t, p: events.append(t))
     monkeypatch.setattr(realtime_server, "close_meeting", lambda mid: 0)
 
-    # 准备 DOCS_DIR
-    docs = tmp_path / "docs"
-    docs.mkdir()
-    (docs / "m").mkdir()
-    for kind in ["req", "arch", "tasks", "api", "risk"]:
-        (docs / "m" / f"{kind}.md").write_text("x")
-    (docs / "m" / "demo" / "demo.html").parent.mkdir(parents=True, exist_ok=True)
-    (docs / "m" / "demo" / "demo.html").write_text("x")
-    monkeypatch.setattr("vpbuddy.ui_server.DOCS_DIR", docs)
-
-    # 1. 6 doc 写完 → notify
-    ui_server_helpers.check_all_docs_stored_notify("m")
-    # 2. 用户手动 close
     _post(f"{http_server}/api/meetings/m/close")
 
-    assert "docs-complete" in events
     assert "meeting-complete" in events
-    assert events.index("docs-complete") < events.index("meeting-complete")
 
 
 # ── 流式: stream_stop 仍可用 (旧 API 兼容) ──

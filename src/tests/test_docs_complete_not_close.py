@@ -1,8 +1,8 @@
 """测试 ui_server_helpers.check_all_docs_stored_notify — ADR-0022 关键改动:
 
 6 docs 全 stored 后:
-- 推 docs-complete SSE 事件 (新事件名, 不再是 meeting-complete)
 - **不** 调 close_meeting (会议继续)
+- **不** 推 SSE 事件 (2026-07-02 删 docs-complete 死代码, 客户端靠 doc-status 实时显示)
 """
 
 from __future__ import annotations
@@ -35,26 +35,14 @@ def fake_docs_dir(tmp_path, monkeypatch):
     return docs / meeting
 
 
-def test_notify_pushes_docs_complete_event(fake_docs_dir, monkeypatch):
-    """6 docs 全 stored → 推 docs-complete (不是 meeting-complete)."""
-    captured = []
-
-    def fake_push(meeting_id, event_type, payload):
-        captured.append({"mid": meeting_id, "type": event_type, "payload": payload})
-
-    def fake_close(meeting_id):
-        captured.append({"close": meeting_id})
-        return 1
-
-    monkeypatch.setattr(realtime_server, "push_event", fake_push)
-    monkeypatch.setattr(realtime_server, "close_meeting", fake_close)
+def test_notify_does_NOT_push_any_event(fake_docs_dir, monkeypatch):
+    """2026-07-02 简化: 不推 docs-complete SSE (死代码, 客户端不消费)."""
+    pushed = []
+    monkeypatch.setattr(realtime_server, "push_event", lambda *a: pushed.append(a))
 
     out = ui_server_helpers.check_all_docs_stored_notify("testmtg")
     assert out is True
-    assert len(captured) == 1
-    assert captured[0]["type"] == "docs-complete"  # 新事件名, 不是 meeting-complete
-    assert captured[0]["mid"] == "testmtg"
-    assert "doc_sizes" in captured[0]["payload"]
+    assert pushed == [], f"应不推任何事件, 实际推: {pushed}"
 
 
 def test_notify_does_NOT_close_meeting(fake_docs_dir, monkeypatch):
@@ -127,11 +115,8 @@ def test_old_alias_does_not_close_either(fake_docs_dir, monkeypatch):
     assert closed == []  # 老名字也不关
 
 
-def test_push_event_failure_does_not_raise(fake_docs_dir, monkeypatch):
-    """push_event 抛异常 → 函数不 raise, 仍返 True (docs 全 stored 事实成立)."""
-    def boom(*a, **k):
-        raise RuntimeError("push failed")
-
-    monkeypatch.setattr(realtime_server, "push_event", boom)
+def test_notify_returns_true_even_without_push_event(fake_docs_dir, monkeypatch):
+    """2026-07-02: 函数不再调 push_event, 即使 realtime_server.push_event 不存在/抛异常, 函数仍正常返 True."""
+    # push_event 不存在也不影响 — 函数根本没引用它
     out = ui_server_helpers.check_all_docs_stored_notify("testmtg")
-    assert out is True  # 不因 push 失败返 False
+    assert out is True  # 6 docs 全 stored 事实成立
