@@ -5,7 +5,7 @@
 - **作者**: 张胜东 (起草: Hermes)
 - **替代**: 无 (test-only 修复 + 1 个隐性真 bug 显式化)
 - **依赖**: [ADR-0029](./0029-6-kinds-合-batch-docs-2-kinds.md) (commit `4ab04bb` 引入 batch_docs kind)
-- **落地**: v0.8.1 (test-only, 不发新 release — 同 ADR-0033 口径)
+- **落地**: v0.8.1 (test fix + release bump, 见下面 "为什么不发新 release" update)
 
 ## 背景
 
@@ -92,7 +92,15 @@ assert kinds == set(SCHEDULED_KINDS)
 
 ### 为什么不发新 release?
 
-同 ADR-0033 口径: 本 PR 只改 test + ADR 文档, 用户可见 0 影响 → 不发 v0.8.1, 直接 commit 到 main.
+写 ADR 时 (2026-07-02 上午): 同 ADR-0033 口径, 本 PR 只改 test + ADR 文档, 用户可见 0 影响 → 不发 v0.8.1, 直接 commit 到 main.
+
+**2026-07-02 下午 update**: 张胜东 override 这条决策, 直接说要发 v0.8.1. 既然用户决定 release, 本 ADR 也跟着 release 一起落地:
+- pyproject.toml version 0.8.0 → 0.8.1
+- src/vpbuddy/__init__.py __version__ 0.8.0 → 0.8.1
+- design doc v1.33 → v1.34 (本 release 标记)
+- commit + `git tag v0.8.1 && git push --tags` 触发 tauri-multi-build.yml CI 出 3 平台 release artifact
+
+→ 本 ADR 最终状态: **发 v0.8.1 release**, 即便产品代码 0 改动 (跟 semver 严格说不算 minor, 但跟用户决策走).
 
 ## 实施细节
 
