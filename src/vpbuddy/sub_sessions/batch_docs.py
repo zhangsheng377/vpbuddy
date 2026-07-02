@@ -32,6 +32,13 @@ from ..sub_session_controller import (
     format_state_summary,
 )
 
+# 2026-07-03 v0.8.4: re-export _AGENT_AVAILABLE getter 用于测试 mock
+# (原 _AGENT_AVAILABLE 是从 sub_session_controller import 时 capture, 测试 monkeypatch 改原模块无效)
+def _is_agent_available() -> bool:
+    """返回 _AGENT_AVAILABLE 当前真值. 每次调取最新值, 测试可 monkeypatch."""
+    from ..sub_session_controller import _AGENT_AVAILABLE as _cur
+    return _cur
+
 logger = logging.getLogger(__name__)
 
 # 5 文档 kind → 输出路径
@@ -171,7 +178,7 @@ def trigger_batch_docs(
     # 2026-07-03 v0.8.4: 全新空会议 (state.facts 全空 + 5 docs 全无文件) → skip
     # 空会议没说话, 不强制 LLM 写"未产出"骨架刷 doc panel.
     # 客户端 6 docs 占位 empty, 等 state 有积累后再触发.
-    if _AGENT_AVAILABLE:
+    if _is_agent_available():
         any_doc_exists = any(p.exists() and p.stat().st_size > 50 for p in paths.values())
         if not state_has_facts and not any_doc_exists:
             result["skip"] = "empty_state_no_prior_docs"
