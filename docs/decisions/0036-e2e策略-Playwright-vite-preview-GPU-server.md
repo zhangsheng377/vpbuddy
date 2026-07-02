@@ -126,17 +126,19 @@ RUN_E2E=1 pytest src/tests/e2e/ -v -m e2e
 pytest src/tests/  # 无 -m e2e, 自动 skip
 ```
 
-### 当前进度
+### 当前进度 (2026-07-02 v1.38)
 
 | 范围 | 测试数 | pass | 状态 |
 |------|-------|------|------|
 | smoke (vite + GPU + UI 渲染) | 3 | 3 | ✅ 链路通 |
 | Req #4 首页会议选择 | 6 | 6 | ✅ |
-| Req #3 + #8 KB 隔离 | 4 | 4 | ✅ |
-| Req #6 demo 版本号 | 0 | - | 📋 TODO |
-| Req #5 agent 主动提问 | 0 | - | 📋 TODO |
-| Req #2 chat 上传 UI | 0 | - | 📋 TODO |
-| **小计** | **13** | **13** | **5.3s 跑完** |
+| Req #3 + #8 KB 隔离 (含 UI stub kb_search 链路) | 4 | 4 | ✅ |
+| Req #2 chat 上传 (UI + multipart + 真 KB 灌库 + 隔离) | 6 | 6 | ✅ |
+| Req #6 demo 版本切换 (UI + 真 server + 静态文件 + iframe) | 5 | 5 | ✅ |
+| Req #5 agent 主动提问 UI (proactive class + role + icon + visual) | 6 | 6 | ✅ |
+| **小计** | **30** | **30** | **33s 跑完** |
+
+**6/8 用户需求已 e2e 覆盖** (Req #1 音频 + Req #7 网络搜索留 unit 测).
 
 ## 后果
 

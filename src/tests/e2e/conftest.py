@@ -238,6 +238,9 @@ def page(playwright_browser, vite_preview_url, gpu_server):
     # 收集浏览器 console 方便调试 (pytest -s 时能看到)
     pg.on("console", lambda msg: print(f"[BROWSER {msg.type}] {msg.text}"))
     pg.on("pageerror", lambda err: print(f"[PAGEERROR] {err}"))
+    # 收集 fetch 响应 (跨域) 方便调试
+    pg.on("response", lambda r: print(f"[FETCH {r.status}] {r.url[:120]}") if "192.168.10.63" in r.url else None)
+    pg.on("requestfailed", lambda r: print(f"[FETCH FAILED] {r.url[:120]} {r.failure}"))
     pg.goto(vite_preview_url, wait_until="domcontentloaded")
     yield pg
     pg.close()
