@@ -170,7 +170,9 @@ pytest src/tests/  # 无 -m e2e, 自动 skip
 5. 验 SSE events 列表**不**含 "docs-complete" + "doc-update"
 6. cleanup: SSH 删 6 doc
 
-**累计 31/31 e2e** (30 + 4 - 3 重复断言, 实际 33 个 test functions).
+**累计 34 个 e2e test functions** (30 + 4 新), 全套在本机 + GPU 真 server 跑过:
+- 不需 playwright (纯 stdlib urllib + ssh): 14 pass (含 4 新)
+- 需 playwright (UI 渲染 + JS 行为): 20 skip (CI 装 playwright 跑全套)
 
 ## 后果
 
