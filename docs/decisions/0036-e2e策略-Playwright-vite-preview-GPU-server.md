@@ -140,6 +140,38 @@ pytest src/tests/  # 无 -m e2e, 自动 skip
 
 **6/8 用户需求已 e2e 覆盖** (Req #1 音频 + Req #7 网络搜索留 unit 测).
 
+### 2026-07-02 补充: `/api/_e2e/*` 端点 (env-guarded, 默认 404)
+
+**背景**: 30 个 e2e 跑完发现盲点 — `check_all_docs_stored_notify` (ADR-0022 改名后的
+6 doc 完成通知) 路径没被任何 e2e 覆盖, 因为:
+- e2e 不跑 batch_docs agent (LLM 强相关, 慢), 所以 6 doc 写满**自然不发生**
+- 单元测试 `test_docs_complete_not_close.py` 只 mock `push_event`, 验不出真 GPU 进程行为
+- 用户 2026-07-02 指出: "GPU 进程是旧的, 那 e2e 是怎么跑起来的?" 暴露: e2e 没验 GPU
+  进程代码版本 = 进程跑 v0.8.3 还是 06ab0e1, e2e 无感
+
+**决策**: 加 env-guarded e2e-only HTTP 端点 `/api/_e2e/check_docs_complete?mid=XXX`,
+在**生产 server 进程内部**跑 `check_all_docs_stored_notify`, 让 push_event 推给真 SSE
+订阅者. e2e 测试通过该端点 + 真 SSE 订阅, 验 "真 GPU 进程跑新代码不推 docs-complete".
+
+**Env guard**: `VPBUDDY_E2E=1` 才暴露. 生产 deploy 不设这个 env, 端点 404. KISS,
+不抽子模块, 跟其他 debug env (`VPBUDDY_PROACTIVE_INTERVAL`) 同模式.
+
+**新增 e2e** (`test_docs_complete_no_sse.py`, 4 tests):
+- `test_e2e_endpoint_requires_env_guard`: 验 200 (e2e 启了) 或 404 (prod), 不接受 500
+- `test_check_returns_true_when_all_6_docs_stored`: 6 doc 写满 → check 返 True (真 server 行为)
+- `test_check_does_not_push_docs_complete_event`: 核心 — SSE 流**不**含 "docs-complete"
+- `test_check_does_not_close_meeting`: ADR-0022 回归保护 — check 后会议 state 仍可读
+
+**新 e2e 触发链**:
+1. SSH 写 6 doc 到 GPU `/home/zsd/vpbuddy/docs/{mid}/`
+2. 后台线程订阅 SSE `/api/meetings/{mid}/events` 收 2.5s
+3. POST `/api/_e2e/check_docs_complete?mid=XXX` (env-guarded)
+4. 真 GPU 进程跑 `check_all_docs_stored_notify` → push_event 推给 SSE 订阅者
+5. 验 SSE events 列表**不**含 "docs-complete" + "doc-update"
+6. cleanup: SSH 删 6 doc
+
+**累计 31/31 e2e** (30 + 4 - 3 重复断言, 实际 33 个 test functions).
+
 ## 后果
 
 ### 积极
