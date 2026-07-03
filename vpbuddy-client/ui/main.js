@@ -89,7 +89,9 @@ async function getGpuUrl() {
   try {
     return await invoke("get_gpu_url");
   } catch (_) {
-    return "http://gpu.zhangshengdong.com:8765";
+    // 2026-07-03 ADR-0039: 内置默认值 = 公网 GPU server (47.100.182.3:28765)
+    // 之前是 http://gpu.zhangshengdong.com:8765 (LAN IPv6-only 域名, V 家网解析失败, ADR-0036)
+    return "http://47.100.182.3:28765";
   }
 }
 
@@ -894,7 +896,9 @@ async function kbUpload() {
 }
 document.getElementById("kb-upload-btn").addEventListener("click", kbUpload);
 // 会议开始后启用上传按钮
-const _origApplyMeeting = applyMeeting || (() => {});
+// v0.8.4 (ADR-0037): applyMeeting 是 Tauri 注入的全局函数, 在 vite preview / e2e stub
+// 场景下可能没定义. 用 typeof check 避免 ReferenceError, fallback 到 no-op.
+const _origApplyMeeting = typeof applyMeeting !== "undefined" ? applyMeeting : () => {};
 function applyMeetingEnableKbUpload() {
   const btn = document.getElementById("kb-upload-btn");
   if (btn) btn.disabled = !currentMeetingId;

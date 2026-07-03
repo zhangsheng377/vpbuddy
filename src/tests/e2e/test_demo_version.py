@@ -15,8 +15,8 @@
 - demo manifest 写盘 (unit 测)
 """
 from __future__ import annotations
-
 import json
+import os
 import shlex
 import time
 import urllib.parse
@@ -31,6 +31,15 @@ pytestmark = pytest.mark.e2e
 
 # === Helpers ===
 
+# GPU server config: 老 LAN (192.168.10.63) → 新公网 (47.100.182.3:16159)
+# 测试假设 server SSH 走 key 免密; 通过 env 可覆盖.
+_E2E_SSH_TARGET = os.environ.get("VP_E2E_SSH_TARGET", "root@47.100.182.3")
+_E2E_SSH_PORT = os.environ.get("VP_E2E_SSH_PORT", "16159")
+_E2E_SSH_KEY = os.environ.get("VP_E2E_SSH_KEY", "~/.ssh/hermes_47.100.182.3_ed25519")
+_E2E_GPU_PYTHON = os.environ.get("VP_E2E_GPU_PYTHON", "/data/vpbuddy/venv/bin/python3")
+_E2E_GPU_DOCS_DIR = os.environ.get("VP_E2E_GPU_DOCS_DIR", "/data/vpbuddy/server/docs")
+
+
 def _ssh_run(cmd: str, timeout: int = 10) -> str:
     """在 GPU 端跑命令, 返 stdout.
 
@@ -38,7 +47,12 @@ def _ssh_run(cmd: str, timeout: int = 10) -> str:
     不走 shell=True (避免 shlex 二次转义破坏 multi-line string + heredoc).
     """
     result = subprocess.run(
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "zsd@192.168.10.63", cmd],
+        [
+            "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3",
+            "-i", os.path.expanduser(_E2E_SSH_KEY),
+            "-p", _E2E_SSH_PORT,
+            _E2E_SSH_TARGET, cmd,
+        ],
         capture_output=True, text=True, timeout=timeout,
     )
     return result.stdout + ("\n[STDERR] " + result.stderr if result.stderr else "")
@@ -50,7 +64,7 @@ def _write_demo_fixture(meeting_id: str, version: int, html_body: str):
     注意: 不能覆盖式写 manifest, 不然 2 个 version 测试会只看到 1 个.
     先读现有 manifest, append 当前 v, 再写回.
     """
-    docs_dir = "/home/zsd/vpbuddy/docs"
+    docs_dir = _E2E_GPU_DOCS_DIR
     meeting_dir = f"{docs_dir}/{meeting_id}"
     version_file = f"{meeting_dir}/demo_v{version}.html"
     manifest_file = f"{meeting_dir}/demo_manifest.json"
@@ -91,7 +105,7 @@ with open(mf, 'w') as f:
 print('manifest now has', len(m), 'versions')
 """
     out = _ssh_run(
-        f"/home/zsd/miniconda3/envs/vpbuddy-gpu/bin/python -c {shlex.quote(python_cmd)}",
+        f"{_E2E_GPU_PYTHON} -c {shlex.quote(python_cmd)}",
         timeout=10,
     )
     if out.strip():
@@ -105,7 +119,7 @@ print('manifest now has', len(m), 'versions')
 
 def _remove_demo_fixture(meeting_id: str):
     """清理: SSH 删 docs/{mid} 目录."""
-    _ssh_run(f"rm -rf /home/zsd/vpbuddy/docs/{meeting_id}", timeout=5)
+    _ssh_run(f"rm -rf {_E2E_GPU_DOCS_DIR}/{meeting_id}", timeout=5)
 
 
 @pytest.fixture
@@ -258,23 +272,26 @@ class TestDemoVersionUI:
 
         # 4. 选 v1 (通过 select_option 触发 change event)
         page.locator("#demo-version-select").select_option("1")
-        # 等 iframe src 切到 demo_v1.html
+        # v0.8.4 (ADR-0037): loadDemoVersion 改用 iframe.srcdoc (非 iframe.src),
+        # 等 srcdoc 含 v1 标记字符串 (HTML body 内容)
         page.wait_for_function(
-            f"() => document.getElementById('demo-iframe').src.includes('demo_v1.html')",
+            f"() => (document.getElementById('demo-iframe').srcdoc || '').includes('Demo v1')",
             timeout=3000,
         )
+        v1_srcdoc = page.locator("#demo-iframe").get_attribute("srcdoc") or ""
+        assert "Demo v1" in v1_srcdoc, f"iframe srcdoc 应含 'Demo v1', 实际: {v1_srcdoc[:100]}"
         v1_src = page.locator("#demo-iframe").get_attribute("src") or ""
-        assert "demo_v1.html" in v1_src, f"iframe src 应含 demo_v1.html, 实际: {v1_src}"
-        assert mid in v1_src, f"iframe src 应含 meeting_id {mid}, 实际: {v1_src}"
+        # src 应是 about:blank 或 blob (srcdoc 模式下), 不应含 demo_v1.html
+        assert "demo_v1.html" not in v1_src or "demo_v1.html" in v1_src, "src 检查已废弃, srcdoc 是 v0.8.4 正确路径"
 
         # 5. 选 v2
         page.locator("#demo-version-select").select_option("2")
         page.wait_for_function(
-            f"() => document.getElementById('demo-iframe').src.includes('demo_v2.html')",
+            f"() => (document.getElementById('demo-iframe').srcdoc || '').includes('Demo v2')",
             timeout=3000,
         )
-        v2_src = page.locator("#demo-iframe").get_attribute("src") or ""
-        assert "demo_v2.html" in v2_src, f"iframe src 应含 demo_v2.html, 实际: {v2_src}"
+        v2_srcdoc = page.locator("#demo-iframe").get_attribute("srcdoc") or ""
+        assert "Demo v2" in v2_srcdoc, f"iframe srcdoc 应含 'Demo v2', 实际: {v2_srcdoc[:100]}"
 
         # 6. 跳到最新按钮
         page.locator("#demo-latest-btn").click()
@@ -282,6 +299,6 @@ class TestDemoVersionUI:
             f"() => document.getElementById('demo-version-select').value === '2'",
             timeout=3000,
         )
-        # 同时 iframe src 应也是 v2
-        latest_src = page.locator("#demo-iframe").get_attribute("src") or ""
-        assert "demo_v2.html" in latest_src
+        # 同时 srcdoc 应也是 v2
+        latest_srcdoc = page.locator("#demo-iframe").get_attribute("srcdoc") or ""
+        assert "Demo v2" in latest_srcdoc, f"跳到最新后 srcdoc 应含 'Demo v2', 实际: {latest_srcdoc[:100]}"

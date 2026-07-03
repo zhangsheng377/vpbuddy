@@ -118,6 +118,25 @@ class PyannoteDiarizer:
         cfg = OmegaConf.create(config_path.read_text())
         pipeline_cfg = cfg.pipeline
         target = pipeline_cfg.name
+        # 2026-07-03: pyannote 3.1+ 把 SpeakerDiarization 从 pyannote.audio.pipelines
+        # 顶层挪到 pyannote.audio.pipelines.speaker_diarization 子模块. 老 hydra config
+        # 还用 "pyannote.audio.pipelines.SpeakerDiarization" 路径, 找不到 target.
+        # 自动 fallback 试子模块路径.
+        try:
+            import importlib
+            _mod_path, _cls_name = target.rsplit(".", 1)
+            importlib.import_module(_mod_path)
+        except (ImportError, ValueError):
+            # 试子模块: e.g. pyannote.audio.pipelines.SpeakerDiarization →
+            #         pyannote.audio.pipelines.speaker_diarization.SpeakerDiarization
+            _alt_target = target.replace(
+                "pyannote.audio.pipelines.SpeakerDiarization",
+                "pyannote.audio.pipelines.speaker_diarization.SpeakerDiarization",
+            )
+            if _alt_target != target:
+                logger.info(f"pyannote target fallback: {target} -> {_alt_target}")
+                target = _alt_target
+
         params = dict(pipeline_cfg.params or {})
 
         # 用本地路径替换 repo id

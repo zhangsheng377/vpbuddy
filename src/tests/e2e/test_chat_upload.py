@@ -101,11 +101,13 @@ class TestChatUploadUI:
 
     def test_chat_attach_button_triggers_file_input(self, page):
         """📎 按钮 click → 触发 hidden file input click (用 evaluate 验, 因为 file picker 在 headless 不会真打开)."""
+        # 切到 chat panel (chat-attach 在 panel-chat 内, 默认 display:none)
         page.locator('.bottom-nav button[data-panel="chat"]').click()
         page.wait_for_function(
             "() => document.getElementById('panel-chat').classList.contains('active')",
             timeout=3000,
         )
+        page.wait_for_selector("#chat-attach", state="visible")
 
         # inject spy: 拦截 #chat-file.click() 验证
         page.evaluate("""

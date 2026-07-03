@@ -105,8 +105,10 @@ class TestProactiveChatUI:
                 item.id = {msg_id!r};
                 const proactiveClass = 'true' ? ' proactive' : '';
                 item.className = `chat-msg assistant ok${{proactiveClass}}`;
-                const role = 'true' ? '🤖 VPBuddy' : 'VPBuddy';
-                const iconPrefix = 'true' ? '💬 ' : '';
+                // v0.8.4 (ADR-0037 第 4 项): 主动消息改用 💡 VPBuddy 提示 (灰色, 不显眼)
+                // 不再用 🤖 VPBuddy (老) / VPBuddy (普通) 区分, 而是 💡 (主动) vs VPBuddy (普通)
+                const role = 'true' ? '💡 VPBuddy 提示' : 'VPBuddy';
+                const iconPrefix = 'true' ? '💡 ' : '';
                 item.innerHTML = `
                     <div class="chat-meta"><span>${{role}}</span><span>2026-07-02</span></div>
                     <div class="chat-content">${{iconPrefix}}${{'我注意到 Q4 营收增长 18%, 你想深入分析吗?'}}</div>

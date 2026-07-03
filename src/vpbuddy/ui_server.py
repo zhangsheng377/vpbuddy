@@ -1661,6 +1661,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", f"{mime}; charset=utf-8")
             self.send_header("Content-Length", str(len(data)))
+            # 2026-07-03: 公网 GPU 部署下 /docs/* 静态文件被浏览器 CORS 拦截
+            # (Tauri webview 同源, 但 vite preview + 任何外站 fetch 都 CORS fail).
+            # 给静态文件也加 CORS header, 跟 _json / SSE 一致.
+            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(data)
         except Exception as e:

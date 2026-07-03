@@ -67,6 +67,10 @@ _KB_STATUS: dict[tuple, dict[str, Any]] = {}
 _KB_STATUS_LOCK = threading.Lock()  # 防止并发触发时 key 还没设就 update
 
 # AIAgent 是否可用(2026-06-22: import 失败时 fallback 到 subprocess)
+# 2026-07-03: 即使 import 成功 (run_agent 模块在 GPU server 装了), init_agent 内部
+# 仍要求 LLM provider 配置 (OPENROUTER_API_KEY / HERMES_API_KEY). GPU server 部署
+# 状态下 LLM provider 可能没配, 但 sub_session controller 仍要能起 (controller 不崩),
+# 然后 _get_or_create_agent 返 stub, controller 调用方走 fallback 路径.
 _AGENT_AVAILABLE = False
 _AIAgent: type | None = None
 try:
@@ -77,6 +81,32 @@ except ImportError as e:
     logger.warning(
         f"AIAgent import 失败 ({e}),将 fallback 到 subprocess.run('hermes chat')"
     )
+
+
+class _StubAIAgent:
+    """2026-07-03: LLM provider 未配置时的 stub fallback.
+
+    仅保留 session_id + cache 行为, 真实 chat 由调用方 fallback 到 subprocess
+    或返 "no_llm_configured" 错误. 目的是让 controller 进程可启动, 不崩在 init.
+    """
+    def __init__(self, session_id: str, **_kwargs):
+        self.session_id = session_id
+        self._kwargs = _kwargs
+
+    def chat(self, prompt, **kwargs):
+        # 同步返回 (跟 _trigger_via_aiagent 期望一致). 调用方从 response
+        # 看到 "no_llm_configured" 后会走自己的 fallback (subprocess / VPBUDDY_DIRECT).
+        return (
+            "[_StubAIAgent] no LLM provider configured. "
+            "Set OPENROUTER_API_KEY / HERMES_API_KEY, or use VPBUDDY_DIRECT=1."
+        )
+
+    async def achat(self, prompt, **kwargs):
+        # 真 AIAgent 有 async 接口, stub 同样提供避免调用方 hasattr 判错.
+        return self.chat(prompt, **kwargs)
+
+    def __repr__(self):
+        return f"<StubAIAgent session={self.session_id}>"
 
 
 def _agent_session_id(meeting_id: str, doc_kind: str) -> str:
@@ -97,27 +127,24 @@ def _get_or_create_agent(meeting_id: str, doc_kind: str) -> Any:
     """
     sid = _agent_session_id(meeting_id, doc_kind)
     if sid not in _AGENT_CACHE:
-        if not _AGENT_AVAILABLE or _AIAgent is None:
-            raise RuntimeError(
-                "AIAgent not available — cannot create agent. "
-                "Install hermes-agent or use VPBUDDY_DIRECT=1 mode."
-            )
-        # 2026-06-23 张胜东纠正: 不禁止 demo agent fetch/eval
-        # 防止 sandbox 太严 demo 做不出来, 先看效果
-        # 真出问题再在 UI 层 (iframe sandbox) 加隔离, 不在 agent 层禁
-        toolsets = ["terminal", "file"]
-        # ⚠️ 2026-06-23 bug 修: 之前写 ephemeral_system_prompt=(...) 多行 tuple
-        # Python 自动变 tuple, AIAgent chat 时 str + tuple 报错 TypeError
-        # 用 "\n".join([...]) 强制 str
-        _AGENT_CACHE[sid] = _AIAgent(
-            session_id=sid,
-            enabled_toolsets=toolsets,
-            platform="subagent",
-            quiet_mode=True,
-            max_iterations=30,
-            model=os.environ.get("VPBUDDY_LLM_MODEL", "MiniMax-M3"),
-            ephemeral_system_prompt="\n".join([
-                f"你是 VPBuddy 的 {doc_kind} 子 session。",
+        if _AGENT_AVAILABLE and _AIAgent is not None:
+            # 2026-06-23 张胜东纠正: 不禁止 demo agent fetch/eval
+            # 防止 sandbox 太严 demo 做不出来, 先看效果
+            # 真出问题再在 UI 层 (iframe sandbox) 加隔离, 不在 agent 层禁
+            toolsets = ["terminal", "file"]
+            # ⚠️ 2026-06-23 bug 修: 之前写 ephemeral_system_prompt=(...) 多行 tuple
+            # Python 自动变 tuple, AIAgent chat 时 str + tuple 报错 TypeError
+            # 用 "\n".join([...]) 强制 str
+            try:
+                _AGENT_CACHE[sid] = _AIAgent(
+                    session_id=sid,
+                    enabled_toolsets=toolsets,
+                    platform="subagent",
+                    quiet_mode=True,
+                    max_iterations=30,
+                    model=os.environ.get("VPBUDDY_LLM_MODEL", "MiniMax-M3"),
+                    ephemeral_system_prompt="\n".join([
+                        f"你是 VPBuddy 的 {doc_kind} 子 session。",
                 f"session_id 固定 = {sid}。",
                 f"当前 meeting_id = {meeting_id} (用于 KB 检索)。",
                 f"输出文件路径(必须写到这里):{get_doc_path(meeting_id, doc_kind)}",
@@ -154,9 +181,21 @@ def _get_or_create_agent(meeting_id: str, doc_kind: str) -> Any:
                 "",
                 "工作流:",
                 "  read_file(state) → 解析 facts → (可选) 工具调用 → 生成文档内容 → write_file(目标路径, 完整内容) → 退出",
-            ]),
-        )
-        logger.info(f"创建新 AIAgent: session_id={sid}")
+                    ]),
+                )
+                logger.info(f"创建新 AIAgent: session_id={sid}")
+            except Exception as e:
+                # 2026-07-03: GPU server 上 run_agent 装了但 init_agent 内部要 LLM provider
+                # 配置, 没配就 RuntimeError. fallback 到 StubAIAgent 让 controller 不崩.
+                logger.warning(
+                    f"AIAgent 初始化失败 ({type(e).__name__}: {e}), "
+                    f"fallback 到 _StubAIAgent (LLM 未配)"
+                )
+                _AGENT_CACHE[sid] = _StubAIAgent(session_id=sid)
+        else:
+            # run_agent 模块没装 (import 失败), 直接用 stub
+            logger.warning(f"AIAgent 模块不可用, 用 _StubAIAgent fallback (session={sid})")
+            _AGENT_CACHE[sid] = _StubAIAgent(session_id=sid)
     return _AGENT_CACHE[sid]
 
 
@@ -436,6 +475,15 @@ def _trigger_via_aiagent(prompt: str, meeting_id: str, doc_kind: str, timeout: i
             "agent_path": "in-process",
         }
     response = holder["result"]
+    # 2026-07-03: StubAIAgent 返回 "[_StubAIAgent] no LLM provider configured"
+    # 这是 fallback 标记, 不是真触发成功. 返 triggered=False 让调用方走 subprocess 路径.
+    if isinstance(response, str) and response.startswith("[_StubAIAgent]"):
+        return {
+            "triggered": False,
+            "session_id": _agent_session_id(meeting_id, doc_kind),
+            "error": response,
+            "agent_path": "in-process-stub",
+        }
     return {
         "triggered": True,
         "session_id": _agent_session_id(meeting_id, doc_kind),
