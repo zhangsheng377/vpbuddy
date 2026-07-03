@@ -1,7 +1,7 @@
 {
   "name": "vpbuddy-client",
   "private": true,
-  "version": "0.8.4",
+  "version": "0.8.5",
   "description": "VPBuddy desktop client — Tauri + Web UI",
   "type": "module",
   "scripts": {

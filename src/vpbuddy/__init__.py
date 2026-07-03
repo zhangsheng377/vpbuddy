@@ -13,7 +13,7 @@ ADR-0008 Superseded:见 docs/decisions/0008-ADR-0001-决策1-Superseded.md
 ADR-0009 部署架构:见 docs/decisions/0009-部署架构-Hermes-runtime.md (2026-06-22 更新 — VPBuddy 用 in-process `from run_agent import AIAgent` 真共享 session + ThreadPoolExecutor(3) 真并发)
 ADR-0011 HF 模型离线:见 docs/decisions/0011-HF模型离线铁律.md (2026-06-23)
 """
-__version__ = "0.8.3"  # v0.8.3 — release infra fix complete (Tauri client 3 version 0.8.1→0.8.2, 修 release artifact 文件名错位, ADR-0035 重写)
+__version__ = "0.8.5"  # v0.8.5 — 公网 GPU 部署收口 + 客户端默认 URL 切公网 (ADR-0038/ADR-0039)
 
 # === 必须在 import 任何 huggingface/sentence_transformers 之前 ===
 # 🔒 HF 模型离线铁律 (2026-06-23 ADR-0011):
