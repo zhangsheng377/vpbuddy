@@ -396,7 +396,7 @@ cargo build --release
 
 # 3. 启动 (要在图形会话里,SSH 远程要 X11 forward 或 VNC)
 ./target/release/vpbuddy-client
-# 第一次: 默认连 http://192.168.10.63:8765 (GPU server)
+# 第一次: 默认连 http://47.100.182.3:28765 (公网 GPU server, ADR-0039)
 # 改 GPU server 地址: 设置页或 VPBUDDY_GPU_URL 环境变量
 ```
 

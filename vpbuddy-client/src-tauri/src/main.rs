@@ -162,10 +162,12 @@ impl AppState {
     fn new() -> Self {
         // 2026-06-28: GPU URL 优先级链 — env var > yaml > hardcoded fallback
         // env var 用于临时调试 (不开 GUI 改文件), yaml 用于持久化 (用户改设置)
+        // 2026-07-03 ADR-0039: hardcoded fallback = 公网 GPU server (47.100.182.3:28765, ADR-0038)
+        // 之前是 http://gpu.zhangshengdong.com:8765 (LAN IPv6-only 域名, V 家网解析不到, ADR-0036)
         let url = std::env::var("VPBUDDY_GPU_URL")
             .ok()
             .or_else(|| load_client_config().map(|c| c.gpu_server_url))
-            .unwrap_or_else(|| "http://gpu.zhangshengdong.com:8765".to_string());
+            .unwrap_or_else(|| "http://47.100.182.3:28765".to_string());
         Self {
             capturing: Arc::new(AtomicBool::new(false)),
             capture_handle: Arc::new(Mutex::new(None)),
@@ -428,7 +430,8 @@ async fn open_config_dir_cmd(app: AppHandle) -> Result<String, String> {
     if !p.exists() {
         // 文件不存在, 写一个默认模板 (用户能直接编辑)
         let template = ClientConfig {
-            gpu_server_url: "http://gpu.zhangshengdong.com:8765".to_string(),
+            // 2026-07-03 ADR-0039: 公网 GPU server 默认值 (ADR-0038)
+            gpu_server_url: "http://47.100.182.3:28765".to_string(),
             audio: AudioConfig::default(),
             sse: SseConfig::default(),
         };
@@ -982,10 +985,11 @@ fn main() {
     log::info!("🏷️  VPBuddy client version: {}", env!("VPBUDDY_VERSION"));
     log::info!("日志文件: {}", log_path);
     // 2026-06-28: GPU URL 显示 — env > yaml > hardcoded (跟 AppState::new 优先级一致)
+    // 2026-07-03 ADR-0039: hardcoded fallback = 公网 GPU server (47.100.182.3:28765, ADR-0038)
     let gpu_url_display = std::env::var("VPBUDDY_GPU_URL")
         .ok()
         .or_else(|| load_client_config().map(|c| c.gpu_server_url))
-        .unwrap_or_else(|| "http://gpu.zhangshengdong.com:8765 (默认, 无 yaml)".to_string());
+        .unwrap_or_else(|| "http://47.100.182.3:28765 (默认, 无 yaml)".to_string());
     log::info!("GPU server URL: {gpu_url_display}");
     log::info!("配置文件路径: {}", client_config_path().display());
     log::info!("音频 host: {:?}, 默认输出设备: 待采集时打印",
