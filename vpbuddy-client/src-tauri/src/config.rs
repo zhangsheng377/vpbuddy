@@ -1,7 +1,5 @@
 // VPBuddy Desktop Client -- Config module (P2#6 2026-07-04)
 
-use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 use std::sync::Arc;
