@@ -104,8 +104,16 @@ class _StubAIAgent:
 
 
 def _agent_session_id(meeting_id: str, doc_kind: str) -> str:
-    """构造稳定的 session_id"""
+    """构造子 agent session_id"""
     return f"meeting:{meeting_id}:{doc_kind}"
+
+
+def _master_session_id(meeting_id: str) -> str:
+    """主 session (客户端 chat 页签) session_id
+
+    必须跟 ui_server.py _get_chat_agent 保持一致,否则 fork 引用找不到 master。
+    """
+    return f"meeting:{meeting_id}:vp-chat"
 
 
 def _get_or_create_agent(meeting_id: str, doc_kind: str) -> Any:
@@ -132,9 +140,14 @@ def _get_or_create_agent(meeting_id: str, doc_kind: str) -> Any:
             # 2026-07-04: 显式把 OPENAI_BASE_URL + OPENAI_API_KEY env 透传给 AIAgent,
             # 否则 hermes 默认走 openrouter → MiniMax-M3 也被路由过去但 openrouter
             # 不识别我们的 MiniMax API key → HTTP 401. 现在直连 MiniMax endpoint.
+            #
+            # 2026-07-04 (ADR-0041): parent_session_id fork 自主 chat session,
+            # 让 doc 生成继承 chat 上下文 (chat 里讨论的内容自动注入 doc 上下文).
             try:
+                mastersid = _master_session_id(meeting_id)
                 _AGENT_CACHE[sid] = _AIAgent(
                     session_id=sid,
+                    parent_session_id=mastersid,
                     enabled_toolsets=toolsets,
                     platform="subagent",
                     quiet_mode=True,
