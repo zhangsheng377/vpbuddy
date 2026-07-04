@@ -256,8 +256,11 @@ def _get_chat_agent(meeting_id: str):
             platform="subagent",
             quiet_mode=True,
             max_iterations=20,
-            base_url=os.environ.get("VPBUDDY_LLM_API_BASE", "http://localhost:11434/v1"),
-            model=os.environ.get("VPBUDDY_LLM_MODEL", "qwen3:8b"),
+            # 2026-07-04 (ADR-0041): 跟 doc agent 统一用 OPENAI_BASE_URL, 不用 VPBUDDY_LLM_API_BASE.
+            # 这样 chat 和 doc 走同一个 LLM endpoint, parent_session_id fork 时 provider 一致.
+            base_url=os.environ.get("OPENAI_BASE_URL") or os.environ.get("VPBUDDY_LLM_API_BASE", "http://localhost:11434/v1"),
+            api_key=os.environ.get("OPENAI_API_KEY") or os.environ.get("MINIMAX_API_KEY"),
+            model=os.environ.get("VPBUDDY_LLM_MODEL", "MiniMax-M3"),
             ephemeral_system_prompt="\n".join([
                 "你是 VPBuddy 的 VP Chat 主控 agent。",
                 f"session_id 固定 = {session_id}。",
