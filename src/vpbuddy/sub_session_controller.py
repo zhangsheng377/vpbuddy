@@ -1,20 +1,14 @@
-"""Sub-session controller — 后台循环触发 6 个子 session
-
-设计原则(ADR-0006 + ADR-0009 修正版):
-- 每种交付物一个独立子 session(session_id 固定 = 复用 AIAgent 实例)
-- 子 session 自己判断、自己写文件(我们不写 JSON 不做中介)
-- prompt 不指定具体工具名(让 LLM 自己选合适的)
-- in-process AIAgent(2026-06-22 落地):`from run_agent import AIAgent(session_id=...)`
-  → LLM 真共享 session 上下文,跨轮询记得上次输出
-- ThreadPoolExecutor(max_workers=3) 真并行触发(2026-06-22 落地)
-- 老代码 `subprocess.run("hermes chat")` 作为 fallback(hermes-agent 未装时仍可跑)
-
-典型用法:
-    python -m vpbuddy.sub_session_controller                # 主循环
-    python -m vpbuddy.sub_session_controller --once         # 跑一轮
-    python -m vpbuddy.sub_session_controller --meeting abc  # 单会议 6 doc
-"""
+"""sub_session_controller module (P1#1 2026-07-04)"""
 from __future__ import annotations
+
+import os
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+# ---- original imports ----
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
 
 import argparse
 import json
@@ -40,8 +34,8 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 # 默认路径(可通过环境变量覆盖)
-DATA_DIR = Path(os.environ.get("VPBUDDY_DATA_DIR", "/home/zsd/vpbuddy/data/meetings"))
-DOCS_DIR = Path(os.environ.get("VPBUDDY_DOCS_DIR", "/home/zsd/vpbuddy/docs"))
+DATA_DIR = Path(os.environ.get("VPBUDDY_DATA_DIR", PROJECT_ROOT / "data" / "meetings"))
+DOCS_DIR = Path(os.environ.get("VPBUDDY_DOCS_DIR", PROJECT_ROOT / "docs"))
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 POLL_INTERVAL = int(os.environ.get("VPBUDDY_POLL_INTERVAL", "30"))
 PARALLEL_WORKERS = int(os.environ.get("VPBUDDY_PARALLEL_WORKERS", "3"))
@@ -369,12 +363,11 @@ def render_prompt(doc_kind: str, meeting_id: str, state_summary: str, last_doc: 
     template = template_path.read_text(encoding="utf-8") if template_path.exists() else _generic_template()
 
     doc_path = get_doc_path(meeting_id, doc_kind)
-    # 先把 template 里除已知变量外的 { } 转义 (CSS / JS / 模板字符串常见)
-    safe_template = template.replace("{", "{{").replace("}", "}}")
-    # 然后把我们的 4 个变量还原成单括号
+    # P1#4 (2026-07-04): string.Template 替代 .format(), 避免文档内容含 { } 抛 KeyError
+    from string import Template as _StringTemplate
     for key in ["meeting_id", "doc_kind", "state_summary", "last_doc", "doc_path"]:
-        safe_template = safe_template.replace("{{" + key + "}}", "{" + key + "}")
-    return safe_template.format(
+        template = template.replace("{" + key + "}", "${" + key + "}")
+    return _StringTemplate(template).safe_substitute(
         meeting_id=meeting_id,
         doc_kind=doc_kind,
         state_summary=state_summary,
@@ -442,23 +435,48 @@ def _trigger_via_aiagent(prompt: str, meeting_id: str, doc_kind: str, timeout: i
     t_start = time.time()
     logger.info(f"[{meeting_id}/{doc_kind}] _trigger_via_aiagent start, prompt_len={len(prompt)}")
 
-    holder: dict[str, Any] = {"done": False, "result": None, "error": None}
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutureTimeoutError
 
-    def _runner():
+    def _chat_fn():
+        agent = _get_or_create_agent(meeting_id, doc_kind)
+        return agent.chat(prompt)
+
+    with ThreadPoolExecutor(max_workers=1) as _executor:
+        _future = _executor.submit(_chat_fn)
         try:
-            agent = _get_or_create_agent(meeting_id, doc_kind)
-            response = agent.chat(prompt)
-            holder["result"] = response
+            response = _future.result(timeout=timeout)
+            logger.info(f"[{meeting_id}/{doc_kind}] done in {time.time()-t_start:.1f}s")
+            # StubAIAgent check
+            if isinstance(response, str) and response.startswith("[_StubAIAgent]"):
+                return {
+                    "triggered": False,
+                    "session_id": _agent_session_id(meeting_id, doc_kind),
+                    "error": response,
+                    "agent_path": "in-process-stub",
+                }
+            return {
+                "triggered": True,
+                "session_id": _agent_session_id(meeting_id, doc_kind),
+                "agent_response": (response or "")[-500:] if response else "",
+                "agent_path": "in-process",
+                "error": None,
+            }
+        except _FutureTimeoutError:
+            logger.warning(f"[{meeting_id}/{doc_kind}] AIAgent timeout after {timeout}s")
+            return {
+                "triggered": False,
+                "session_id": _agent_session_id(meeting_id, doc_kind),
+                "error": f"AIAgent timeout ({timeout}s)",
+                "agent_path": "in-process",
+            }
         except Exception as e:
-            holder["error"] = e
-        finally:
-            holder["done"] = True
-
-    t = threading.Thread(target=_runner, daemon=True)
-    t.start()
-    t.join(timeout=timeout)
-
-    if not holder["done"]:
+            logger.error(f"[{meeting_id}/{doc_kind}] AIAgent error: {type(e).__name__}: {e}")
+            return {
+                "triggered": False,
+                "session_id": _agent_session_id(meeting_id, doc_kind),
+                "error": f"{type(e).__name__}: {str(e)[:200]}",
+                "agent_path": "in-process",
+            }
         logger.warning(f"[{meeting_id}/{doc_kind}] AIAgent timeout after {timeout}s, thread still alive")
         return {
             "triggered": False,

@@ -1,15 +1,4 @@
-"""RAG 后端抽象层 — Chroma 嵌入式实现 (ADR-0019)
-
-提供统一的 add / query / delete / count 接口, 业务代码只调此接口。
-本期实现: ChromaRAG (wrap chromadb.PersistentClient)
-未来替换: 重写同类, 不修改业务代码。
-
-用法:
-    rag = get_rag()
-    rag.add(ids=["doc1"], documents=["Hello world"], metadatas=[{"meeting_id": "mtg1"}])
-    results = rag.query("hello", top_k=5, where={"meeting_id": "mtg1"})
-"""
-
+"""RAG backend abstraction layer (Chroma embedded, ADR-0019)"""
 from __future__ import annotations
 
 import logging
@@ -19,8 +8,12 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# 默认数据目录
-DATA_DIR = Path(os.environ.get("VPBUDDY_DATA_DIR", "/home/zsd/vpbuddy/data"))
+# Auto-computed project root. P1#1 (2026-07-04)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+# Default data directory
+DATA_DIR = Path(os.environ.get("VPBUDDY_DATA_DIR", PROJECT_ROOT / "data"))
+
 
 # ── 类型别名 ──
 Metadata = dict[str, Any]

@@ -10,6 +10,11 @@
 - 不写 REST API(VPBuddy engine 自己会用)
 - speaker 校准:按时长排序重映射为 SPEAKER_00..07
 
+P0 修复 (2026-07-04): AutoModel 进程级单例缓存 + 预热
+  - _get_model() 缓存 4 个模型(ASR+VAD+punc+spk)的 AutoModel 实例
+  - warmup_models() 可在服务器启动时调用,提前加载
+  - transcribe() 不再每次新建 AutoModel
+    
 2026-06-21 张胜东 + Hermes 写
 """
 from __future__ import annotations
@@ -18,6 +23,7 @@ import argparse
 import json
 import os
 import sys
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -30,7 +36,92 @@ DEFAULT_VAD = "fsmn-vad"
 DEFAULT_PUNC = "ct-punc"
 DEFAULT_SPK = "cam++"
 DEFAULT_DEVICE = "cuda" if os.environ.get("CUDA_VISIBLE_DEVICES", "0") != "" else "cpu"
+DEFAULT_BATCH_SIZE_S = int(os.environ.get("VPBUDDY_ASR_BATCH_SEC", "60"))  # funasr batch 窗口
 
+# === P0 修复: 模块级 AutoModel 单例缓存 ===
+_ASR_CACHE: dict[str, object] = {}
+_ASR_CACHE_LOCK = threading.Lock()
+
+
+def _asr_cache_key(asr: str, vad: str, punc: str, spk: str, device: str) -> str:
+    return f"{asr}|{vad}|{punc}|{spk}|{device}"
+
+
+def _get_model(
+    asr: str = DEFAULT_FUNASR_MODEL,
+    vad: str = DEFAULT_VAD,
+    punc: str = DEFAULT_PUNC,
+    spk: str = DEFAULT_SPK,
+    device: str = DEFAULT_DEVICE,
+):
+    """获取缓存的 funasr AutoModel 实例 (线程安全单例).
+
+    第 1 次调用加载 4 个模型进 GPU (~28s), 之后直接返回缓存实例 (< 0.01s).
+    不同参数组合独立缓存 (但生产环境只用一套配置).
+    """
+    cache_key = _asr_cache_key(asr, vad, punc, spk, device)
+    if cache_key not in _ASR_CACHE:
+        with _ASR_CACHE_LOCK:
+            # 双重检查锁
+            if cache_key not in _ASR_CACHE:
+                from funasr import AutoModel
+
+                # 短名映射
+                asr_short = (
+                    "paraformer-zh"
+                    if asr in ("paraformer", "paraformer-zh")
+                    else "sensevoice-small"
+                    if asr in ("sensevoice", "SenseVoiceSmall", "iic/SenseVoiceSmall")
+                    else asr
+                )
+                print(f"[gpu_transcribe] 加载 ASR 模型: ASR={asr_short} VAD={vad} PUNC={punc} SPK={spk} DEVICE={device}")
+                model = AutoModel(
+                    model=asr_short,
+                    vad_model=vad,
+                    punc_model=punc,
+                    spk_model=spk,
+                    device=device,
+                    disable_update=True,
+                )
+                _ASR_CACHE[cache_key] = model
+                print(f"[gpu_transcribe] 模型加载完成, 缓存 key={cache_key}")
+    return _ASR_CACHE[cache_key]
+
+
+def warmup_models(
+    asr: str = DEFAULT_FUNASR_MODEL,
+    vad: str = DEFAULT_VAD,
+    punc: str = DEFAULT_PUNC,
+    spk: str = DEFAULT_SPK,
+    device: str = DEFAULT_DEVICE,
+) -> None:
+    """预热模型: 服务器启动时调用, 避免首次请求等 28s.
+
+    调用方示例:
+        from vpbuddy.scripts.gpu_transcribe import warmup_models
+        warmup_models()  # 放在 ui_server 启动代码中
+
+    同时也跑一次空音频推理验证 GPU 可用.
+    """
+    import time
+    t0 = time.time()
+    model = _get_model(asr, vad, punc, spk, device)
+    # 跑一次空推理, 触发 CUDA 初始化 + 模型 warmup
+    dummy = np.zeros(16000 * 1, dtype=np.float32)
+    _ = model.generate(input=dummy, fs=16000)
+    elapsed = time.time() - t0
+    print(f"[gpu_transcribe] 预热完成: {elapsed:.1f}s, GPU 设备={device}")
+
+
+def clear_cache() -> None:
+    """清空模型缓存 (测试/重载用)."""
+    global _ASR_CACHE
+    _ASR_CACHE = {}
+
+
+# ============================================================
+# 核心功能 (无状态函数)
+# ============================================================
 
 def audio_to_16k_mono(audio_path: str) -> tuple[np.ndarray, int]:
     """读取音频(任意格式)→ 16kHz mono float32 numpy array。"""
@@ -54,21 +145,12 @@ def transcribe(
     spk: str = DEFAULT_SPK,
     device: str = DEFAULT_DEVICE,
 ) -> list[dict]:
-    """funasr 一站式: ASR + VAD + punc + 说话人 → [{start, end, text, spk}, ...]"""
-    from funasr import AutoModel
+    """funasr 一站式: ASR + VAD + punc + 说话人 → [{start, end, text, spk}, ...]
 
-    # 短名映射(避免某些环境强制使用 iic/xxx)
-    asr_short = "paraformer-zh" if asr in ("paraformer", "paraformer-zh") else "sensevoice-small" if asr in ("sensevoice", "SenseVoiceSmall", "iic/SenseVoiceSmall") else asr
-
-    model = AutoModel(
-        model=asr_short,
-        vad_model=vad,
-        punc_model=punc,
-        spk_model=spk,
-        device=device,
-        disable_update=True,
-    )
-    result = model.generate(input=audio, fs=sr, batch_size_s=60)
+    P0 修复: 使用 _get_model() 缓存, 不再每次新建 AutoModel.
+    """
+    model = _get_model(asr=asr, vad=vad, punc=punc, spk=spk, device=device)
+    result = model.generate(input=audio, fs=sr, batch_size_s=DEFAULT_BATCH_SIZE_S)
 
     if not result:
         return []
@@ -147,13 +229,7 @@ def self_test():
     """冒烟测试:用脚本自己生成 5 秒静音,确认 pipeline 跑通。"""
     print("=== SELF-TEST (5s 静音) ===")
     audio = np.zeros(16000 * 5, dtype=np.float32)
-    from funasr import AutoModel
-    model = AutoModel(
-        model=DEFAULT_FUNASR_MODEL,
-        vad_model=DEFAULT_VAD,
-        device=DEFAULT_DEVICE,
-        disable_update=True,
-    )
+    model = _get_model(vad=DEFAULT_VAD, spk="")  # 仅 ASR + VAD, 无 spk (更快)
     result = model.generate(input=audio, fs=16000)
     print(f"  推理 OK,返回类型: {type(result).__name__}")
     print(f"  GPU 设备: {DEFAULT_DEVICE}")

@@ -1,23 +1,12 @@
-"""agent 主动提问模块 (ADR-0023 Phase 5 + v0.8.4 调整).
-
-设计原则:
-- 触发场景: docs_complete / risk_threshold / demo_new_version / silence / time_node
-- 节流: 同 (meeting_id, trigger_type) 生命周期内只触发 1 次 (避免刷屏)
-- 2026-07-03 v0.8.4: 不再推 chat-message (用户反馈 - 这些是 tip 不是 QA, 刷 chat 很乱)
-  改为走 collab.ask_question (落 collab.md + 推 SSE collab-update)
-  前端 🤝 协作疑问面板展开; 用户自选"当作已完成"在面板 dismiss
-- 异步 (daemon thread), 不阻塞主流程
-
-入口:
-    trigger(meeting_id, trigger_type, **kwargs) -> Optional[dict]
-
-触发端:
-    sub_session_controller.check_all_docs_stored_notify → docs_complete
-    sub_session_controller (RISK 累加 >=3) → risk_threshold
-    demo_version.write_demo_version (新版本写入后) → demo_new_version
-    realtime_server (后台定时任务) → silence / time_node
-"""
+"""agent_proactive module"""
 from __future__ import annotations
+
+
+# Auto-computed project root. P1#1 (2026-07-04)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+
 
 import logging
 import os
@@ -229,7 +218,6 @@ def _monitor_loop() -> None:
     节流交给 trigger() 内部处理 (同 mid + 同 type 只触发 1 次).
     """
     from .storage import MeetingStorage  # 局部 import 避免循环
-    data_dir = Path(os.environ.get("VPBUDDY_DATA_DIR", "/home/zsd/vpbuddy/data/meetings"))
 
     while not _MONITOR_STOP.is_set():
         try:

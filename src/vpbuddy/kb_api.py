@@ -34,9 +34,37 @@ CHROMA_DIR = DATA_DIR / "chroma"
 
 
 def _parse_multipart(body: bytes, content_type: str) -> dict[str, Any]:
-    """手写超轻 multipart/form-data 解析(支持多文件 + 多 key, 不引第三方).
+    """multipart/form-data 解析 (P1#3 2026-07-04: python-multipart 替代手写).
 
-    返回结构:
+    返回:
+        {"text_field": str, "files": [{"filename":..., "data":..., "content_type":...}, ...]}
+    """
+    from io import BytesIO
+    from multipart import MultipartParser
+
+    parser = MultipartParser(BytesIO(body), content_type)
+    parts: dict[str, Any] = {"files": []}
+
+    for part in parser:
+        if part.name is None:
+            continue
+        if part.file:
+            raw = getattr(part, "raw", None)
+            data = raw if raw is not None else part.file.read()
+            ct = part.content_type or "application/octet-stream"
+            parts["files"].append({
+                "name": part.name,
+                "filename": part.filename or "unknown",
+                "data": data,
+                "content_type": ct,
+            })
+        else:
+            val = part.value
+            if isinstance(val, bytes):
+                val = val.decode("utf-8", errors="replace")
+            parts[part.name] = val
+
+    return parts构:
         {
             "text_field": str          # 普通字段值 (最后一个同名覆盖)
             "files": [

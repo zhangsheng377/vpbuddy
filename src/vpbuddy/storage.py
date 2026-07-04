@@ -1,17 +1,26 @@
 """storage — JSON 持久化(NFS)
 
+# Auto-computed project root. P1#1 (2026-07-04)
+
 设计原则(ADR-0001):
 - 服务端存储(NFS / 本地磁盘),不依赖云存储
 - 路径:`{data_dir}/meetings/{meeting_id}.json`
 - 每次修改立即落盘(crud 后调用 save)
 - 简单,不要数据库 / 不要锁
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import json
 from pathlib import Path
-
 from .state import MeetingState
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+
+
+
 
 
 class StorageError(Exception):
@@ -21,7 +30,7 @@ class StorageError(Exception):
 class MeetingStorage:
     """会议状态持久化"""
 
-    def __init__(self, data_dir: str | Path = "/home/zsd/vpbuddy/data/meetings"):
+    def __init__(self, data_dir: str | Path = PROJECT_ROOT / "data" / "meetings"):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -73,5 +82,5 @@ class MeetingStorage:
 def create_storage(data_dir: str | None = None) -> MeetingStorage:
     """工厂函数(便于测试时传临时目录)"""
     if data_dir is None:
-        data_dir = "/home/zsd/vpbuddy/data/meetings"
+        data_dir = PROJECT_ROOT / "data" / "meetings"
     return MeetingStorage(data_dir)
