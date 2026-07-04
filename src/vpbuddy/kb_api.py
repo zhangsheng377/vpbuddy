@@ -34,97 +34,35 @@ CHROMA_DIR = DATA_DIR / "chroma"
 
 
 def _parse_multipart(body: bytes, content_type: str) -> dict[str, Any]:
-    """multipart/form-data 解析 (P1#3 2026-07-04: python-multipart 替代手写).
+    """用 python-multipart 解析 multipart/form-data (P1#3 2026-07-04).
 
-    返回:
-        {"text_field": str, "files": [{"filename":..., "data":..., "content_type":...}, ...]}
-    """
-    from io import BytesIO
-    from multipart import MultipartParser
-
-    parser = MultipartParser(BytesIO(body), content_type)
-    parts: dict[str, Any] = {"files": []}
-
-    for part in parser:
-        if part.name is None:
-            continue
-        if part.file:
-            raw = getattr(part, "raw", None)
-            data = raw if raw is not None else part.file.read()
-            ct = part.content_type or "application/octet-stream"
-            parts["files"].append({
-                "name": part.name,
-                "filename": part.filename or "unknown",
-                "data": data,
-                "content_type": ct,
-            })
-        else:
-            val = part.value
-            if isinstance(val, bytes):
-                val = val.decode("utf-8", errors="replace")
-            parts[part.name] = val
-
-    return parts构:
+    返回结构:
         {
             "text_field": str          # 普通字段值 (最后一个同名覆盖)
             "files": [
                 {"filename": str, "data": bytes, "content_type": str}, ...
             ],
         }
-
-    2026-07-01 ADR-0023: 升级支持多文件 (chat 附件批量上传). 老调用方传单文件
-    时走 `parts["files"][0]`, 代码迁移成本最低.
     """
-    import re
+    from io import BytesIO
+    from multipart import parse_form
 
-    match = re.search(r'boundary=(?:"([^"]+)"|([^;]+))', content_type)
-    if not match:
-        raise ValueError("no boundary in Content-Type")
-    boundary = (match.group(1) or match.group(2)).encode()
     parts: dict[str, Any] = {"files": []}
 
-    # 标准 multipart: body 以 --{boundary} 开头, 用 \r\n--{boundary} 分隔各分节
-    # 第一个分隔前的内容 (preamble) 忽略
-    sep = b"\r\n--" + boundary
-    for section in body.split(sep):
-        if not section:
-            continue
-        # 跳过末尾的 -- (分节结束符) 和 preamble (--boundary 开头的部分)
-        trimmed = section.strip(b"\r\n")
-        if trimmed == b"--":
-            continue
-        if section.startswith(b"--"):
-            # 第一个分节的 section 可能是 --boundary\r\nContent-Disposition: ...
-            # 去掉开头多余的 --
-            section = section.lstrip(b"-")
+    def on_field(f):
+        parts[f.field_name.decode()] = f.value.decode("utf-8", "replace")
 
-        header_end = section.find(b"\r\n\r\n")
-        if header_end == -1:
-            continue
-        raw_headers = section[:header_end].decode(errors="replace")
-        data = section[header_end + 4:]
-        # trim trailing \r\n
-        if data.endswith(b"\r\n"):
-            data = data[:-2]
+    def on_file(f):
+        f.file_object.seek(0)
+        parts["files"].append({
+            "name": f.field_name.decode() if isinstance(f.field_name, bytes) else str(f.field_name or ""),
+            "filename": f.file_name.decode() if isinstance(f.file_name, bytes) else str(f.file_name or "unknown"),
+            "data": f.file_object.read(),
+            "content_type": f.content_type or "application/octet-stream",
+        })
 
-        name_match = re.search(r'name="([^"]*)"', raw_headers)
-        if not name_match:
-            continue
-        name = name_match.group(1)
-
-        if "filename=" in raw_headers:
-            fname_match = re.search(r'filename="([^"]*)"', raw_headers)
-            ct_match = re.search(r"Content-Type:\s*([^\r\n]+)", raw_headers, re.IGNORECASE)
-            parts["files"].append({
-                "name": name,
-                "filename": fname_match.group(1) if fname_match else "unknown",
-                "data": data,
-                "content_type": ct_match.group(1).strip() if ct_match else "application/octet-stream",
-            })
-        else:
-            # 普通字段: 同名覆盖 (HTML 表单语义)
-            parts[name] = data.decode(errors="replace")
-
+    parse_form({"Content-Type": content_type.encode()}, BytesIO(body),
+               on_field=on_field, on_file=on_file)
     return parts
 
 

@@ -1,4 +1,20 @@
-"""VPBuddy UI Server - real-time meeting AI backend API"""
+"""
+VPBuddy UI Server — 实时会议 AI 后端 API
+
+提供:
+- GET /                     → UI shell
+- GET /docs/*               → 静态文档
+- GET /api/meetings         → 会议列表
+- GET /api/timeline         → 全部累积项按时间倒序
+- GET /api/kb/search?q=     → 跨会议 RAG 检索
+- GET /api/status           → Controller + 数据状态
+- POST /api/meetings/upload → 上传音频自动转写+入库+触发 6 docs
+- POST /api/meetings/stream_start → 创建流式会议
+- POST /api/meetings/{id}/stream_chunk → 接收音频切片
+- GET  /api/meetings/{id}/events → SSE 实时推送转写/文档/状态更新
+
+用法: python -m vpbuddy.ui_server [--port 8765]
+"""
 from __future__ import annotations
 
 import argparse
@@ -14,44 +30,622 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from python_multipart import parse_form  # P1#3 (2026-07-04)
-from python_multipart import parse_form
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
-# Auto-computed project root. P1#1 (2026-07-04)
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+# 🔒 HF 模型离线铁律 (2026-06-23 ADR-0011):
+# 国内 huggingface.co 被墙,启动时强制默认走本地 cache。
+# 用户装新模型时临时设 HF_HUB_OFFLINE=0 即可。
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
-# === Server modules (P1#2 2026-07-04) ===
-from .server.config import (
-    DATA_DIR, DOCS_DIR, UI_DIR, DOC_KINDS, DOC_LABELS,
-    CONTROLLER_PID_FILE, CONTROLLER_LOG,
-    _CHAT_AGENT_LOCK, _CLEAN_AGENT_LOCK,
-    ASR_CLEAN_WINDOW_SIZE, ASR_CLEAN_WINDOW_TIMEOUT_S,
-    ASR_CLEAN_MAX_CHARS, ASR_CLEAN_DEFAULT_MODEL,
-)
-from .server.stream_meta import _stream_meta_path, _load_stream_meta, _save_stream_meta
-from .server.asr_clean import _get_clean_agent, _run_asr_clean
-from .server.chat_engine import (
-    _chat_path, _load_chat_history, _save_chat_history,
-    _append_chat_message, _meeting_context_for_chat,
-    _get_chat_agent, _run_vp_chat, _doc_path, _doc_payload,
-)
-from .server.api_utils import (
-    _norm_text, _is_duplicate_segment, _state_payload,
-    _validate_meeting_id, list_meetings, get_timeline, get_status,
-)
+# 默认路径(可通过环境变量覆盖)
+DOCS_DIR = Path(os.environ.get("VPBUDDY_DOCS_DIR", "/home/zsd/vpbuddy/docs"))
+DATA_DIR = Path(os.environ.get("VPBUDDY_DATA_DIR", "/home/zsd/vpbuddy/data/meetings"))
+UI_DIR = Path(os.environ.get("VPBUDDY_UI_DIR", "/home/zsd/vpbuddy/ui"))
+CONTROLLER_PID_FILE = Path("/tmp/vpbuddy_controller.pid")
+CONTROLLER_LOG = Path("/tmp/vpbuddy_controller.log")
+
+DOC_KINDS = ["req", "arch", "tasks", "api", "risk", "demo"]
+DOC_LABELS = {
+    "req": "需求文档",
+    "arch": "架构文档",
+    "tasks": "任务拆解",
+    "api": "API 设计",
+    "risk": "风险分析",
+    "demo": "Demo",
+}
+_CHAT_AGENT_CACHE: dict[str, Any] = {}
+_CHAT_AGENT_LOCK = threading.Lock()
+
+# 2026-06-28: ASR 后处理 agent cache — 同 (mid) 复用, 上下文拼接之前的整理结果
+# 设计: 客户端只看到整理后的 transcript-segment, 原始 segments 仍存 meta["transcript_segments"]
+_CLEAN_AGENT_CACHE: dict[str, Any] = {}
+_CLEAN_AGENT_LOCK = threading.Lock()
+# 2026-06-28: ASR 后处理窗口 — 累积 5 段 或 30s 超时 (任一满足即触发 LLM 整理)
+# 5 段阈值: 单段太短 LLM 推理开销不划算; 30s 超时: 与 funasr batch 节奏对齐, 零额外延迟
+ASR_CLEAN_WINDOW_SIZE = 5
+ASR_CLEAN_WINDOW_TIMEOUT_S = 30.0
+# 2026-06-29: 截断保护 — LLM 整理超长时截断到 N 字 (防 8b num_predict 用尽丢原话)
+ASR_CLEAN_MAX_CHARS = 2000
+# 2026-06-29: 默认 LLM 模型 (本地 ollama qwen3:8b, 实测 6.58s/窗口, 4/5 术语修对)
+# 用 VPBUDDY_LLM_MODEL env 覆盖, 留 hermes 云端 fallback
+ASR_CLEAN_DEFAULT_MODEL = os.environ.get("VPBUDDY_LLM_MODEL", "qwen3:8b")
+
+
+def _stream_meta_path(meeting_id: str) -> Path:
+    return DATA_DIR / f"{meeting_id}.stream.json"
+
+
+def _load_stream_meta(meeting_id: str) -> dict:
+    path = _stream_meta_path(meeting_id)
+    if not path.exists():
+        return {"processed_chunks": [], "transcript_segments": [], "metrics": []}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"processed_chunks": [], "transcript_segments": [], "metrics": []}
+
+
+def _save_stream_meta(meeting_id: str, meta: dict) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    _stream_meta_path(meeting_id).write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _norm_text(text: str) -> str:
+    return re.sub(r"\s+", "", text or "").strip("，。,.!?！？；;：:")
+
+
+def _is_duplicate_segment(segment: dict, seen_segments: list[dict]) -> bool:
+    text = _norm_text(segment.get("text", ""))
+    if not text:
+        return True
+    for old in seen_segments[-30:]:
+        old_text = _norm_text(old.get("text", ""))
+        if not old_text:
+            continue
+        if text == old_text or text in old_text or old_text in text:
+            return True
+    return False
+
 
 def _parse_multipart(body: bytes, content_type: str) -> tuple[dict[str, str], bytes | None]:
-    """P1#3 (2026-07-04): Use python-multipart instead of hand-written parser."""
-    _, fields_list, files = parse_form(body, content_type)
-    fields = {f.name: f.data.decode("utf-8", errors="replace") for f in fields_list}
-    file_data = None
-    for f in files:
-        if f.name in ("audio", "file") or f.filename:
-            file_data = f.data
-            break
+    """用 python-multipart 解析 multipart/form-data (P1#3 2026-07-04)."""
+    from io import BytesIO
+    from multipart import parse_form
+
+    fields = {}
+    file_data: bytes | None = None
+
+    def on_field(f):
+        fields[f.field_name.decode()] = f.value.decode("utf-8", "replace")
+
+    def on_file(f):
+        nonlocal file_data
+        f.file_object.seek(0)
+        data = f.file_object.read()
+        if data:
+            file_data = data
+
+    parse_form({"Content-Type": content_type.encode()}, BytesIO(body),
+               on_field=on_field, on_file=on_file)
     return fields, file_data
+
+
+def _doc_path(meeting_id: str, kind: str) -> Path:
+    if kind == "demo":
+        return DOCS_DIR / meeting_id / "demo" / "demo.html"
+    return DOCS_DIR / meeting_id / f"{kind}.md"
+
+
+def _doc_payload(meeting_id: str, kind: str) -> dict[str, Any]:
+    path = _doc_path(meeting_id, kind)
+    exists = path.exists()
+    content = ""
+    updated_at = None
+    if exists:
+        content = path.read_text(encoding="utf-8", errors="replace")
+        updated_at = datetime.fromtimestamp(path.stat().st_mtime).isoformat()
+    return {
+        "meeting_id": meeting_id,
+        "kind": kind,
+        "label": DOC_LABELS.get(kind, kind),
+        "status": "stored" if exists else "pending",
+        "path": str(path),
+        "content": content,
+        "updated_at": updated_at,
+        "doc_size": path.stat().st_size if exists else 0,
+    }
+
+
+def _chat_path(meeting_id: str) -> Path:
+    return DATA_DIR / f"{meeting_id}.chat.json"
+
+
+def _load_chat_history(meeting_id: str) -> list[dict[str, Any]]:
+    path = _chat_path(meeting_id)
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return data
+        return data.get("messages", [])
+    except Exception:
+        return []
+
+
+def _save_chat_history(meeting_id: str, messages: list[dict[str, Any]]) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    _chat_path(meeting_id).write_text(
+        json.dumps(messages[-500:], ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _append_chat_message(
+    meeting_id: str,
+    role: str,
+    content: str,
+    *,
+    source: str = "vp-chat",
+    status: str = "ok",
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    message = {
+        "id": f"chat-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}",
+        "meeting_id": meeting_id,
+        "role": role,
+        "content": content,
+        "source": source,
+        "status": status,
+        "created_at": datetime.now().isoformat(),
+    }
+    if extra:
+        message.update(extra)
+    history = _load_chat_history(meeting_id)
+    history.append(message)
+    _save_chat_history(meeting_id, history)
+    return message
+
+
+def _meeting_context_for_chat(meeting_id: str) -> dict[str, Any]:
+    state_payload: dict[str, Any] = {"meeting_id": meeting_id, "items": []}
+    try:
+        from .storage import MeetingStorage
+        storage = MeetingStorage(DATA_DIR)
+        if storage.exists(meeting_id):
+            state_payload = _state_payload(storage.load(meeting_id), include_items=True)
+    except Exception as e:
+        state_payload["error"] = str(e)
+
+    docs = []
+    for kind in DOC_KINDS:
+        doc = _doc_payload(meeting_id, kind)
+        docs.append({
+            "kind": kind,
+            "label": doc["label"],
+            "status": doc["status"],
+            "doc_size": doc["doc_size"],
+            "content_preview": doc["content"][:1200],
+        })
+    meta = _load_stream_meta(meeting_id)
+    return {
+        "meeting_id": meeting_id,
+        "state": state_payload,
+        "docs": docs,
+        "recent_transcript": meta.get("transcript_segments", [])[-20:],
+        "recent_metrics": meta.get("metrics", [])[-5:],
+    }
+
+
+def _get_chat_agent(meeting_id: str):
+    session_id = f"meeting:{meeting_id}:vp-chat"
+    with _CHAT_AGENT_LOCK:
+        if session_id in _CHAT_AGENT_CACHE:
+            return _CHAT_AGENT_CACHE[session_id]
+        from run_agent import AIAgent  # type: ignore
+
+        _CHAT_AGENT_CACHE[session_id] = AIAgent(
+            session_id=session_id,
+            enabled_toolsets=["terminal", "file"],
+            platform="subagent",
+            quiet_mode=True,
+            max_iterations=20,
+            base_url=os.environ.get("VPBUDDY_LLM_API_BASE", "http://localhost:11434/v1"),
+            model=os.environ.get("VPBUDDY_LLM_MODEL", "qwen3:8b"),
+            ephemeral_system_prompt="\n".join([
+                "你是 VPBuddy 的 VP Chat 主控 agent。",
+                f"session_id 固定 = {session_id}。",
+                "你的职责是帮助 VP 理解会议、追问风险、调整方向,并在必要时调度 6 个子 agent。",
+                "6 个固定子 agent session 是 req、arch、tasks、api、risk、demo。",
+                "你可以建议或触发内部文档/Demo更新,但禁止主动外发、投屏或调用外部会议软件。",
+                "固定交付物只有 req/arch/tasks/api/risk/demo,不能创造第 7 类固定交付物。",
+                "回答要简洁、明确,并说明你是否建议更新哪个交付物。",
+            ]),
+        )
+        return _CHAT_AGENT_CACHE[session_id]
+
+
+def _run_vp_chat(meeting_id: str, message: str, client_context: dict[str, Any] | None = None) -> dict[str, Any]:
+    ctx = _meeting_context_for_chat(meeting_id)
+    prompt = "\n".join([
+        "VP 在 VPBuddy 客户端输入了下面这句话。请结合当前会议上下文回答。",
+        "",
+        f"VP 输入:\n{message}",
+        "",
+        f"客户端上下文:\n{json.dumps(client_context or {}, ensure_ascii=False)}",
+        "",
+        f"当前会议上下文 JSON:\n{json.dumps(ctx, ensure_ascii=False)[:12000]}",
+        "",
+        "如果 VP 的意图是修改某个交付物,请明确指出目标 kind(req/arch/tasks/api/risk/demo),并给出下一步建议。",
+    ])
+
+    holder: dict[str, Any] = {"done": False, "response": None, "error": None}
+
+    def _runner():
+        try:
+            agent = _get_chat_agent(meeting_id)
+            holder["response"] = agent.chat(prompt)
+        except Exception as e:
+            holder["error"] = e
+        finally:
+            holder["done"] = True
+
+    t = threading.Thread(target=_runner, daemon=True)
+    t.start()
+    t.join(timeout=int(os.environ.get("VPBUDDY_CHAT_TIMEOUT", "120")))
+
+    if not holder["done"]:
+        return {
+            "status": "fallback",
+            "source": "fallback",
+            "content": "Hermes VP Chat 暂时超时。当前输入已记录,但未完成 Hermes 上下文推理或子 agent 调度。",
+            "error": "AIAgent timeout",
+        }
+    if holder["error"]:
+        return {
+            "status": "fallback",
+            "source": "fallback",
+            "content": (
+                "Hermes VP Chat 当前不可用。输入已记录,服务端没有静默执行外部动作。"
+                "请确认 run_agent/AIAgent 或 hermes 运行环境可用后重试。"
+            ),
+            "error": f"{type(holder['error']).__name__}: {str(holder['error'])[:300]}",
+        }
+    return {
+        "status": "ok",
+        "source": "hermes",
+        "content": str(holder["response"] or "").strip(),
+        "error": None,
+    }
+
+
+# 2026-06-28: ASR 后处理 agent — 复用 AIAgent 模式, 同 (mid) 跨次调用复用上下文
+# prompt 从 src/vpbuddy/prompts/asr_clean.md 加载 (跟 6 子 session 一样)
+def _get_clean_agent(meeting_id: str):
+    session_id = f"meeting:{meeting_id}:asr-clean"
+    with _CLEAN_AGENT_LOCK:
+        if session_id in _CLEAN_AGENT_CACHE:
+            return _CLEAN_AGENT_CACHE[session_id]
+        from run_agent import AIAgent  # type: ignore
+
+        # 加载 prompt 模板
+        prompt_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "prompts", "asr_clean.md"
+        )
+        try:
+            with open(prompt_path, encoding="utf-8") as f:
+                prompt_template = f.read()
+        except FileNotFoundError:
+            prompt_template = "你是 VPBuddy 会议转写整理助手。"  # 兜底
+
+        _CLEAN_AGENT_CACHE[session_id] = AIAgent(
+            session_id=session_id,
+            enabled_toolsets=["file"],  # 只 file (写 doc), 不 terminal (YAGNI)
+            platform="subagent",
+            quiet_mode=True,
+            max_iterations=10,  # 整理任务不需要多轮
+            base_url=os.environ.get("VPBUDDY_LLM_API_BASE", "http://localhost:11434/v1"),
+            model=os.environ.get("VPBUDDY_LLM_MODEL", "qwen3:8b"),
+            ephemeral_system_prompt=prompt_template,
+        )
+        return _CLEAN_AGENT_CACHE[session_id]
+
+
+def _run_asr_clean(meeting_id: str, raw_segments: list[dict], previous_cleaned: str = "") -> str:
+    """调 LLM 整理一段 funasr ASR 原始 segments.
+
+    输入: raw_segments 列表 (每个含 start_sec, speaker_id, text)
+         previous_cleaned 上一次的整理结果 (拼接上下文)
+    输出: LLM 整理后的纯文本
+    失败: 返回原始拼接 (fallback, 不阻塞流)
+
+    2026-06-29: 直接调 ollama HTTP API (/api/chat), 不走 AIAgent
+    原因: AIAgent dispatch 内部固定 OpenAI 协议走 minimaxi 云端,
+         `qwen3:8b` 这种本地 ollama 模型名会 400.
+         ASR 整理是单轮 LLM call, 不需要 agent 框架的 tool calling.
+    """
+    if not raw_segments:
+        return ""
+    # 拼成 prompt 期望的 [MM:SS] SPEAKER_XX: text 格式
+    lines = []
+    for s in raw_segments:
+        start = float(s.get("start_sec", 0))
+        mm = int(start // 60)
+        ss = start - mm * 60
+        spk = s.get("speaker_id", "UNKNOWN")
+        txt = (s.get("text") or "").strip()
+        if not txt:
+            continue
+        lines.append(f"[{mm:02d}:{ss:04.1f}] {spk}: {txt}")
+    raw_block = "\n".join(lines)
+
+    # 加载 prompt
+    prompt_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "prompts", "asr_clean.md"
+    )
+    try:
+        with open(prompt_path, encoding="utf-8") as f:
+            system_prompt = f.read()
+    except FileNotFoundError:
+        system_prompt = "你是 VPBuddy 会议转写整理助手。"
+
+    user_msg = "\n".join([
+        "请整理下面这段 funasr ASR 原始输出。",
+        "",
+        f"之前的整理结果 (供上下文参考):\n{previous_cleaned[:2000] if previous_cleaned else '(无, 这是会议开始)'}\n",
+        f"原始 funasr segments:\n{raw_block}\n",
+        "直接输出整理后的文本, 不要带 markdown 标题或解释。",
+    ])
+
+    # 直接调 ollama /api/chat
+    ollama_url = os.environ.get("VPBUDDY_OLLAMA_URL", "http://localhost:11434/api/chat")
+    model = os.environ.get("VPBUDDY_LLM_MODEL", "qwen3:8b")
+    timeout = int(os.environ.get("VPBUDDY_CLEAN_TIMEOUT", "60"))
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_msg},
+        ],
+        "stream": False,
+        "options": {"num_predict": 4096, "temperature": 0.1},
+    }
+
+    holder: dict[str, Any] = {"done": False, "response": None, "error": None}
+
+    def _runner():
+        try:
+            req = Request(
+                ollama_url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            with urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read())
+            holder["response"] = data.get("message", {}).get("content", "")
+        except Exception as e:
+            holder["error"] = e
+        finally:
+            holder["done"] = True
+
+    t = threading.Thread(target=_runner, daemon=True)
+    t.start()
+    t.join(timeout=timeout + 5)  # 留 5s 余量
+
+    if not holder["done"] or holder["error"]:
+        print(f"[asr_clean] {meeting_id} LLM 整理失败/超时, fallback 原始拼接: {holder.get('error')}")
+        return raw_block  # fallback: 直接返回原始拼接, 不阻塞流
+
+    text = str(holder["response"] or "").strip()
+    if not text:
+        print(f"[asr_clean] {meeting_id} LLM 返回空, fallback 原始拼接")
+        return raw_block
+
+    # 2026-06-29: 截断保护 — 防 LLM 超出 num_predict 丢原话
+    if len(text) > ASR_CLEAN_MAX_CHARS:
+        print(f"[asr_clean] {meeting_id} 整理超长 {len(text)}>{ASR_CLEAN_MAX_CHARS}, 截断")
+        text = text[:ASR_CLEAN_MAX_CHARS] + f"\n[...已截断, 原始 {len(raw_segments)} 段在 cleaned_windows 回查]"
+    return text
+
+
+def _state_payload(state, include_items: bool = True) -> dict[str, Any]:
+    def _items(items, typ: str):
+        return [
+            {
+                "id": getattr(item, "id", ""),
+                "type": typ,
+                "text": getattr(item, "text", ""),
+                "priority": getattr(getattr(item, "priority", None), "value", ""),
+                "status": getattr(getattr(item, "status", None), "value", ""),
+                "speaker_name": getattr(item, "speaker_name", None) or getattr(item, "speaker_id", None),
+                "created_at": getattr(item, "created_at", None),
+            }
+            for item in items
+        ]
+
+    payload = {
+        "meeting_id": state.meeting_id,
+        "requirements": len(state.requirements),
+        "goals": len(state.goals),
+        "features": len(state.features),
+        "risks": len(state.risks),
+        "questions": len(state.open_questions),
+        "last_updated": state.last_updated,
+    }
+    # 2026-07-01 ADR-0021: 音频源类型, 默认 microphone
+    _as = getattr(state, "audio_source", None)
+    payload["audio_source"] = _as.value if _as else "microphone"
+    payload["platform"] = state.platform.value if hasattr(state, "platform") else "local"
+    if include_items:
+        payload["items"] = (
+            _items(state.requirements, "req")
+            + _items(state.goals, "goal")
+            + _items(state.features, "feat")
+            + _items(state.risks, "risk")
+            + _items(state.open_questions, "que")
+        )[-100:]
+    return payload
+
+
+def list_meetings() -> list[dict]:
+    """列出所有会议 + 统计"""
+    if not DATA_DIR.exists():
+        return []
+    out = []
+    # 2026-07-01: 只列 STREAM_*.json (长连接会议) + 其它 *.json 排除 stream meta / chat history
+    # 实际: stream_start 创建 MeetingState, 存到 {mid}.json; chat history 存到 {mid}.chat.json
+    # 老格式 (2026-06 之前) 也用 {mid}.json. 所以 glob 全部 *.json, 跳过 *.chat.json
+    for f in sorted(DATA_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        if f.suffix != ".json":
+            continue
+        # 跳过 chat history
+        if f.name.endswith(".chat.json"):
+            continue
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            # 必须是 meeting state 格式 (有 meeting_id 字段)
+            if "meeting_id" not in data:
+                continue
+            item_count = sum(len(data.get(k, [])) for k in
+                             ["requirements", "goals", "features", "risks", "open_questions"])
+            out.append({
+                "meeting_id": data.get("meeting_id", f.stem),
+                "platform": data.get("platform", "unknown"),
+                "audio_source": data.get("audio_source", "microphone"),  # 2026-07-01 ADR-0021
+                "project_name": data.get("project_name"),
+                "started_at": data.get("started_at"),
+                "last_updated": data.get("last_updated"),
+                "item_count": item_count,
+            })
+        except Exception:
+            continue
+    return out
+
+
+def _validate_meeting_id(mid: str) -> tuple[bool, str]:
+    """校验 meeting_id 格式 (ADR-0022). 返 (ok, err_msg)."""
+    import re
+    if not (3 <= len(mid) <= 32):
+        return False, "会议名长度 3-32 字符"
+    if not re.match(r"^[A-Za-z0-9_\-]+$", mid):
+        return False, "会议名只能含字母数字下划线连字符, 无空格/中文"
+    return True, ""
+
+
+def get_timeline() -> list[dict]:
+    """全部累积项按 created_at 倒序(时间线)"""
+    events = []
+    if not DATA_DIR.exists():
+        return []
+    for f in DATA_DIR.glob("*.json"):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            mid = data.get("meeting_id", f.stem)
+            for kind_key, kind_label in [
+                ("requirements", "REQ"), ("goals", "GOAL"),
+                ("features", "FEAT"), ("risks", "RISK"),
+                ("open_questions", "QUE"),
+            ]:
+                for item in data.get(kind_key, []):
+                    events.append({
+                        "meeting_id": mid,
+                        "kind": kind_label,
+                        "id": item.get("id", "?"),
+                        "text": item.get("text", ""),
+                        "priority": item.get("priority", "?"),
+                        "status": item.get("status", "?"),
+                        "created_at": item.get("created_at"),
+                        "speaker_name": item.get("speaker_name"),
+                    })
+        except Exception:
+            continue
+    events.sort(key=lambda e: e.get("created_at") or "", reverse=True)
+    return events
+
+
+def get_status() -> dict:
+    # Controller 状态
+    controller = {
+        "running": False,
+        "pid": None,
+        "poll_interval": os.environ.get("VPBUDDY_POLL_INTERVAL", "30"),
+        "last_log": None,
+    }
+    if CONTROLLER_PID_FILE.exists():
+        pid = CONTROLLER_PID_FILE.read_text().strip()
+        try:
+            os.kill(int(pid), 0)
+            controller["running"] = True
+            controller["pid"] = pid
+        except (OSError, ValueError):
+            pass
+    if CONTROLLER_LOG.exists():
+        try:
+            # 取最后一行
+            with open(CONTROLLER_LOG) as f:
+                lines = f.readlines()
+                for line in reversed(lines):
+                    if line.strip() and "Loading weights" not in line:
+                        controller["last_log"] = line.strip()[:200]
+                        break
+        except Exception:
+            pass
+
+    # 数据统计
+    meetings = list_meetings()
+    total_docs = 0
+    if DOCS_DIR.exists():
+        for d in DOCS_DIR.iterdir():
+            if d.is_dir() and d.name not in ("decisions", "research"):
+                for _ in d.rglob("*.md"):
+                    total_docs += 1
+                for _ in d.rglob("*.html"):
+                    total_docs += 1
+
+    kb_docs = 0
+    try:
+        from .rag_backend import get_rag
+        kb_docs = get_rag().count()
+    except Exception:
+        pass
+
+    return {
+        "controller": controller,
+        "stats": {
+            "active_meetings": len(meetings),
+            "total_docs": total_docs,
+            "kb_docs": kb_docs,
+        },
+        "paths": {
+            "data_dir": str(DATA_DIR),
+            "docs_dir": str(DOCS_DIR),
+            # 2026-07-02: KB_PATH undefined 历史遗留 — KB 改 Chroma 嵌入式 (ADR-0019)
+            # 已无独立 KB_PATH 文件, 字段保留回传空字符串让前端兼容
+            "kb_path": "",
+            "ui_dir": str(UI_DIR),
+        },
+        "meetings": meetings[:5],  # 最近 5 个
+    }
+
+
+# === HTTP Handler ===
+class Handler(BaseHTTPRequestHandler):
+    # 2026-06-28: 强制 HTTP/1.1 + 关 keep-alive — Python BaseHTTP 在 HTTP/1.1
+    # 模式下不会自动 chunked transfer encoding, wfile.write() 是裸字节;
+    # reqwest HTTP/1.1 keep-alive + no Content-Length 会死等 EOF → 30s
+    # timeout → "error decoding response body"。
+    # 关 keep-alive 后 Connection: close, reqwest 读到 EOF(连接关闭)立即结束,
+    # SSE 单连接不需要复用。
+    protocol_version = "HTTP/1.1"
+    # 关 keep-alive: Python BaseHTTP 默认 HTTP/1.1 + keep-alive, 改成 close
+    daemon_threads = True
 
     def log_message(self, format, *args):
         """安静点(不打印每次请求)"""
@@ -1288,18 +1882,6 @@ def main(argv: list[str] | None = None) -> int:
     try:
         from .rag_backend import get_rag
         get_rag().count()
-    except Exception:
-        pass
-    # P0 (2026-07-04): ASR model warmup
-    try:
-        from .scripts.gpu_transcribe import warmup_models
-        warmup_models()
-    except Exception:
-        pass
-    # P0 (2026-07-04): ASR model warmup, avoids 30s first-call delay
-    try:
-        from .scripts.gpu_transcribe import warmup_models
-        warmup_models()
     except Exception:
         pass
 
