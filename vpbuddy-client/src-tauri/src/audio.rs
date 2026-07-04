@@ -10,7 +10,7 @@
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::Serialize;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 #[derive(Debug, Serialize, Clone)]
@@ -32,10 +32,9 @@ pub struct AudioDeviceInfo {
 enum StreamGuard {
     Single(cpal::Stream),
     Merged {
-        // Box::leak 到 'static: process 生命周期内有效 (Tauri client 是单进程单实例)
-        // 比 unsafe Send 简单; 进程退出时 OS 回收 cpal 资源
-        _mic: &'static cpal::Stream,
-        _loopback: &'static cpal::Stream,
+        // P1#5 (2026-07-04): Arc 替代 Box::leak, 进程退出时 OS 回收
+        _mic: Arc<cpal::Stream>,
+        _loopback: Arc<cpal::Stream>,
     },
 }
 
@@ -287,7 +286,8 @@ impl AudioCapture {
         let (out_tx, out_rx) = mpsc::sync_channel::<Vec<i16>>(64);
         let unified_rate_bg = unified_rate;
         // 用 Box::leak 让 mixer thread 不被 drop (process 生命周期内有效)
-        let _mixer = Box::leak(Box::new(std::thread::spawn(move || {
+        // P1#5 (2026-07-04): thread independent, no leak
+    std::thread::spawn(move || {
             let mut mic_buf: Vec<i16> = Vec::new();
             let mut loop_buf: Vec<i16> = Vec::new();
             // 1s 切片 (避免太频繁 mix, 也避免单 stream 卡顿导致输出停顿)
@@ -325,7 +325,7 @@ impl AudioCapture {
                 mic_buf.drain(..take);
                 loop_buf.drain(..take);
             }
-        })));
+        });
 
         log::info!(
             "Phase 7 both: 双 stream 启动, unified {}Hz/{}ch, target 16kHz (软件重采样)",
@@ -334,8 +334,8 @@ impl AudioCapture {
         );
         Ok(Self {
             _stream: StreamGuard::Merged {
-                _mic: Box::leak(Box::new(mic_stream)),
-                _loopback: Box::leak(Box::new(loop_stream)),
+                _mic: Arc::new(mic_stream),
+                _loopback: Arc::new(loop_stream),
             },
             rx: out_rx,
             native_sample_rate: unified_rate,
@@ -491,9 +491,9 @@ pub fn mix_two_streams(mic: &[i16], loopback: &[i16]) -> Vec<i16> {
     let max_len = mic.len().max(loopback.len());
     let mut out = Vec::with_capacity(max_len);
     for i in 0..max_len {
-        let m = mic.get(i).copied().unwrap_or(0) as i32;
-        let l = loopback.get(i).copied().unwrap_or(0) as i32;
-        let mixed = ((m + l) / 2).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        let m = mic.get(i).copied().unwrap_or(0) as f32;
+        let l = loopback.get(i).copied().unwrap_or(0) as f32;
+        let mixed = ((m + l) * 0.5).clamp(i16::MIN as f32, i16::MAX as f32) as i16;
         out.push(mixed);
     }
     out
@@ -515,9 +515,9 @@ pub fn mix_stereo_into(dst: &mut Vec<i16>, src: &[i16]) {
     debug_assert!(src.len() % 2 == 0, "mix_stereo_into expects even-length src (L/R frames)");
     let mut i = 0;
     while i + 1 < src.len() {
-        let l = src[i] as i32;
-        let r = src[i + 1] as i32;
-        let mixed = ((l + r) / 2).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        let l = src[i] as f32;
+        let r = src[i + 1] as f32;
+        let mixed = ((l + r) * 0.5).clamp(i16::MIN as f32, i16::MAX as f32) as i16;
         dst.push(mixed);
         i += 2;
     }

@@ -11,6 +11,7 @@ v1.16:5 类核心累积(requirements/goals/features/risks/open_questions)+ 6 项
 - YAGNI:不引入状态机、不引入 workflow 框架
 """
 from __future__ import annotations
+import logging
 
 from datetime import UTC, datetime
 from enum import Enum
@@ -186,8 +187,8 @@ class MeetingState(BaseModel):
                     "risk_threshold",
                     risk_list=risk_list,
                 )
-        except Exception:
-            pass  # proactive 失败不影响主流程
+        except Exception as e:
+            logger.warning(f"Operation failed: {e}")
 
         return risk
 
