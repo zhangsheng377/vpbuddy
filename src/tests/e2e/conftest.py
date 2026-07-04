@@ -37,7 +37,7 @@ import pytest
 # === 配置 ===
 VPBUDDY_CLIENT_DIR = Path("/home/zsd/vpbuddy/vpbuddy-client")
 DIST_DIR = VPBUDDY_CLIENT_DIR / "dist"
-GPU_SERVER_URL = os.environ.get("VP_E2E_GPU_URL", "http://192.168.10.63:8765")
+GPU_SERVER_URL = os.environ.get("VP_E2E_GPU_URL", "http://47.100.182.3:28765")
 E2E_VITE_PORT = 4173
 
 
@@ -61,12 +61,12 @@ def _port_free(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) != 0
 
 
-def _http_ready(url: str, timeout: float = 2.0) -> bool:
+def _http_ready(url: str, timeout: float = 5.0) -> bool:
     try:
         req = urllib.request.Request(url, method="GET")
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status == 200
-    except (urllib.error.URLError, ConnectionError, OSError, socket.timeout):
+    except Exception:
         return False
 
 
@@ -228,18 +228,33 @@ def playwright_browser():
 
 
 @pytest.fixture
-def page(playwright_browser, vite_preview_url, gpu_server):
-    """单 page 上下文, 注入 Tauri stub + GPU URL 配置."""
+def page(playwright_browser, vite_preview_url):
+    """单 page 上下文, 注入 Tauri stub. 不依赖 GPU server (UI-only 测试用)."""
     ctx = playwright_browser.new_context()
     ctx.add_init_script(
-        f"window.__VP_E2E_GPU_URL__ = {gpu_server!r};\n{TAURI_STUB_SCRIPT}"
+        f"window.__VP_E2E_GPU_URL__ = {GPU_SERVER_URL!r};\n{TAURI_STUB_SCRIPT}"
     )
     pg = ctx.new_page()
     # 收集浏览器 console 方便调试 (pytest -s 时能看到)
     pg.on("console", lambda msg: print(f"[BROWSER {msg.type}] {msg.text}"))
     pg.on("pageerror", lambda err: print(f"[PAGEERROR] {err}"))
-    # 收集 fetch 响应 (跨域) 方便调试
-    pg.on("response", lambda r: print(f"[FETCH {r.status}] {r.url[:120]}") if "192.168.10.63" in r.url else None)
+    pg.goto(vite_preview_url, wait_until="domcontentloaded")
+    yield pg
+    pg.close()
+    ctx.close()
+
+
+@pytest.fixture
+def page_with_gpu(playwright_browser, vite_preview_url, gpu_server):
+    """单 page 上下文, 注入 Tauri stub + 真 GPU URL. 依赖 GPU server."""
+    ctx = playwright_browser.new_context()
+    ctx.add_init_script(
+        f"window.__VP_E2E_GPU_URL__ = {gpu_server!r};\n{TAURI_STUB_SCRIPT}"
+    )
+    pg = ctx.new_page()
+    pg.on("console", lambda msg: print(f"[BROWSER {msg.type}] {msg.text}"))
+    pg.on("pageerror", lambda err: print(f"[PAGEERROR] {err}"))
+    pg.on("response", lambda r: print(f"[FETCH {r.status}] {r.url[:120]}") if "47.100.182.3" in r.url else None)
     pg.on("requestfailed", lambda r: print(f"[FETCH FAILED] {r.url[:120]} {r.failure}"))
     pg.goto(vite_preview_url, wait_until="domcontentloaded")
     yield pg

@@ -59,42 +59,61 @@ else:
     torchaudio.load = lambda *a, **kw: (None, 16000)
 
 # PyTorch 2.6+ 默认 weights_only=True,pyannote 3.3.2 老 checkpoint 不兼容
-import torch as _torch
-from torch.serialization import add_safe_globals
+# (e2e 测试不依赖 torch, guard 防止无 torch 环境抛 ModuleNotFoundError)
+try:
+    import torch as _torch
+    _HAS_TORCH = True
+except ImportError:
+    _HAS_TORCH = False
 
-# 把 pyannote 用到的全局类加进 safe_globals(允许 weights_only=True 加载)
-_safe_classes = []
-for mod_name in [
-    "torch.torch_version",
-    "pyannote.audio.core.task",
-    "pyannote.audio.core.model",
-    "pyannote.audio.models.embedding",
-    "pyannote.audio.models.segmentation",
-    "pyannote.audio.models.blocks",
-]:
+if _HAS_TORCH:
+    from torch.serialization import add_safe_globals
+
+    # 把 pyannote 用到的全局类加进 safe_globals(允许 weights_only=True 加载)
+    _safe_classes = []
+    for mod_name in [
+        "torch.torch_version",
+        "pyannote.audio.core.task",
+        "pyannote.audio.core.model",
+        "pyannote.audio.models.embedding",
+        "pyannote.audio.models.segmentation",
+        "pyannote.audio.models.blocks",
+    ]:
+        try:
+            mod = __import__(mod_name, fromlist=["*"])
+            for attr in dir(mod):
+                cls = getattr(mod, attr, None)
+                if isinstance(cls, type):
+                    _safe_classes.append(cls)
+        except (ImportError, AttributeError, RuntimeError):
+            pass
+
+    if _safe_classes:
+        try:
+            add_safe_globals(_safe_classes)
+        except Exception:
+            pass
+
+    # 同时把 weights_only 默认改成 False(更宽)
+    _orig_load = _torch.load
+    def _patched_load(*args, **kwargs):
+        if "weights_only" not in kwargs:
+            kwargs["weights_only"] = False
+        return _orig_load(*args, **kwargs)
+    _torch.load = _patched_load
+
+    # pyannote.audio 可能 import 了 `from torch import load` 直接引用了
+    import torch
+    torch.load = _patched_load
+
+    # huggingface_hub 1.20 + deprecated use_auth_token → token
     try:
-        mod = __import__(mod_name, fromlist=["*"])
-        for attr in dir(mod):
-            cls = getattr(mod, attr, None)
-            if isinstance(cls, type):
-                _safe_classes.append(cls)
-    except Exception:
+        import huggingface_hub
+        _orig_download = huggingface_hub.hf_hub_download
+        def _patched_download(*args, **kwargs):
+            if "use_auth_token" in kwargs and "token" not in kwargs:
+                kwargs["token"] = kwargs.pop("use_auth_token")
+            return _orig_download(*args, **kwargs)
+        huggingface_hub.hf_hub_download = _patched_download
+    except ImportError:
         pass
-
-if _safe_classes:
-    try:
-        add_safe_globals(_safe_classes)
-    except Exception:
-        pass
-
-# 同时把 weights_only 默认改成 False(更宽)
-_orig_load = _torch.load
-def _patched_load(*args, **kwargs):
-    if "weights_only" not in kwargs:
-        kwargs["weights_only"] = False
-    return _orig_load(*args, **kwargs)
-_torch.load = _patched_load
-
-# pyannote.audio 可能 import 了 `from torch import load` 直接引用了
-import torch
-torch.load = _patched_load
