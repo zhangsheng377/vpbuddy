@@ -68,7 +68,7 @@ class ChromaRAG(RAGBackend):
         import chromadb
         from chromadb.utils import embedding_functions
 
-        persist_dir = Path(path) if path else (DATA_DIR / "chroma")
+        persist_dir = Path(path) if path else Path(os.environ.get("VPBUDDY_KB_DIR", DATA_DIR / "chroma"))
         persist_dir.mkdir(parents=True, exist_ok=True)
         logger.info("ChromaRAG init: path=%s model=%s", persist_dir, model_name)
 

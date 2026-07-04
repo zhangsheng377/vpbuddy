@@ -14,6 +14,8 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from python_multipart import parse_form  # P1#3 (2026-07-04)
+from python_multipart import parse_form
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
@@ -41,40 +43,15 @@ from .server.api_utils import (
 )
 
 def _parse_multipart(body: bytes, content_type: str) -> tuple[dict[str, str], bytes | None]:
-    boundary_match = re.search(r'boundary=(?:"([^"]+)"|([^\s;]+))', content_type)
-    if not boundary_match:
-        raise ValueError("Missing boundary")
-    boundary = (boundary_match.group(1) or boundary_match.group(2)).encode()
-    fields: dict[str, str] = {}
+    """P1#3 (2026-07-04): Use python-multipart instead of hand-written parser."""
+    _, fields_list, files = parse_form(body, content_type)
+    fields = {f.name: f.data.decode("utf-8", errors="replace") for f in fields_list}
     file_data = None
-    for part in body.split(b"--" + boundary):
-        if b"\r\n\r\n" not in part:
-            continue
-        header, data = part.split(b"\r\n\r\n", 1)
-        data = data.rstrip(b"\r\n")
-        name_match = re.search(rb'name="([^"]+)"', header)
-        if not name_match:
-            continue
-        name = name_match.group(1).decode("utf-8", "ignore")
-        if b"filename=" in header or name in ("audio", "file"):
-            if data:
-                file_data = data
-        else:
-            fields[name] = data.decode("utf-8", "ignore")
+    for f in files:
+        if f.name in ("audio", "file") or f.filename:
+            file_data = f.data
+            break
     return fields, file_data
-
-
-
-class Handler(BaseHTTPRequestHandler):
-    # 2026-06-28: 强制 HTTP/1.1 + 关 keep-alive — Python BaseHTTP 在 HTTP/1.1
-    # 模式下不会自动 chunked transfer encoding, wfile.write() 是裸字节;
-    # reqwest HTTP/1.1 keep-alive + no Content-Length 会死等 EOF → 30s
-    # timeout → "error decoding response body"。
-    # 关 keep-alive 后 Connection: close, reqwest 读到 EOF(连接关闭)立即结束,
-    # SSE 单连接不需要复用。
-    protocol_version = "HTTP/1.1"
-    # 关 keep-alive: Python BaseHTTP 默认 HTTP/1.1 + keep-alive, 改成 close
-    daemon_threads = True
 
     def log_message(self, format, *args):
         """安静点(不打印每次请求)"""

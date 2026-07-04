@@ -617,8 +617,8 @@ def trigger_sub_session(meeting_id: str, doc_kind: str, dry_run: bool = False) -
                             "file_size": v_result["file_size"],
                             "file": v_result["file"],
                         })
-                    except Exception:
-                        pass  # push 失败不影响主流程
+                    except Exception as e:
+                        logger.warning(f"[{mid}/{doc_kind}] push SSE demo-version failed: {e}")
                     result["demo_version"] = v_result["version"]
                     result["demo_versions_count"] = len(v_result["manifest"])
                 else:
