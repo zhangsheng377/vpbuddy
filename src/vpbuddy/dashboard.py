@@ -1,9 +1,14 @@
 """Dashboard — Linear Dark 风格,集成真实 6 文档 + demo
 
-读 /home/zsd/vpbuddy/docs/{meeting_id}/ 下的 6 文件(req/arch/tasks/api/risk.md + demo/demo.html)
+
+
+读 PROJECT_ROOT / "docs"/{meeting_id}/ 下的 6 文件(req/arch/tasks/api/risk.md + demo/demo.html)
 生成单文件 HTML,内嵌 Linear Dark 风格,5s 自动刷新
 """
-from __future__ import annotations
+
+# Auto-computed project root. P1#1 (2026-07-04)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
 
 import argparse
 import os
@@ -11,7 +16,7 @@ import time
 from pathlib import Path
 
 # 默认路径(可通过环境变量覆盖)
-DOCS_DIR = Path(os.environ.get("VPBUDDY_DOCS_DIR", "/home/zsd/vpbuddy/docs"))
+DOCS_DIR = Path(os.environ.get("VPBUDDY_DOCS_DIR", PROJECT_ROOT / "docs"))
 
 
 DOC_KIND_META = [
