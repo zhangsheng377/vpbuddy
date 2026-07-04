@@ -21,8 +21,12 @@
 """
 from __future__ import annotations
 
+import json
+import math
 import os
+import random
 import socket
+import struct
 import subprocess
 import sys
 import time
@@ -39,6 +43,7 @@ VPBUDDY_CLIENT_DIR = Path("/home/zsd/vpbuddy/vpbuddy-client")
 DIST_DIR = VPBUDDY_CLIENT_DIR / "dist"
 GPU_SERVER_URL = os.environ.get("VP_E2E_GPU_URL", "http://47.100.182.3:28765")
 E2E_VITE_PORT = 4173
+SR = 16000
 
 
 def _e2e_enabled() -> bool:
@@ -70,6 +75,139 @@ def _http_ready(url: str, timeout: float = 5.0) -> bool:
         return False
 
 
+def http_post(url: str, data: bytes | None = None, content_type: str = "application/octet-stream",
+              timeout: float = 300.0) -> dict:
+    """POST JSON/二进制 → 解析 JSON 响应."""
+    req = urllib.request.Request(url, data=data, method="POST")
+    if content_type:
+        req.add_header("Content-Type", content_type)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())
+
+
+def http_get(url: str, timeout: float = 10.0) -> dict:
+    """GET → 解析 JSON 响应."""
+    req = urllib.request.Request(url, method="GET")
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())
+
+
+def http_get_text(url: str, timeout: float = 10.0) -> str:
+    """GET → 返回纯文本 (如 HTML/doc 内容)."""
+    req = urllib.request.Request(url, method="GET")
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read().decode("utf-8", errors="replace")
+
+
+def generate_wav(dur_sec: float = 8.0) -> bytes:
+    """生成 16kHz mono WAV 模拟语音信号."""
+    ns = int(SR * dur_sec)
+    samples = []
+    for i in range(ns):
+        t = i / SR
+        val = (
+            0.3 * math.sin(2 * math.pi * 300 * t) * (0.5 + 0.5 * math.sin(2 * math.pi * 4 * t))
+            + 0.2 * math.sin(2 * math.pi * 800 * t) * (0.5 + 0.5 * math.sin(2 * math.pi * 3 * t))
+            + 0.15 * math.sin(2 * math.pi * 2000 * t) * (0.5 + 0.5 * math.sin(2 * math.pi * 5 * t))
+            + 0.1 * math.sin(2 * math.pi * (200 + 100 * math.sin(2 * math.pi * 0.5 * t)) * t)
+            + 0.01 * random.gauss(0, 1)
+        )
+        val = max(-0.95, min(0.95, val))
+        samples.append(int(val * 32767))
+
+    buf = bytearray()
+    nch, bits, bps = 1, 16, 2
+    ba = nch * bps
+    ds = len(samples) * ba
+    buf.extend(b"RIFF")
+    buf.extend(struct.pack("<I", 36 + ds))
+    buf.extend(b"WAVE")
+    buf.extend(b"fmt ")
+    buf.extend(struct.pack("<I", 16))
+    buf.extend(struct.pack("<H", 1))
+    buf.extend(struct.pack("<H", nch))
+    buf.extend(struct.pack("<I", SR))
+    buf.extend(struct.pack("<I", SR * ba))
+    buf.extend(struct.pack("<H", ba))
+    buf.extend(struct.pack("<H", bits))
+    buf.extend(b"data")
+    buf.extend(struct.pack("<I", ds))
+    for s in samples:
+        buf.extend(struct.pack("<h", s))
+    return bytes(buf)
+
+
+def build_upload_multipart(wav_bytes: bytes, project_name: str = "e2e-test",
+                           platform: str = "e2e") -> tuple[bytes, str]:
+    """构建 multipart/form-data 用于 upload 端点."""
+    boundary = b"----e2e-upload-boundary"
+    parts = []
+
+    def _add(name: str, value: str | bytes):
+        parts.append(b"--" + boundary + b"\r\n")
+        if isinstance(value, bytes):
+            parts.append(f'Content-Disposition: form-data; name="{name}"; filename="audio.wav"\r\n'.encode())
+            parts.append(b"Content-Type: audio/wav\r\n\r\n")
+            parts.append(value)
+        else:
+            parts.append(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode())
+            parts.append(value.encode())
+        parts.append(b"\r\n")
+
+    _add("project_name", project_name)
+    _add("platform", platform)
+    _add("audio", wav_bytes)
+
+    parts.append(b"--" + boundary + b"--\r\n")
+    body = b"".join(parts)
+    ct = f'multipart/form-data; boundary={boundary.decode()}'
+    return body, ct
+
+
+def poll_docs(gpu_url: str, meeting_id: str, timeout: float = 300.0,
+              poll_interval: float = 15.0, min_kinds: list[str] | None = None) -> dict:
+    """轮询 doc endpoint 直到所有文档有内容或超时.
+
+    Returns:
+        文档列表 (每个含 kind, status, doc_size, content_preview)
+    Raises:
+        TimeoutError: 超时仍有文档未就绪
+    """
+    if min_kinds is None:
+        min_kinds = ["req", "arch", "tasks", "api", "risk", "demo"]
+    deadline = time.time() + timeout
+
+    while time.time() < deadline:
+        try:
+            resp = http_get(f"{gpu_url}/api/meetings/{meeting_id}", timeout=10)
+        except Exception:
+            time.sleep(poll_interval)
+            continue
+
+        docs = resp.get("docs", [])
+        used_kinds = {d["kind"]: d for d in docs}
+        missing = [k for k in min_kinds if k not in used_kinds]
+        empty = [k for k, d in used_kinds.items()
+                 if d.get("doc_size", 0) == 0 and d.get("status") != "empty"]
+
+        if not missing:
+            return docs  # 全部就绪
+
+        if time.time() + poll_interval > deadline:
+            break
+        time.sleep(poll_interval)
+
+    # 超时: 返回部分结果 + 抛异常
+    raise TimeoutError(
+        f"文档就绪超时 ({timeout}s): "
+        f"missing={[k for k in min_kinds if k not in used_kinds]}, "
+        f"empty={[k for k, d in used_kinds.items() if d.get('doc_size', 0) == 0]}, "
+        f"got={list(used_kinds.keys())}"
+    )
+
+
+# === session-scoped fixtures ===
+
 @pytest.fixture(scope="session")
 def gpu_server() -> str:
     """验证 GPU server 在跑, 不行就 skip (铁律 5: 必须真 server).
@@ -79,6 +217,18 @@ def gpu_server() -> str:
     if not _http_ready(GPU_SERVER_URL):
         pytest.skip(f"GPU server 不通: {GPU_SERVER_URL} (部署路径不通, e2e 跳过)")
     return GPU_SERVER_URL
+
+
+@pytest.fixture(scope="session")
+def synth_wav() -> bytes:
+    """生成 30s 合成语音用于 e2e 上传测试.(session 级缓存)."""
+    return generate_wav(30.0)
+
+
+@pytest.fixture(scope="session")
+def short_wav() -> bytes:
+    """8s 短音频 (用于边界测试)."""
+    return generate_wav(8.0)
 
 
 @pytest.fixture(scope="session")
@@ -93,19 +243,16 @@ def vite_preview_url() -> Iterator[str]:
     if not _port_free(E2E_VITE_PORT):
         pytest.skip(f"port {E2E_VITE_PORT} 被占, e2e 起 vite preview 失败")
 
-    # 跑 vite preview 后台, 用进程组 setsid 隔离 (finalizer 杀整个 group)
-    import os
     proc = subprocess.Popen(
         ["npx", "--yes", "vite", "preview", "--port", str(E2E_VITE_PORT), "--strictPort"],
         cwd=str(VPBUDDY_CLIENT_DIR),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         stdin=subprocess.DEVNULL,
-        preexec_fn=os.setsid,  # 新进程组, 保证 finalizer SIGTERM 能传到子进程
+        preexec_fn=os.setsid,
     )
     url = f"http://localhost:{E2E_VITE_PORT}"
 
-    # 等待 vite preview ready
     for _ in range(40):
         if _http_ready(url):
             break
@@ -120,9 +267,8 @@ def vite_preview_url() -> Iterator[str]:
     try:
         yield url
     finally:
-        # SIGTERM 整个进程组 → 5s 内不死就 SIGKILL
         try:
-            os.killpg(os.getpgid(proc.pid), 15)  # SIGTERM
+            os.killpg(os.getpgid(proc.pid), 15)
         except (OSError, ProcessLookupError):
             pass
         try:
@@ -134,11 +280,8 @@ def vite_preview_url() -> Iterator[str]:
                 pass
 
 
-# === Playwright fixtures ===
+# === Tauri stub ===
 
-# Tauri stub: Tauri 2.6+ ESM bundle 在浏览器内部用 `window.__TAURI_INTERNALS__.invoke`
-# 跟 `window.__TAURI_INTERNALS__.transformCallback` (不是 `window.__TAURI__.core.invoke`).
-# 这 stub 给这俩注入, 让 main.js (Tauri client UI) 不需要 Tauri binary 也能跑.
 TAURI_STUB_SCRIPT = r"""
 (function() {
   let nextCallbackId = 1;
@@ -148,13 +291,11 @@ TAURI_STUB_SCRIPT = r"""
     console.log('[TAURI STUB invoke]', cmd, args);
     switch (cmd) {
       case 'start_capture':
-        // 返回 meetingId 让前端 UI 真切换到 recording 态
         return Promise.resolve(args && args.meetingId ? args.meetingId : 'stub-meeting');
       case 'stop_capture':
       case 'plugin:event|unlisten':
         return Promise.resolve();
       case 'plugin:event|listen':
-        // 返回假 eventId 让 listen() resolve, UI 不会 hang
         return Promise.resolve(0);
       case 'list_audio_devices':
         return Promise.resolve([{ name: 'stub-mic', is_default: true, is_loopback: false }]);
@@ -162,10 +303,8 @@ TAURI_STUB_SCRIPT = r"""
       case 'get_gpu_url':
         return Promise.resolve(window.__VP_E2E_GPU_URL__ || '');
       case 'kb_search':
-        // 真 fetch GPU server 的 kb_search endpoint (GET /api/kb/search?q=...&meeting_id=...)
         const url = new URL((window.__VP_E2E_GPU_URL__ || '') + '/api/kb/search');
         url.searchParams.set('q', String(args && args.query || ''));
-        // meetingId 是 stub 注入的全局变量 (主流程里 start_capture 拿到)
         const mid = args && args.meetingId || window.__VP_E2E_MEETING_ID__;
         if (mid) url.searchParams.set('meeting_id', mid);
         return fetch(url.toString(), { method: 'GET' }).then(r => r.json());
@@ -198,7 +337,6 @@ TAURI_STUB_SCRIPT = r"""
     plugins: { path: { sep: '/', delimiter: ':' } },
   };
 
-  // 兼容 main.js 的 fallback 路径 (window.__TAURI__.core.invoke)
   window.__TAURI__ = {
     core: { invoke },
     event: { listen: () => Promise.resolve(() => {}) },
@@ -209,11 +347,7 @@ TAURI_STUB_SCRIPT = r"""
 
 @pytest.fixture(scope="session")
 def playwright_browser():
-    """Playwright chromium browser session.
-
-    第一次 import playwright 会自动装 chromium binary (本机已经预先装好
-    ~/.cache/ms-playwright/chromium-1208). 失败也 skip, 不让 CI 挂.
-    """
+    """Playwright chromium browser session."""
     if not _e2e_enabled():
         pytest.skip("RUN_E2E 未设")
     try:
@@ -235,7 +369,6 @@ def page(playwright_browser, vite_preview_url):
         f"window.__VP_E2E_GPU_URL__ = {GPU_SERVER_URL!r};\n{TAURI_STUB_SCRIPT}"
     )
     pg = ctx.new_page()
-    # 收集浏览器 console 方便调试 (pytest -s 时能看到)
     pg.on("console", lambda msg: print(f"[BROWSER {msg.type}] {msg.text}"))
     pg.on("pageerror", lambda err: print(f"[PAGEERROR] {err}"))
     pg.goto(vite_preview_url, wait_until="domcontentloaded")
