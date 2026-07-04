@@ -129,6 +129,9 @@ def _get_or_create_agent(meeting_id: str, doc_kind: str) -> Any:
             # ⚠️ 2026-06-23 bug 修: 之前写 ephemeral_system_prompt=(...) 多行 tuple
             # Python 自动变 tuple, AIAgent chat 时 str + tuple 报错 TypeError
             # 用 "\n".join([...]) 强制 str
+            # 2026-07-04: 显式把 OPENAI_BASE_URL + OPENAI_API_KEY env 透传给 AIAgent,
+            # 否则 hermes 默认走 openrouter → MiniMax-M3 也被路由过去但 openrouter
+            # 不识别我们的 MiniMax API key → HTTP 401. 现在直连 MiniMax endpoint.
             try:
                 _AGENT_CACHE[sid] = _AIAgent(
                     session_id=sid,
@@ -137,6 +140,8 @@ def _get_or_create_agent(meeting_id: str, doc_kind: str) -> Any:
                     quiet_mode=True,
                     max_iterations=30,
                     model=os.environ.get("VPBUDDY_LLM_MODEL", "MiniMax-M3"),
+                    base_url=os.environ.get("OPENAI_BASE_URL"),  # 直连 MiniMax endpoint
+                    api_key=os.environ.get("OPENAI_API_KEY") or os.environ.get("MINIMAX_API_KEY"),
                     ephemeral_system_prompt="\n".join([
                         f"你是 VPBuddy 的 {doc_kind} 子 session。",
                 f"session_id 固定 = {sid}。",
