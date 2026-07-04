@@ -1124,7 +1124,9 @@ function renderAudioDevices() {
     select.appendChild(opt);
   }
 
-  // 2026-07-03 v0.8.4: 实情显示 (老代码用 "v0.9.x 实现" 是我自己加的占位措辞, 用户上线跑 v0.8.x 看到跟自己版本不符会困惑; 现改为 "当前 wasm runtime 不支持" + "录 mic 兜底" + "想录系统声请装虚拟声卡" 客观描述)
+  // 2026-07-03 v0.8.4: 实情显示 + 2026-07-04 P#e2e: fix ReferenceError banner is not defined
+  const banner = document.getElementById("audio-warning");
+  if (!banner) return;
   // Detect: 平台 + filter 结果里有没有 true loopback 设备
   const ua = navigator.userAgent || "";
   const isWin = /Windows/i.test(ua);
