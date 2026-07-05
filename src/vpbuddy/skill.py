@@ -11,10 +11,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 from . import __version__
 from .storage import MeetingStorage
 from .sub_session_controller import (
-    DOC_KINDS,
     list_active_meetings,
-    trigger_sub_session,
+    BATCH_DOCS_KIND,
+    DEMO_KIND,
 )
+from .sub_session_controller import _dispatch_kind
 
 
 class VPBuddySkill:
@@ -49,7 +50,7 @@ class VPBuddySkill:
             "name": self.NAME,
             "version": self.VERSION,
             "available": True,
-            "doc_kinds": DOC_KINDS,
+            "scheduled_kinds": [BATCH_DOCS_KIND, DEMO_KIND],
             "meetings_count": len(list_active_meetings()),
         }
 
@@ -66,14 +67,14 @@ class VPBuddySkill:
             return None
 
     def trigger_doc(self, meeting_id: str, doc_kind: str, dry_run: bool = False) -> dict:
-        """触发单个 doc_kind 生成(controller 的一部分,Hermes 可以直接调)
+        """触发 doc_kind 生成 (ADR-0029: batch_docs + demo)
 
         Args:
             meeting_id: 会议 ID
-            doc_kind: req/arch/tasks/api/risk/demo
+            doc_kind: batch_docs / demo (旧 req/arch/tasks/api/risk → 返回 deprecated 警告)
             dry_run: True = 只渲染 prompt 不触发 LLM
         """
-        return trigger_sub_session(meeting_id, doc_kind, dry_run=dry_run)
+        return _dispatch_kind(meeting_id, doc_kind, dry_run=dry_run)
 
     # === 元信息(给 Hermes skill discovery) ===
 
