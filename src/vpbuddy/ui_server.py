@@ -44,8 +44,7 @@ os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 DOCS_DIR = Path(os.environ.get("VPBUDDY_DOCS_DIR", "/home/zsd/vpbuddy/docs"))
 DATA_DIR = Path(os.environ.get("VPBUDDY_DATA_DIR", "/home/zsd/vpbuddy/data/meetings"))
 UI_DIR = Path(os.environ.get("VPBUDDY_UI_DIR", "/home/zsd/vpbuddy/ui"))
-CONTROLLER_PID_FILE = Path("/tmp/vpbuddy_controller.pid")
-CONTROLLER_LOG = Path("/tmp/vpbuddy_controller.log")
+# v0.9.0: CONTROLLER_PID_FILE / CONTROLLER_LOG 已删除 (controller 架构移除)
 
 DOC_KINDS = ["req", "arch", "tasks", "api", "risk", "demo"]
 DOC_LABELS = {
@@ -604,32 +603,7 @@ def get_timeline() -> list[dict]:
 
 
 def get_status() -> dict:
-    # Controller 状态
-    controller = {
-        "running": False,
-        "pid": None,
-        "poll_interval": os.environ.get("VPBUDDY_POLL_INTERVAL", "30"),
-        "last_log": None,
-    }
-    if CONTROLLER_PID_FILE.exists():
-        pid = CONTROLLER_PID_FILE.read_text().strip()
-        try:
-            os.kill(int(pid), 0)
-            controller["running"] = True
-            controller["pid"] = pid
-        except (OSError, ValueError):
-            pass
-    if CONTROLLER_LOG.exists():
-        try:
-            # 取最后一行
-            with open(CONTROLLER_LOG) as f:
-                lines = f.readlines()
-                for line in reversed(lines):
-                    if line.strip() and "Loading weights" not in line:
-                        controller["last_log"] = line.strip()[:200]
-                        break
-        except Exception:
-            pass
+    # v0.9.0: controller 状态报告已删除 (controller 架构移除)
 
     # 数据统计
     meetings = list_meetings()
@@ -650,7 +624,6 @@ def get_status() -> dict:
         pass
 
     return {
-        "controller": controller,
         "stats": {
             "active_meetings": len(meetings),
             "total_docs": total_docs,
@@ -1643,18 +1616,22 @@ class Handler(BaseHTTPRequestHandler):
                 platform=Platform.LOCAL,
             )
 
-            # 3. 触发 controller 一轮 (异步, 不阻塞)
-            import subprocess
-            controller_cmd = [
-                sys.executable, "-m", "vpbuddy.controller",
-                "--once", "--meeting", meeting_id
-            ]
-            subprocess.Popen(
-                controller_cmd,
-                cwd=str(Path(__file__).parent.parent.parent),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            # 3. 通过 task_manager 触发文档生成 (v0.9.0: 替代旧 controller subprocess)
+            try:
+                from .task_manager import get_task_manager
+                from .sub_session_controller import _dispatch_kind, BATCH_DOCS_KIND, DEMO_KIND
+                def _doc_runner(gen_id: int, mid: str) -> dict:
+                    results = {}
+                    for kind in [BATCH_DOCS_KIND, DEMO_KIND]:
+                        try:
+                            r = _dispatch_kind(mid, kind, dry_run=False)
+                            results[kind] = {"triggered": r.get("triggered"), "error": r.get("error")}
+                        except Exception as e:
+                            results[kind] = {"triggered": False, "error": str(e)}
+                    return results
+                get_task_manager().submit(meeting_id, _doc_runner)
+            except Exception as e:
+                print(f"[ui_server] 文档生成任务提交失败: {e}")
 
             # 4. 返回结果
             return self._json({

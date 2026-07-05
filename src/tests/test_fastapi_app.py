@@ -1,6 +1,9 @@
-"""测试 ui_server HTTP API — 覆盖 v0.9.0 #9 BFF 端点和核心 API 路由
+"""测试 ui_server.Handler HTTP API — 覆盖 v0.9.0 BFF 和核心 API 路由
 
-注意: ui_server 使用 Python http.server (非 FastAPI), 因此使用 ThreadingHTTPServer
+注意: 此文件测试的是旧 BaseHTTPRequestHandler 实现 (vpbuddy.ui_server.Handler)。
+FastAPI 版的端到端测试见 test_fastapi_server.py (位于 tests/e2e/)。
+
+ui_server 使用 Python http.server (非 FastAPI), 因此使用 ThreadingHTTPServer
 + urllib 进行测试 (与 test_collab_endpoints.py 模式一致).
 
 覆盖端点:

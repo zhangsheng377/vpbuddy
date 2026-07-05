@@ -19,7 +19,7 @@ VPBuddy 端到端测试脚本(本地版)
 跑 5 个非 demo 子 session(req/arch/tasks/api/risk),
 VPBUDDY_DIRECT=1 模式让主 session 写文件。
 
-前置: 启动 controller (bash ~/.hermes/scripts/vpbuddy_controller.sh start)
+前置: v0.9.0: controller 已删除, 文档生成由 _close_meeting 通过 task_manager 触发
 EOF
     exit 0
 fi

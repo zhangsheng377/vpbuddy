@@ -74,7 +74,7 @@ start_ui() {
 # v0.9.0: controller 已删除 — 文档生成由 _close_meeting 通过 task_manager 触发
 COMPONENT="${1:-all}"
 case "$COMPONENT" in
-    ui)
+    ui|all|"")
         start_ui
         ;;
     all|"")

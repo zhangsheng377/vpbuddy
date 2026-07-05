@@ -53,7 +53,7 @@ from vpbuddy.storage import create_storage
 storage = create_storage()
 
 # 1. 创建会议
-state = MeetingState(platform=Platform.FEISHU,
+state = MeetingState(platform="local",  # ADR-0008 删除飞书, 统一用 local
                      project_name="XX公司-ESG需求沟通会")
 state.add_requirement("碳排放数据统一管理", priority=Priority.HIGH)
 state.add_goal("碳中和目标")
