@@ -8,6 +8,7 @@ mod commands;
 mod upload;
 
 use config::AppState;
+use config::{load_client_config, set_log_path};
 use commands::*;
 
 fn main() {

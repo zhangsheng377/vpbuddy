@@ -116,4 +116,8 @@ if _HAS_TORCH:
             return _orig_download(*args, **kwargs)
         huggingface_hub.hf_hub_download = _patched_download
     except ImportError:
+<<<<<<< Updated upstream
         pass
+=======
+        pass
+>>>>>>> Stashed changes

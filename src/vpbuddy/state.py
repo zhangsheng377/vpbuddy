@@ -13,7 +13,9 @@ v1.16:5 类核心累积(requirements/goals/features/risks/open_questions)+ 6 项
 from __future__ import annotations
 import logging
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+
+UTC = timezone.utc
 from enum import Enum
 from uuid import uuid4
 
