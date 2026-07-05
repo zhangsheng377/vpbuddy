@@ -95,6 +95,32 @@ app.add_middleware(
 )
 
 
+# ── uvicorn startup event: warmup 日志 ──
+@app.on_event("startup")
+async def startup_warmup():
+    """Server 启动时预热: KB Chroma 加载 + 版本日志."""
+    import logging
+
+    logger = logging.getLogger("vpbuddy.fastapi")
+    try:
+        from .._version import __version__
+    except Exception:
+        __version__ = "unknown"
+    logger.info("VPBuddy FastAPI server starting (version=%s)", __version__)
+    print(f"[fastapi_app] startup: VPBuddy FastAPI v{__version__}", flush=True)
+
+    # KB Chroma 预热
+    try:
+        from ..rag_backend import get_rag
+
+        count = get_rag().count()
+        logger.info("KB Chroma 预热完成, count=%d", count)
+        print(f"[fastapi_app] KB Chroma 预热完成, count={count}", flush=True)
+    except Exception as e:
+        logger.warning("KB Chroma 预热跳过: %s", e)
+        print(f"[fastapi_app] KB Chroma 预热跳过: {e}", flush=True)
+
+
 # =============================================================================
 # GET Routes
 # =============================================================================

@@ -15,6 +15,15 @@ ADR-0011 HF 模型离线:见 docs/decisions/0011-HF模型离线铁律.md (2026-0
 """
 __version__ = "0.9.0"  # v0.9.0 — 后台任务队列 + 经验蒸馏 Phase 1 + BFF API
 
+# 动态 version 优先: 从 _version.py 加载 git describe / 环境变量版本
+try:
+    from ._version import __version__ as _dynamic_version
+
+    if _dynamic_version and _dynamic_version != "unknown":
+        __version__ = _dynamic_version
+except (ImportError, Exception):
+    pass
+
 # === 必须在 import 任何 huggingface/sentence_transformers 之前 ===
 # 🔒 HF 模型离线铁律 (2026-06-23 ADR-0011):
 # 国内 huggingface.co 被墙,启动时强制默认走本地 cache。
