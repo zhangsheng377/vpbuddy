@@ -35,8 +35,6 @@ from ..ui_server import (
     DOCS_DIR,
     DATA_DIR,
     UI_DIR,
-    CONTROLLER_PID_FILE,
-    CONTROLLER_LOG,
     ASR_CLEAN_WINDOW_SIZE,
     ASR_CLEAN_WINDOW_TIMEOUT_S,
     ASR_CLEAN_MAX_CHARS,
@@ -957,23 +955,22 @@ async def post_upload_audio(
             platform=Platform.LOCAL,
         )
 
-        # 触发 controller (异步)
-        import subprocess
-
-        controller_cmd = [
-            sys.executable,
-            "-m",
-            "vpbuddy.controller",
-            "--once",
-            "--meeting",
-            meeting_id,
-        ]
-        subprocess.Popen(
-            controller_cmd,
-            cwd=str(Path(__file__).resolve().parent.parent.parent),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        # 通过 task_manager 触发文档生成 (v0.9.0: 替代旧 controller subprocess)
+        try:
+            from ..task_manager import get_task_manager
+            from ..sub_session_controller import _dispatch_kind, BATCH_DOCS_KIND, DEMO_KIND
+            def _doc_runner(gen_id: int, mid: str) -> dict:
+                results = {}
+                for kind in [BATCH_DOCS_KIND, DEMO_KIND]:
+                    try:
+                        r = _dispatch_kind(mid, kind, dry_run=False)
+                        results[kind] = {"triggered": r.get("triggered"), "error": r.get("error")}
+                    except Exception as e:
+                        results[kind] = {"triggered": False, "error": str(e)}
+                return results
+            get_task_manager().submit(meeting_id, _doc_runner)
+        except Exception as e:
+            print(f"[fastapi] 文档生成任务提交失败: {e}")
 
         return {
             "meeting_id": meeting_id,
