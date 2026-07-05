@@ -23,14 +23,9 @@ import argparse
 import json
 import os
 import sys
-<<<<<<< Updated upstream
-import threading
-from datetime import UTC, datetime
-=======
 from datetime import datetime, timezone
 
 UTC = timezone.utc
->>>>>>> Stashed changes
 from pathlib import Path
 
 import numpy as np
