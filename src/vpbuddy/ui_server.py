@@ -764,6 +764,16 @@ class Handler(BaseHTTPRequestHandler):
             meeting_id = path.split("/")[3]
             return self._handle_collab_get(meeting_id)
 
+        # v0.9.0 #9 BFF: 会议聚合 DTO — 单次请求拿到所有开会需要的数据
+        agg_match = re.match(r"^/api/meetings/([^/]+)/aggregate$", path)
+        if agg_match:
+            meeting_id = agg_match.group(1)
+            return self._handle_meeting_aggregate(meeting_id)
+
+        # v0.9.0 #9 BFF: 设备状态
+        if path == "/api/client/device-status":
+            return self._handle_device_status()
+
         # API: 单场会议 6 类文档正文
         if path.startswith("/api/meetings/") and path.endswith("/docs"):
             meeting_id = path.split("/")[3]
@@ -1255,33 +1265,29 @@ class Handler(BaseHTTPRequestHandler):
             })
             _save_stream_meta(meeting_id, meta)
 
-            # ADR-0029: 6 doc kinds 合并为 batch_docs + demo
-            # 实时 chunk 触发 batch_docs (5 文档 1 次) + demo (单独), 不再逐个触发 6 个旧 kind
+            # v0.9.0 #5: 通过 task_manager 提交文档生成任务 (per-meeting debounce)
+            # 自动处理: 同一会议只保留最新任务, generation_id 防旧写覆盖新
+            from .task_manager import get_task_manager
             from .sub_session_controller import _dispatch_kind, BATCH_DOCS_KIND, DEMO_KIND
-            doc_kinds = [BATCH_DOCS_KIND, DEMO_KIND]
 
-            def _run_sub(mid, kind):
-                try:
-                    r = _dispatch_kind(mid, kind, dry_run=False)
-                    return (kind, r.get("triggered"), r.get("error"))
-                except Exception as e:
-                    return (kind, False, str(e))
-
-            with ThreadPoolExecutor(max_workers=2) as ex:
-                futures = [ex.submit(_run_sub, meeting_id, k) for k in doc_kinds]
-                # 不等结果, fire-and-forget (前端立刻返回 new_segments)
-                # 加 done callback 写日志
-                def _log_done(fut):
+            def _doc_runner(gen_id: int, mid: str) -> dict:
+                """触发 batch_docs + demo (2 路并行)."""
+                kinds = [BATCH_DOCS_KIND, DEMO_KIND]
+                results = {}
+                for kind in kinds:
                     try:
-                        kind, triggered, err = fut.result(timeout=1)
-                        msg = f"[stream_chunk] {kind} triggered={triggered}"
-                        if err:
-                            msg += f" err={err[:200]}"
+                        r = _dispatch_kind(mid, kind, dry_run=False)
+                        results[kind] = {"triggered": r.get("triggered"), "error": r.get("error")}
+                        msg = f"[stream_chunk/gen#{gen_id}] {kind} triggered={r.get('triggered')}"
+                        if r.get("error"):
+                            msg += f" err={r['error'][:200]}"
                         print(msg)
                     except Exception as e:
-                        print(f"[stream_chunk] callback err: {e}")
-                for f in futures:
-                    f.add_done_callback(_log_done)
+                        results[kind] = {"triggered": False, "error": str(e)}
+                        print(f"[stream_chunk/gen#{gen_id}] {kind} err: {e}")
+                return results
+
+            get_task_manager().submit(meeting_id, _doc_runner)
 
             # 4. 推送实时事件到 SSE (让连接的客户端立即收到更新)
             try:
@@ -1421,31 +1427,28 @@ class Handler(BaseHTTPRequestHandler):
             })
             _save_stream_meta(meeting_id, meta)
 
-            # ADR-0029: 6 doc kinds 合并为 batch_docs + demo
+            # v0.9.0 #5: 通过 task_manager 提交文档生成任务
+            from .task_manager import get_task_manager
             from .sub_session_controller import _dispatch_kind, BATCH_DOCS_KIND, DEMO_KIND
-            doc_kinds = [BATCH_DOCS_KIND, DEMO_KIND]
 
-            def _run_sub(mid, kind):
-                try:
-                    r = _dispatch_kind(mid, kind, dry_run=False)
-                    return (kind, r.get("triggered"), r.get("error"))
-                except Exception as e:
-                    return (kind, False, str(e))
+            def _doc_runner_bg(gen_id: int, mid: str) -> dict:
+                """触发 batch_docs + demo (2 路并行)."""
+                kinds = [BATCH_DOCS_KIND, DEMO_KIND]
+                results = {}
+                for kind in kinds:
+                    try:
+                        r = _dispatch_kind(mid, kind, dry_run=False)
+                        results[kind] = {"triggered": r.get("triggered"), "error": r.get("error")}
+                        msg = f"[stream_chunk/bg/gen#{gen_id}] {kind} triggered={r.get('triggered')}"
+                        if r.get("error"):
+                            msg += f" err={r['error'][:200]}"
+                        print(msg)
+                    except Exception as e:
+                        results[kind] = {"triggered": False, "error": str(e)}
+                        print(f"[stream_chunk/bg/gen#{gen_id}] {kind} err: {e}")
+                return results
 
-            def _log_done(fut, kind):
-                try:
-                    _, triggered, err = fut.result(timeout=1)
-                    msg = f"[stream_chunk/bg] {kind} triggered={triggered}"
-                    if err:
-                        msg += f" err={err[:200]}"
-                    print(msg)
-                except Exception as e:
-                    print(f"[stream_chunk/bg] {kind} callback err: {e}")
-
-            _bg_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="doc-trigger")
-            for k in doc_kinds:
-                fut = _bg_executor.submit(_run_sub, meeting_id, k)
-                fut.add_done_callback(lambda f, kk=k: _log_done(f, kk))
+            get_task_manager().submit(meeting_id, _doc_runner_bg)
 
             # push_event SSE
             try:
@@ -1832,8 +1835,7 @@ class Handler(BaseHTTPRequestHandler):
         1. push_event("meeting-complete", {...}) — 客户端 SSE 收到, 状态切 'closed'
         2. close_meeting(meeting_id) — 服务端 SSE 订阅者退出
         3. clear proactive throttle (ADR-0023 Phase 5: 下次开同 ID 会议, 主动消息能再触发)
-
-        调用方: UI 手动按钮 / 客户端断开前 / 切会议时 (前一个会议).
+        4. v0.9.0 #1: 经验蒸馏 — 从 MeetingState 提取经验候选
         """
         try:
             from .realtime_server import close_meeting, push_event
@@ -1849,11 +1851,29 @@ class Handler(BaseHTTPRequestHandler):
                 cleared = clear_throttle(meeting_id)
             except Exception:
                 cleared = 0
-            print(f"[ui_server] 用户主动 close_meeting: {meeting_id}, 关闭 {closed} 个 SSE 订阅者, 清 {cleared} 个 proactive 节流")
+
+            # v0.9.0 #1: 经验蒸馏 — 从 MeetingState 提取候选
+            extracted_count = 0
+            try:
+                from .storage import MeetingStorage
+                from .experience_store import extract_from_meeting_state, save_experiences
+                storage = MeetingStorage(DATA_DIR)
+                if storage.exists(meeting_id):
+                    state = storage.load(meeting_id)
+                    items = extract_from_meeting_state(meeting_id, state, meeting_title=meeting_id)
+                    if items:
+                        save_experiences(meeting_id, items)
+                        extracted_count = len(items)
+                        print(f"[experience] 会议 {meeting_id} 提取 {extracted_count} 条经验候选 → data/experiences/{meeting_id}.json")
+            except Exception as e:
+                print(f"[experience] 会议 {meeting_id} 经验提取失败: {e}")
+
+            print(f"[ui_server] 用户主动 close_meeting: {meeting_id}, 关闭 {closed} 个 SSE 订阅者, 清 {cleared} 个 proactive 节流, 提取 {extracted_count} 条经验")
             return self._json({
                 "meeting_id": meeting_id,
                 "closed_subscribers": closed,
                 "proactive_cleared": cleared,
+                "experiences_extracted": extracted_count,
                 "status": "closed",
             })
         except Exception as e:
@@ -1864,6 +1884,75 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
         self.wfile.write(f"500: {msg}".encode())
+
+    # === v0.9.0 #9 BFF API ===
+
+    def _handle_meeting_aggregate(self, meeting_id: str):
+        """GET /api/meetings/{id}/aggregate — 会议聚合 DTO.
+
+        一次返回: state, docs, collab, chat, 经验.
+        """
+        result: dict[str, Any] = {"meeting_id": meeting_id}
+
+        # 1. State
+        try:
+            from .storage import MeetingStorage
+            storage = MeetingStorage(DATA_DIR)
+            if storage.exists(meeting_id):
+                state = storage.load(meeting_id)
+                result["state"] = state.model_dump(mode="json")
+            else:
+                result["state"] = None
+        except Exception as e:
+            result["state_error"] = str(e)
+
+        # 2. Documents
+        try:
+            docs = [_doc_payload(meeting_id, kind) for kind in DOC_KINDS]
+            result["docs"] = docs
+        except Exception as e:
+            result["docs_error"] = str(e)
+
+        # 3. Collab
+        try:
+            from .collab import collab_stats, list_pending, list_answered, read_collab
+            result["collab"] = {
+                "collab": read_collab(meeting_id),
+                "pending": list_pending(meeting_id),
+                "answered": list_answered(meeting_id),
+                "stats": collab_stats(meeting_id),
+            }
+        except Exception as e:
+            result["collab_error"] = str(e)
+
+        # 4. Experiences
+        try:
+            from .experience_store import load_experiences
+            result["experiences"] = [it.to_dict() for it in load_experiences(meeting_id)]
+        except Exception:
+            result["experiences"] = []
+
+        return self._json(result)
+
+    def _handle_device_status(self):
+        """GET /api/client/device-status — 设备状态.
+
+        返回麦克风/录音/客户端版本等前端设置页需要的信息.
+        """
+        status: dict[str, Any] = {
+            "version": __import__("..__init__", fromlist=["__version__"]).__version__,
+            "audio": {
+                "available": True,
+                "platform": __import__("sys").platform,
+            },
+            "recording": {
+                "active_meetings": len([
+                    p.stem for p in DATA_DIR.glob("*.json")
+                    if not p.name.endswith(".stream.json") and not p.name.endswith(".chat.json")
+                ]),
+            },
+        }
+        return self._json(status)
 
 
 def main(argv: list[str] | None = None) -> int:

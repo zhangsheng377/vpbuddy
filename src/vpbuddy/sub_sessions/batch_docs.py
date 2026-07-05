@@ -75,6 +75,17 @@ def render_batch_prompt(
     template_path = PROMPTS_DIR / "batch_docs.md"
     template = template_path.read_text(encoding="utf-8")
 
+    # v0.9.0 #1: 检索已确认经验, 注入 prompt 上下文
+    experiences_block = ""
+    try:
+        from ..experience_store import search_experiences, format_experiences_for_prompt
+        # 先通过 domain/product_type 匹配
+        experiences = search_experiences()
+        if experiences:
+            experiences_block = format_experiences_for_prompt(experiences)
+    except Exception:
+        pass
+
     paths = get_batch_doc_paths(meeting_id, docs_dir)
 
     # 5 文档上次输出 block
@@ -87,7 +98,7 @@ def render_batch_prompt(
     safe_template = template.replace("{", "{{").replace("}", "}}")
     # 还原我们需要的变量
     for key in [
-        "meeting_id", "state_summary", "last_docs_block",
+        "meeting_id", "state_summary", "last_docs_block", "experiences_block",
         "doc_path_req", "doc_path_arch", "doc_path_tasks", "doc_path_api", "doc_path_risk",
     ]:
         safe_template = safe_template.replace("{{" + key + "}}", "{" + key + "}")
@@ -96,6 +107,7 @@ def render_batch_prompt(
         meeting_id=meeting_id,
         state_summary=state_summary,
         last_docs_block=last_docs_block,
+        experiences_block=experiences_block,
         doc_path_req=str(paths["req"]),
         doc_path_arch=str(paths["arch"]),
         doc_path_tasks=str(paths["tasks"]),

@@ -44,6 +44,9 @@
 ## 5 文档上次输出
 {last_docs_block}
 
+## 历史经验参考 (自动检索)
+{experiences_block}
+
 # 判断逻辑
 
 1. 读 state.facts (requirements / goals / features / risks / open_questions)
