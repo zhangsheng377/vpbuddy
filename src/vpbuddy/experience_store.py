@@ -32,6 +32,10 @@ def ensure_dir():
     EXPERIENCES_DIR.mkdir(parents=True, exist_ok=True)
 
 
+# import 时自动创建目录
+ensure_dir()
+
+
 def save_experiences(meeting_id: str, items: list[ExperienceItem]) -> str:
     """保存一次会议的经验候选到独立文件."""
     ensure_dir()
@@ -108,7 +112,7 @@ def approve_experience(item_id: str, meeting_id: str) -> bool:
 
 
 def _update_aggregate(new_items: list[ExperienceItem]):
-    """将新经验条目合并到聚合索引."""
+    """将新经验条目合并到聚合索引, 对已存在条目更新其字段."""
     with _aggregate_lock:
         existing = []
         if _aggregate_path.exists():
@@ -118,12 +122,15 @@ def _update_aggregate(new_items: list[ExperienceItem]):
             except (json.JSONDecodeError, KeyError):
                 pass
 
-        existing_ids = {it["id"] for it in existing}
+        existing_map = {it["id"]: it for it in existing}
         for item in new_items:
             d = item.to_dict()
-            if d["id"] not in existing_ids:
+            if d["id"] in existing_map:
+                # 更新已存在条目的字段 (eg. approved 状态变更)
+                existing_map[d["id"]].update(d)
+            else:
                 existing.append(d)
-                existing_ids.add(d["id"])
+                existing_map[d["id"]] = d
 
         _aggregate_path.write_text(
             json.dumps({"items": existing, "updated_at": __import__("datetime").datetime.now().isoformat()},

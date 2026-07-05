@@ -37,3 +37,4 @@ custom-protocol = ["tauri/custom-protocol"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
+mockito = "1"

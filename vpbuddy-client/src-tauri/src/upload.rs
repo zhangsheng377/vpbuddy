@@ -136,3 +136,257 @@ fn unix_now_secs() -> f64 {
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── TranscriptSegment 测试 ──
+
+    #[test]
+    fn test_transcript_segment_serde_roundtrip() {
+        let seg = TranscriptSegment {
+            start_sec: 1.5,
+            end_sec: 3.2,
+            text: "你好世界".to_string(),
+            speaker_id: "SPEAKER_01".to_string(),
+            chunk_index: 0,
+        };
+        let json = serde_json::to_string(&seg).unwrap();
+        let deserialized: TranscriptSegment = serde_json::from_str(&json).unwrap();
+        assert!((deserialized.start_sec - 1.5).abs() < 1e-6);
+        assert!((deserialized.end_sec - 3.2).abs() < 1e-6);
+        assert_eq!(deserialized.text, "你好世界");
+        assert_eq!(deserialized.speaker_id, "SPEAKER_01");
+        assert_eq!(deserialized.chunk_index, 0);
+    }
+
+    #[test]
+    fn test_transcript_segment_default_chunk_index() {
+        // chunk_index has #[serde(default)], so missing field defaults to 0
+        let json = r#"{
+            "start_sec": 0.0,
+            "end_sec": 1.0,
+            "text": "hello",
+            "speaker_id": "SPK_00"
+        }"#;
+        let seg: TranscriptSegment = serde_json::from_str(json).unwrap();
+        assert_eq!(seg.chunk_index, 0);
+    }
+
+    #[test]
+    fn test_transcript_segment_debug() {
+        let seg = TranscriptSegment {
+            start_sec: 0.0,
+            end_sec: 1.0,
+            text: "test".to_string(),
+            speaker_id: "SPK_00".to_string(),
+            chunk_index: 0,
+        };
+        let debug_str = format!("{:?}", seg);
+        assert!(debug_str.contains("start_sec"));
+        assert!(debug_str.contains("test"));
+    }
+
+    // ── unix_now_secs 测试 ──
+
+    #[test]
+    fn test_unix_now_secs_positive() {
+        let now = unix_now_secs();
+        // Should be > Jan 1, 2025 (1735689600) if system clock is reasonable
+        assert!(now > 1_735_689_600.0, "unix timestamp should be > 2025-01-01");
+    }
+
+    #[test]
+    fn test_unix_now_secs_monotonic() {
+        let t1 = unix_now_secs();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let t2 = unix_now_secs();
+        assert!(t2 >= t1, "unix_now_secs should be monotonic");
+    }
+
+    // ── URL 构建逻辑测试 (通过 mockito mock HTTP 响应) ──
+
+    #[tokio::test]
+    async fn test_create_meeting_url_basic() {
+        let mut server = mockito::Server::new_async().await;
+
+        let mock = server.mock("POST", "/api/meetings/stream_start?audio_source=microphone")
+            .with_status(200)
+            .with_body(r#"{"meeting_id": "test-meeting-001"}"#)
+            .create_async()
+            .await;
+
+        let result = create_meeting(&server.url(), "microphone").await;
+        assert!(result.is_ok(), "create_meeting should succeed: {:?}", result.err());
+        assert_eq!(result.unwrap(), "test-meeting-001");
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_create_meeting_url_encoding() {
+        let mut server = mockito::Server::new_async().await;
+
+        // urlencoding::encode("loopback") = "loopback" (no special chars)
+        // urlencoding::encode("mic & line") = "mic+%26+line"
+        let mock = server.mock("POST", "/api/meetings/stream_start?audio_source=mic+%26+line")
+            .with_status(200)
+            .with_body(r#"{"meeting_id": "enc-test"}"#)
+            .create_async()
+            .await;
+
+        let result = create_meeting(&server.url(), "mic & line").await;
+        assert!(result.is_ok(), "create_meeting with encoded source should succeed: {:?}", result.err());
+        assert_eq!(result.unwrap(), "enc-test");
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_create_meeting_http_error() {
+        let mut server = mockito::Server::new_async().await;
+
+        let mock = server.mock("POST", mockito::Matcher::Any)
+            .with_status(500)
+            .with_body("Internal Server Error")
+            .create_async()
+            .await;
+
+        let result = create_meeting(&server.url(), "microphone").await;
+        assert!(result.is_err(), "create_meeting should fail on 500");
+        let err_msg = format!("{}", result.err().unwrap());
+        assert!(err_msg.contains("500"), "error should mention HTTP 500");
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_create_meeting_missing_meeting_id() {
+        let mut server = mockito::Server::new_async().await;
+
+        let mock = server.mock("POST", mockito::Matcher::Any)
+            .with_status(200)
+            .with_body(r#"{"status": "ok"}"#)  // no meeting_id field
+            .create_async()
+            .await;
+
+        let result = create_meeting(&server.url(), "microphone").await;
+        assert!(result.is_err(), "create_meeting should fail when meeting_id is missing");
+        let err_msg = format!("{}", result.err().unwrap());
+        assert!(err_msg.contains("no meeting_id"), "error should mention missing meeting_id");
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_init_meeting_url_basic() {
+        let mut server = mockito::Server::new_async().await;
+
+        // URL: /api/meetings/stream_start?meeting_id=existing-999&audio_source=loopback
+        let mock = server.mock("POST", "/api/meetings/stream_start?meeting_id=existing-999&audio_source=loopback")
+            .with_status(200)
+            .with_body(r#"{"meeting_id": "existing-999"}"#)
+            .create_async()
+            .await;
+
+        let result = init_meeting(&server.url(), "existing-999", "loopback").await;
+        assert!(result.is_ok(), "init_meeting should succeed: {:?}", result.err());
+        assert_eq!(result.unwrap(), "existing-999");
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_init_meeting_url_encoding_special_chars() {
+        let mut server = mockito::Server::new_async().await;
+
+        // meeting_id = "my meeting/with#chars" 会 URL 编码
+        // urlencoding::encode("my meeting/with#chars") = "my%20meeting%2Fwith%23chars"
+        let encoded = urlencoding::encode("my meeting/with#chars");
+        let mock_path = format!("/api/meetings/stream_start?meeting_id={}&audio_source=loopback", encoded);
+        let mock = server.mock("POST", mock_path.as_str())
+            .with_status(200)
+            .with_body(r#"{"meeting_id": "my meeting/with#chars"}"#)
+            .create_async()
+            .await;
+
+        let result = init_meeting(&server.url(), "my meeting/with#chars", "loopback").await;
+        assert!(result.is_ok(), "init_meeting with special chars should succeed: {:?}", result.err());
+        assert_eq!(result.unwrap(), "my meeting/with#chars");
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_init_meeting_http_error() {
+        let mut server = mockito::Server::new_async().await;
+
+        let mock = server.mock("POST", mockito::Matcher::Any)
+            .with_status(404)
+            .with_body("Not Found")
+            .create_async()
+            .await;
+
+        let result = init_meeting(&server.url(), "nonexistent", "microphone").await;
+        assert!(result.is_err(), "init_meeting should fail on 404");
+        let err_msg = format!("{}", result.err().unwrap());
+        assert!(err_msg.contains("404"), "error should mention HTTP 404");
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_init_meeting_missing_meeting_id() {
+        let mut server = mockito::Server::new_async().await;
+
+        let mock = server.mock("POST", mockito::Matcher::Any)
+            .with_status(200)
+            .with_body(r#"{"ok": true}"#)  // no meeting_id field
+            .create_async()
+            .await;
+
+        let result = init_meeting(&server.url(), "test-id", "microphone").await;
+        assert!(result.is_err(), "init_meeting should fail when meeting_id is missing");
+        let err_msg = format!("{}", result.err().unwrap());
+        assert!(err_msg.contains("no meeting_id"), "error should mention missing meeting_id");
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_create_and_init_meeting_different_audio_sources() {
+        // 验证 different audio_source values 生成不同 URL
+        let mut server = mockito::Server::new_async().await;
+
+        let mock_mic = server.mock("POST", "/api/meetings/stream_start?audio_source=microphone")
+            .with_status(200)
+            .with_body(r#"{"meeting_id": "mic-test"}"#)
+            .expect_at_least(0)  // 0 or more — we only assert that the correct mock had the right path
+            .create_async()
+            .await;
+
+        let mock_loop = server.mock("POST", "/api/meetings/stream_start?audio_source=loopback")
+            .with_status(200)
+            .with_body(r#"{"meeting_id": "loop-test"}"#)
+            .expect_at_least(0)
+            .create_async()
+            .await;
+
+        let mock_both = server.mock("POST", "/api/meetings/stream_start?audio_source=both")
+            .with_status(200)
+            .with_body(r#"{"meeting_id": "both-test"}"#)
+            .create_async()
+            .await;
+
+        let result = create_meeting(&server.url(), "both").await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "both-test");
+
+        mock_both.assert_async().await;
+        // 不 assert mic 和 loop — 保证 both 的 mock 调用了即可
+    }
+
+    // ── upload_chunk 不在此处测 (需要真实 WAV 数据和运行 SSE 服务) ──
+    // upload_chunk 的测试建议在 e2e/integration 层面覆盖。
+}

@@ -147,7 +147,16 @@ class MeetingState(BaseModel):
     # === 元数据 ===
     speaker_map: dict[str, str] = Field(default_factory=dict)  # speaker_id -> speaker_name
     last_updated: str = Field(default_factory=_now)
-    vpbuddy_version: str = "0.1.0"  # 记录生成此 state 的 VPBuddy 版本
+    vpbuddy_version: str = ""  # 记录生成此 state 的 VPBuddy 版本 (动态获取)
+
+    # Pydantic v2 模型初始化后钩子: 动态填充 vpbuddy_version
+    def model_post_init(self, __context) -> None:
+        if not self.vpbuddy_version:
+            try:
+                from vpbuddy import __version__
+                object.__setattr__(self, "vpbuddy_version", __version__ or "0.1.0")
+            except Exception:
+                object.__setattr__(self, "vpbuddy_version", "0.1.0")
 
     # === CRUD:添加 ===
     def add_requirement(self, text: str, priority: Priority = Priority.MEDIUM,

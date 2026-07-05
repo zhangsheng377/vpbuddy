@@ -183,3 +183,257 @@ pub fn set_log_path(p: String) {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── 默认值函数测试 ──
+
+    #[test]
+    fn test_default_sample_rate() {
+        assert_eq!(default_sample_rate(), 16000);
+    }
+
+    #[test]
+    fn test_default_chunk_seconds() {
+        assert_eq!(default_chunk_seconds(), 30);
+    }
+
+    #[test]
+    fn test_default_true() {
+        assert!(default_true());
+    }
+
+    #[test]
+    fn test_default_max_events() {
+        assert_eq!(default_max_events(), 50);
+    }
+
+    // ── AudioConfig 测试 ──
+
+    #[test]
+    fn test_audio_config_default() {
+        let cfg = AudioConfig::default();
+        assert_eq!(cfg.sample_rate, 16000);
+        assert_eq!(cfg.chunk_seconds, 30);
+        assert_eq!(cfg.overlap_seconds, 0);
+    }
+
+    #[test]
+    fn test_audio_config_serde_roundtrip() {
+        let cfg = AudioConfig {
+            sample_rate: 44100,
+            chunk_seconds: 60,
+            overlap_seconds: 5,
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let deserialized: AudioConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.sample_rate, 44100);
+        assert_eq!(deserialized.chunk_seconds, 60);
+        assert_eq!(deserialized.overlap_seconds, 5);
+    }
+
+    #[test]
+    fn test_audio_config_default_serde() {
+        // 验证 serde(default) 属性: 缺失字段走默认值
+        let json = r#"{"sample_rate": 22050}"#;
+        let cfg: AudioConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.sample_rate, 22050);
+        assert_eq!(cfg.chunk_seconds, 30);       // default
+        assert_eq!(cfg.overlap_seconds, 0);       // default
+    }
+
+    // ── SseConfig 测试 ──
+
+    #[test]
+    fn test_sse_config_default() {
+        let cfg = SseConfig::default();
+        assert!(cfg.reconnect);
+        assert_eq!(cfg.max_events_per_chunk, 50);
+    }
+
+    #[test]
+    fn test_sse_config_serde_roundtrip() {
+        let cfg = SseConfig {
+            reconnect: false,
+            max_events_per_chunk: 10,
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let deserialized: SseConfig = serde_json::from_str(&json).unwrap();
+        assert!(!deserialized.reconnect);
+        assert_eq!(deserialized.max_events_per_chunk, 10);
+    }
+
+    #[test]
+    fn test_sse_config_default_serde() {
+        let json = r#"{"reconnect": false}"#;
+        let cfg: SseConfig = serde_json::from_str(json).unwrap();
+        assert!(!cfg.reconnect);
+        assert_eq!(cfg.max_events_per_chunk, 50); // default
+    }
+
+    // ── ClientConfig 测试 ──
+
+    #[test]
+    fn test_client_config_serde_roundtrip() {
+        let cfg = ClientConfig {
+            gpu_server_url: "http://test:8080".to_string(),
+            audio: AudioConfig {
+                sample_rate: 48000,
+                chunk_seconds: 30,
+                overlap_seconds: 2,
+            },
+            sse: SseConfig {
+                reconnect: false,
+                max_events_per_chunk: 100,
+            },
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let deserialized: ClientConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.gpu_server_url, "http://test:8080");
+        assert_eq!(deserialized.audio.sample_rate, 48000);
+        assert!(!deserialized.sse.reconnect);
+    }
+
+    #[test]
+    fn test_client_config_defaults_on_missing_fields() {
+        // 验证 serde(default) 对嵌套结构生效
+        let json = r#"{"gpu_server_url": "http://example.com"}"#;
+        let cfg: ClientConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.gpu_server_url, "http://example.com");
+        assert_eq!(cfg.audio.sample_rate, 16000);  // default
+        assert!(cfg.sse.reconnect);                 // default
+    }
+
+    // ── AppState 测试 ──
+
+    #[test]
+    fn test_app_state_new_initial_values() {
+        let state = AppState::new();
+        use std::sync::atomic::Ordering;
+        assert!(!state.capturing.load(Ordering::SeqCst));
+        assert_eq!(state.total_bytes.load(Ordering::SeqCst), 0);
+        assert_eq!(state.total_uploads.load(Ordering::SeqCst), 0);
+        assert_eq!(state.native_sample_rate.load(Ordering::SeqCst), 16000);
+    }
+
+    #[test]
+    fn test_app_state_gpu_url_initialized() {
+        let state = AppState::new();
+        let url = state.gpu_url.try_lock().unwrap();
+        assert!(!url.is_empty());
+        // 默认 fallback URL (无 env var 也无 yaml 文件时)
+        assert_eq!(*url, "http://47.100.182.3:28765");
+    }
+
+    #[test]
+    fn test_app_state_meeting_id_initial_none() {
+        let state = AppState::new();
+        let mid = state.meeting_id.try_lock().unwrap();
+        assert!(mid.is_none());
+    }
+
+    #[test]
+    fn test_app_state_audio_source_initial_none() {
+        let state = AppState::new();
+        let src = state.audio_source.try_lock().unwrap();
+        assert!(src.is_none());
+    }
+
+    #[test]
+    fn test_app_state_log_path_initial_empty() {
+        let state = AppState::new();
+        let path = state.log_path.try_lock().unwrap();
+        assert!(path.is_empty());
+    }
+
+    #[test]
+    fn test_app_state_sse_handle_initial_none() {
+        let state = AppState::new();
+        let h = state.sse_handle.try_lock().unwrap();
+        assert!(h.is_none());
+    }
+
+    #[test]
+    fn test_app_state_capture_handle_initial_none() {
+        let state = AppState::new();
+        let h = state.capture_handle.try_lock().unwrap();
+        assert!(h.is_none());
+    }
+
+    #[test]
+    fn test_app_state_atomic_updates() {
+        let state = AppState::new();
+        use std::sync::atomic::Ordering;
+        state.total_bytes.store(999, Ordering::SeqCst);
+        state.total_uploads.store(42, Ordering::SeqCst);
+        state.capturing.store(true, Ordering::SeqCst);
+        assert_eq!(state.total_bytes.load(Ordering::SeqCst), 999);
+        assert_eq!(state.total_uploads.load(Ordering::SeqCst), 42);
+        assert!(state.capturing.load(Ordering::SeqCst));
+    }
+
+    // ── 路径相关测试 ──
+
+    #[test]
+    fn test_client_config_path_ends_with_correct_filename() {
+        let path = client_config_path();
+        assert!(path.ends_with(".vpbuddy-client.yaml"));
+    }
+
+    #[test]
+    fn test_client_config_path_has_base_dir() {
+        let path = client_config_path();
+        let parent = path.parent();
+        assert!(parent.is_some(), "path should have a parent directory");
+    }
+
+    #[test]
+    fn test_get_log_path_ends_with_log_file() {
+        let p = get_log_path();
+        assert!(!p.is_empty(), "log path should not be empty");
+        assert!(p.ends_with("vpbuddy-client.log"));
+    }
+
+    #[test]
+    fn test_set_log_path_does_not_panic() {
+        // set_log_path uses OnceLock; ensure no panic on multiple calls
+        set_log_path("/tmp/test-vpbuddy.log".to_string());
+        set_log_path("/tmp/another-test.log".to_string());
+        // No assertion — just verifying no crash/panic
+    }
+
+    // ── save_gpu_url_to_yaml / load_client_config 测试 ──
+    // 这两个函数依赖真实文件 I/O, 不适合纯单元测试。
+    // 集成测试在 e2e 层面覆盖。
+
+    // ── AudioConfig / SseConfig Debug 特征可用 ──
+
+    #[test]
+    fn test_audio_config_debug() {
+        let cfg = AudioConfig::default();
+        let debug_str = format!("{:?}", cfg);
+        assert!(debug_str.contains("sample_rate"));
+        assert!(debug_str.contains("chunk_seconds"));
+    }
+
+    #[test]
+    fn test_sse_config_debug() {
+        let cfg = SseConfig::default();
+        let debug_str = format!("{:?}", cfg);
+        assert!(debug_str.contains("reconnect"));
+        assert!(debug_str.contains("max_events_per_chunk"));
+    }
+
+    #[test]
+    fn test_client_config_debug() {
+        let cfg = ClientConfig {
+            gpu_server_url: "http://localhost".to_string(),
+            audio: AudioConfig::default(),
+            sse: SseConfig::default(),
+        };
+        let debug_str = format!("{:?}", cfg);
+        assert!(debug_str.contains("gpu_server_url"));
+    }
+}
+
