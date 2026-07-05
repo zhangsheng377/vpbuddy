@@ -1,12 +1,13 @@
 // VPBuddy Desktop Client -- Tauri commands (extracted from main.rs)
 // Auto-generated from upstream main.rs
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex;
 
 use crate::audio;
+use crate::audio::AudioCapture;
 use crate::upload;
 use crate::config::{AppState, ClientConfig, AudioConfig, SseConfig, load_client_config, save_gpu_url_to_yaml, get_log_path, set_log_path};
 pub use crate::config::client_config_path;

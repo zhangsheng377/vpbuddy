@@ -10,6 +10,7 @@ mod upload;
 use config::AppState;
 use config::{load_client_config, set_log_path};
 use commands::*;
+use tauri::{Emitter, Manager};
 
 fn main() {
     // 2026-06-27: 客户端日志写文件 (排查 "采集不到声音" 等问题)
