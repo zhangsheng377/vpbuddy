@@ -1435,8 +1435,8 @@ async def fe_get_deliverable(deliverable_id: str):
 @app.post("/meetings/{meeting_id}/archive")
 async def fe_archive_meeting(meeting_id: str):
     """POST /meetings/:id/archive → POST /api/meetings/:id/close + 归档信息"""
-    from ..ui_server import _handle_meeting_close
-    close_result = _handle_meeting_close(meeting_id)
+    from ..ui_server import _close_meeting
+    close_result = _close_meeting(meeting_id)
     # 附加归档信息
     docs_list = []
     for kind in DOC_KINDS:

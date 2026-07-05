@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # start-vpbuddy.sh — VPBuddy 官方启动脚本 (2026-06-23 ADR-0011 落地)
 #
-# 启动 controller (7x24 后台) + UI (浏览器入口)
+# 启动 UI (FastAPI, :8765)
 # 自动设置 HF 离线铁律环境变量,无需手动 export
 #
+# v0.9.0: controller 已删除 — 文档生成由 _close_meeting 通过 task_manager 触发
+#
 # 用法:
-#   bash scripts/start-vpbuddy.sh           # 同时启动 controller + UI
-#   bash scripts/start-vpbuddy.sh controller # 只启动 controller
-#   bash scripts/start-vpbuddy.sh ui         # 只启动 UI
+#   bash scripts/start-vpbuddy.sh           # 启动 UI
+#   bash scripts/start-vpbuddy.sh ui         # 明确指定 UI
 #
 # 停止:
 #   bash scripts/stop-vpbuddy.sh
@@ -52,18 +53,7 @@ conda activate "$CONDA_ENV"
 
 cd "$VPBUDDY_ROOT"
 
-# ===== 3. 启动 component =====
-start_controller() {
-    if [[ -f /tmp/vpbuddy_controller.pid ]] && kill -0 "$(cat /tmp/vpbuddy_controller.pid)" 2>/dev/null; then
-        echo "⚠️  controller 已在跑 (PID $(cat /tmp/vpbuddy_controller.pid))"
-        return 0
-    fi
-    nohup vpbuddy controller > "$LOG_DIR/controller.log" 2>&1 &
-    echo $! > /tmp/vpbuddy_controller.pid
-    echo "✅ controller 启动 PID $(cat /tmp/vpbuddy_controller.pid)"
-    echo "   日志: $LOG_DIR/controller.log"
-}
-
+# ===== 3. 启动 UI (默认 FastAPI, --legacy 回退) =====
 start_ui() {
     if [[ -f /tmp/vpbuddy_ui.pid ]] && kill -0 "$(cat /tmp/vpbuddy_ui.pid)" 2>/dev/null; then
         echo "⚠️  UI 已在跑 (PID $(cat /tmp/vpbuddy_ui.pid))"
@@ -81,16 +71,13 @@ start_ui() {
     fi
 }
 
+# v0.9.0: controller 已删除 — 文档生成由 _close_meeting 通过 task_manager 触发
 COMPONENT="${1:-all}"
 case "$COMPONENT" in
-    controller)
-        start_controller
-        ;;
     ui)
         start_ui
         ;;
     all|"")
-        start_controller
         start_ui
         ;;
     *)
@@ -103,7 +90,7 @@ echo ""
 echo "==================================================="
 echo "  验证"
 echo "==================================================="
-ps -ef | grep -E 'vpbuddy (controller|ui)' | grep -v grep | awk '{print $2, $8, $9, $10, $11}' || true
+ps -ef | grep -E 'vpbuddy ui' | grep -v grep | awk '{print $2, $8, $9, $10, $11}' || true
 echo ""
 echo "UI:    http://localhost:8765/"
 echo "停止:  bash scripts/stop-vpbuddy.sh"

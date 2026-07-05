@@ -1,12 +1,17 @@
-|> **说明**:本文档是 `VPBuddy_产品说明书_v2.0_2026-07-01.md` 的 Markdown 渲染。
-> 原始 .docx 文件同目录保留。
->
+|> **说明**:本文档是 VPBuddy 产品说明书的当前版本。
+> 
 > **版本历史**:
+> - **v2.2** (2026-07-05): **v0.9.0 — 任务队列 + 经验蒸馏 + FastAPI 迁移 + BFF API**:
+>   1. **后台任务队列 #5** (ADR-0042): per-meeting debounce + generation_id + bounded ThreadPoolExecutor, 避免长会议线程无限堆积
+>   2. **经验蒸馏 Phase 1 #1** (ADR-0043): 会议结束时自动从 MeetingState 提取 6 类经验候选 (domain_fact / product_pattern / decision_rule / terminology / failure_lesson / user_preference), JSON 持久化 + 聚合索引, batch_docs 自动检索注入
+>   3. **FastAPI 迁移 #6** (ADR-0044): FastAPI + CORSMiddleware + StreamingResponse + OpenAPI 自动文档, `vpbuddy ui` 默认走 FastAPI, `--legacy` 回退旧 http.server
+>   4. **BFF API #9** (ADR-0044): 会议聚合 `GET /meetings/{id}/aggregate` + 设备状态 `GET /api/client/device-status`
+>   5. **前端路由别名**: `GET /meetings`, `GET /meetings/{id}/transcript-segments`, `POST /meetings/{id}/recording/start|stop`, `GET /meetings/{id}/deliverables`, `GET /deliverables/{id}`, `POST /meetings/{id}/archive`
 > - **v2.1** (2026-07-04): **LLM env 透传 + fork 架构 + API 参考文档**:
 >   1. **LLM env 透传** (ADR-0040): 子 agent 显式传 `OPENAI_BASE_URL` + `OPENAI_API_KEY`, 避免走 openrouter → 401
 >   2. **fork 模型** (ADR-0041): doc agent 通过 `parent_session_id` 继承 chat 上下文, 不再独立 session
 >   3. **新增 [API 参考文档](../api-reference.md)**: 所有 29 个 HTTP 端点 + SSE 事件流 + 典型流程, 供外部客户端集成
-> - **v1.0 - v1.13**: 见 `VPBuddy_产品说明书_v1.*_2026-06-20.md` (历史归档, 都已过时)
+> - **v1.0 - v1.13**: 已归档删除
 > - **v2.0** (2026-07-01): **8 项产品需求合入 v0.6**:
 >   1. **录音支持麦克风 + 内录** (Linux 0 操作, macOS 需 BlackHole, Windows WASAPI loopback 0 操作) — 见 ADR-0021
 >   2. **chat 页面支持文件/图片上传** (复用 KB 上传 API) — 见 ADR-0023
@@ -21,11 +26,11 @@
 
 ---
 
-# VPBuddy 产品说明书 v2.0
+# VPBuddy 产品说明书 v2.2
 
-> **v2.0** (2026-07-01 修订 — **8 项需求合入**): 录音双轨(麦克风+内录) / chat 上传+agent 主动 / KB 切 Chroma 嵌入式+用户主动上传+会议隔离 / 首页强制会议选择 / demo 多版本 / agent 工具(web+KB)。详见 [ADR-0019 ~ 0025](decisions/)。
+> **v2.2** (2026-07-05 修订 — **v0.9.0**): 后台任务队列 #5 / 经验蒸馏 Phase 1 #1 / FastAPI 迁移 #6 / BFF API #9 / 前端路由别名。详见 [ADR-0042 ~ 0044](../decisions/)。
 
-> **历史版本**:v1.0-v1.13 见 `VPBuddy_产品说明书_v1.*_2026-06-20.md`(都已过时,仅留作历史)
+> **历史版本**:v1.0-v1.13 已归档删除。
 
 ## 一、产品定位
 
@@ -300,16 +305,8 @@ VP 任何时候投屏/外发(无『完成』前提)
 
 ## 十二、版本历史
 
-- v1.0: 初版
-- v1.1: 去"实时"
-- v1.2: 后台并行生成
-- v1.3: 知识库双模式
-- v1.4: 展示不注入 prompt
-- v1.5: Steer 控制层
-- v1.6: Hermes-native + 可选生产
-- v1.7: 投屏 = 会议原生
-- v1.8: 回退 session 生命周期(YAGNI)
-- v1.9: VPBuddy 连投屏按钮都不提供
-- v1.10: 疑问窗口 + 预准备内容
-- v1.11: ~~重大简化 — 默认用平台原生 ASR/转写~~ → **Superseded by ADR-0008 (2026-06-21)**
-- **v1.13 (2026-06-21 重大修订 by ADR-0008): 删除飞书 SDK / 妙记 API** — 数据源改为 VP 桌面客户端麦克风/系统音频 loopback(ADR-0004 自接 Whisper + pyannote);说话人校准改人工/stt_map 填入;飞书 SDK / miaoji_calibration.py / FeishuAdapter / Platform.FEISHU 全部删除 (commit `5048936`);详细决策见 `docs/decisions/0008-ADR-0001-决策1-Superseded.md`;**VP 设备硬约束保留**:必须桌面客户端 + 麦克风授权
+- **v2.2 (2026-07-05)**: v0.9.0 — 后台任务队列 / 经验蒸馏 Phase 1 / FastAPI 迁移 / BFF API / 前端路由别名 (ADR-0042 ~ 0044)
+- **v2.1 (2026-07-04)**: LLM env 透传 / fork 架构 / API 参考文档 (ADR-0040 ~ 0041)
+- **v2.0 (2026-07-01)**: 8 项产品需求合入 v0.6 (ADR-0019 ~ 0025)
+- v1.13 (2026-06-21): 删除飞书 SDK / 妙记 API, 自接 Whisper + pyannote (ADR-0008)
+- v1.0-v1.12: 已归档删除
