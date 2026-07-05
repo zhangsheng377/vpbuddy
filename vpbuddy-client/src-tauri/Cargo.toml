@@ -1,6 +1,6 @@
 [package]
 name = "vpbuddy-client"
-version = "0.8.5"
+version = "0.8.6"
 description = "VPBuddy desktop client"
 authors = ["张胜东 <zhangsheng@zsd.dev>"]
 edition = "2021"
@@ -28,8 +28,13 @@ urlencoding = "2"
 anyhow = "1"
 log = "0.4"
 env_logger = "0.11"
+<<<<<<< Updated upstream
 dirs = "5"
 chrono = "0.4"  # 客户端日志时间戳 (2026-06-27)
+=======
+chrono = "0.4"
+dirs = "5"  # 客户端日志时间戳 (2026-06-27)
+>>>>>>> Stashed changes
 
 [features]
 default = ["custom-protocol"]
