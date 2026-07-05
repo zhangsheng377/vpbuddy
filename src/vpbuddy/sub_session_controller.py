@@ -143,9 +143,16 @@ def _get_or_create_agent(meeting_id: str, doc_kind: str) -> Any:
             #
             # 2026-07-04 (ADR-0041): parent_session_id fork 自主 chat session,
             # 让 doc 生成继承 chat 上下文 (chat 里讨论的内容自动注入 doc 上下文).
+            #
+            # ⚠️ 2026-07-04 batch_docs 特殊处理: 不设 ephemeral_system_prompt,
+            # 否则这里的单文档 prompt 跟 batch_docs.md 的用户 prompt (5 文档) 冲突,
+            # LLM 只服从 system prompt → 只写 1 个文件. batch_docs 的完整指令
+            # 由 trigger_batch_docs 通过 chat(prompt) 传入, 包含 5 个 write_file 路径.
             try:
                 mastersid = _master_session_id(meeting_id)
-                _AGENT_CACHE[sid] = _AIAgent(
+
+                # 公共参数 (batch_docs & demo 共享)
+                common = dict(
                     session_id=sid,
                     parent_session_id=mastersid,
                     enabled_toolsets=toolsets,
@@ -153,10 +160,19 @@ def _get_or_create_agent(meeting_id: str, doc_kind: str) -> Any:
                     quiet_mode=True,
                     max_iterations=30,
                     model=os.environ.get("VPBUDDY_LLM_MODEL", "MiniMax-M3"),
-                    base_url=os.environ.get("OPENAI_BASE_URL"),  # 直连 MiniMax endpoint
+                    base_url=os.environ.get("OPENAI_BASE_URL"),
                     api_key=os.environ.get("OPENAI_API_KEY") or os.environ.get("MINIMAX_API_KEY"),
-                    ephemeral_system_prompt="\n".join([
-                        f"你是 VPBuddy 的 {doc_kind} 子 session。",
+                )
+
+                if doc_kind == "batch_docs":
+                    # batch_docs: 全部指令由 batch_docs.md prompt 承担, 不设 system prompt
+                    _AGENT_CACHE[sid] = _AIAgent(**common)
+                else:
+                    # demo (或其他单文档 kind): 用老的单文档 system prompt
+                    _AGENT_CACHE[sid] = _AIAgent(
+                        **common,
+                        ephemeral_system_prompt="\n".join([
+                            f"你是 VPBuddy 的 {doc_kind} 子 session。",
                 f"session_id 固定 = {sid}。",
                 f"当前 meeting_id = {meeting_id} (用于 KB 检索)。",
                 f"输出文件路径(必须写到这里):{get_doc_path(meeting_id, doc_kind)}",
@@ -194,7 +210,7 @@ def _get_or_create_agent(meeting_id: str, doc_kind: str) -> Any:
                 "工作流:",
                 "  read_file(state) → 解析 facts → (可选) 工具调用 → 生成文档内容 → write_file(目标路径, 完整内容) → 退出",
                     ]),
-                )
+                    )
                 logger.info(f"创建新 AIAgent: session_id={sid}")
             except Exception as e:
                 # 2026-07-03: GPU server 上 run_agent 装了但 init_agent 内部要 LLM provider
