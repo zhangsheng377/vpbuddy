@@ -2,7 +2,7 @@
 
 > **本地优先的会议操作系统级 AI 助手** —— 为 VP / 售前 / 项目负责人设计,运行在 VP 自己桌面客户端,数据完全本地化。
 
-**v0.8.5** (2026-07-04) — LLM env 透传 + fork 架构 + API 参考文档。详见 [CHANGELOG](#v085-2026-07-04-llm-env-透传--fork-架构--api-参考文档)。
+**v0.8.6** (2026-07-05) — fork 架构 + 客户端 CI 全线修复 + 三平台构建自动化。详见 [Releases](https://github.com/zhangsheng377/vpbuddy/releases/tag/v0.8.6)。
 
 [English](#english) | [中文](#中文)
 
@@ -47,18 +47,17 @@ vpbuddy controller --start
 
 ### 下载预编译客户端安装包
 
-VPBuddy 桌面客户端通过 GitHub Actions 自动编译（三平台），产物保存 30 天：
+VPBuddy 桌面客户端通过 GitHub Actions 自动编译并发布到 Releases 页面：
 
-1. 打开 [Actions → VPBuddy Tauri Multi-Platform Build](https://github.com/zhangsheng377/vpbuddy/actions/workflows/tauri-multi-build.yml)
-2. 点击最新成功的 run（绿色 ✅）
-3. 滚动到底部 "Artifacts" 区域
-4. 下载对应平台：
+1. 打开 [Releases 页面](https://github.com/zhangsheng377/vpbuddy/releases)
+2. 选择最新版本（如 `v0.8.6`）
+3. 下载对应平台安装包：
 
 | 平台 | 下载 | 安装方法 |
 |------|------|----------|
-| **Linux** | `vpbuddy-client-linux` (zip, 内含 .deb) | `sudo dpkg -i vpbuddy-client_*.deb` <br> 或双击安装 |
-| **macOS** | `vpbuddy-client-macos-app` (.app) + `vpbuddy-client-macos-dmg` (.dmg) | 下载后拖到 `应用程序` 文件夹 (Apple Silicon 需 Rosetta, 详见 ADR-0026) |
-| **Windows** | `vpbuddy-client-windows` (zip, 内含 .exe) | 直接运行 vpbuddy-client.exe |
+| **Linux** | `VPBuddy_*_amd64.deb` | `sudo dpkg -i VPBuddy_*.deb` <br> 或双击安装 |
+| **macOS** | `VPBuddy.app.zip` + `VPBuddy_*_x64.dmg` | 下载 `.dmg` 拖到 `应用程序` 文件夹 (Apple Silicon 需 Rosetta) |
+| **Windows** | `VPBuddy_*_x64-setup.exe` | 直接运行 exe 安装 |
 
 **启动客户端**（编译或解压后）:
 ```bash
@@ -169,11 +168,12 @@ python3 -c "from run_agent import AIAgent; print('✅ VPBuddy ↔ Hermes 真连�
 - **LLM**: OpenAI 兼容 API(默认 MiniMax-M3,可换 GPT-4o / Claude / Qwen 等)
 - **音频**: PipeWire / PulseAudio / WASAPI / BlackHole (跨平台)
 
-### 状态(2026-07-04)
+### 状态(2026-07-05)
 
 - ✅ 全链路 work: 上传音频 → ASR → batch_docs 5 文档 + demo → SSE 实时推流
 - ✅ fork 架构: doc agent 继承 chat 上下文 (parent_session_id)
-- ✅ Tauri 桌面客户端编译通过 + e2e 测试套 (30+ 测试)
+- ✅ **v0.8.6 CI 全线通过** — cargo test + check / Linux / macOS / Windows 四平台全部 success
+- ✅ **三平台桌面客户端自动发布** — 直接从 [Releases](https://github.com/zhangsheng377/vpbuddy/releases) 下载安装包 (.deb / .dmg / .exe)
 - ✅ API 参考文档对外公开, 外部开发者可自行实现网页客户端
 - ✅ 文档齐全: 41 个 ADR + INSTALL.md + CI 工作流 + API 参考
 
@@ -227,6 +227,21 @@ MIT
 ---
 
 ## CHANGELOG
+
+### v0.8.6 (2026-07-05) — fork 架构 API 文档 + 客户端 CI 全线修复 + 三平台 Release 自动发布
+
+**核心**: v0.8.5 (fork 架构 + LLM env 透传) 发布后 CI 因 stash 冲突残留 + commands.rs 导入缺失而持续失败。本次**彻底修复 CI 流水线**,实现真正 One-Click Release。
+
+**改动**:
+- 🛠️ **修复 4 个文件的 stash 冲突标记**: Cargo.toml / kb_api.py / gpu_transcribe.py / conftest.py 的 `<<<<<<<` / `=======` / `>>>>>>>` 标记全部清理（根因: `git stash pop` 未完成冲突解决）
+- 🦀 **`commands.rs` 合并回 `main.rs` 回归单文件模式**: 跨模块编译问题（pub fn 可见性、缺导入、proc-macro 冲突）导致持续 cargo check exit 101。合并后通过本地 + 开发服务器双验证
+- 📥 **28 个编译错误零残留**: 缺 `get_log_path`/`save_gpu_url_to_yaml`/`ClientConfig`/`AudioConfig`/`SseConfig` 导入 + `#[tauri::command]` 函数 `pub` 关键字冲突
+- 🚀 **CI 全线通过**: cargo test + check ✅ / Linux .deb ✅ / macOS (.dmg + .app) ✅ / Windows .exe ✅ — 全绿
+- 📦 **Release 自动发布**: `v0.8.6` tag 触发 GitHub Release, 三平台安装包自动上传（之前只能从 Actions Artifacts 下载）
+
+**影响**: 100% 客户端。服务端无改动。GPU 服务器不受影响。
+
+详见 [v0.8.6 Release](https://github.com/zhangsheng377/vpbuddy/releases/tag/v0.8.6)。
 
 ### v0.8.0 (2026-07-02) — Phase 7 跨平台 loopback 真实现 (Linux PulseAudio mon / macOS BlackHole / Windows v0.9.x)
 
