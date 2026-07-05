@@ -1307,6 +1307,152 @@ def post_e2e_check_docs_complete(
 
 
 # =============================================================================
+# 前端契约路由别名 (v0.9.0 BFF bridge) — 适配前端 vpbuddy-frontend API.md
+# 前端路径: /meetings/... → 内部映射到 /api/meetings/...
+# =============================================================================
+
+# GET /meetings — 会议工作台列表
+@app.get("/meetings")
+async def fe_list_meetings():
+    """GET /meetings → GET /api/meetings (wrap)"""
+    from ..ui_server import list_meetings
+    meetings = list_meetings()
+    return {"meetings": meetings, "count": len(meetings)}
+
+# GET /meetings/{meeting_id} — 会议详情聚合
+@app.get("/meetings/{meeting_id}")
+async def fe_get_meeting(meeting_id: str):
+    """GET /meetings/:id → 聚合 state + docs + collab + experiences"""
+    from ..storage import MeetingStorage, StorageError
+    result: dict[str, Any] = {"id": meeting_id}
+
+    try:
+        storage = MeetingStorage(DATA_DIR)
+        if storage.exists(meeting_id):
+            state = storage.load(meeting_id)
+            result["state"] = state.model_dump(mode="json")
+        else:
+            result["state"] = None
+    except Exception as e:
+        result["state_error"] = str(e)
+
+    # Docs
+    try:
+        docs = [{"kind": k, "label": DOC_LABELS.get(k, k), "path": str(DOCS_DIR / meeting_id / f"{k}.md")}
+                for k in DOC_KINDS]
+        result["docs"] = docs
+    except Exception as e:
+        result["docs_error"] = str(e)
+
+    # Transcript segments (from stream meta)
+    try:
+        meta_path = DATA_DIR / f"{meeting_id}.stream.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+        result["transcript_segments"] = meta.get("transcript_segments", [])
+    except Exception:
+        result["transcript_segments"] = []
+
+    return result
+
+# GET /meetings/{meeting_id}/transcript-segments — 转写片段
+@app.get("/meetings/{meeting_id}/transcript-segments")
+async def fe_transcript_segments(meeting_id: str):
+    """GET /meetings/:id/transcript-segments → 从 stream meta 提取"""
+    meta_path = DATA_DIR / f"{meeting_id}.stream.json"
+    if not meta_path.exists():
+        return {"segments": [], "count": 0}
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        segments = meta.get("transcript_segments", [])
+        return {"segments": segments, "count": len(segments)}
+    except Exception:
+        return {"segments": [], "count": 0}
+
+# POST /meetings/{meeting_id}/recording/start — 开始录音
+@app.post("/meetings/{meeting_id}/recording/start")
+async def fe_recording_start(meeting_id: str):
+    """POST /meetings/:id/recording/start → POST /api/meetings/stream_start"""
+    from ..ui_server import _handle_stream_start
+    # 复用 stream_start handler
+    result = _handle_stream_start(meeting_id=meeting_id)
+    return {"status": "recording", "started_at": datetime.now().isoformat(), "detail": result}
+
+# POST /meetings/{meeting_id}/recording/stop — 停止录音
+@app.post("/meetings/{meeting_id}/recording/stop")
+async def fe_recording_stop(meeting_id: str):
+    """POST /meetings/:id/recording/stop → POST /api/meetings/:id/stream_stop"""
+    from ..ui_server import _handle_stream_stop
+    result = _handle_stream_stop(meeting_id)
+    return {"status": "stopped", "ended_at": datetime.now().isoformat(), "detail": result}
+
+# GET /meetings/{meeting_id}/deliverables — 交付物列表
+@app.get("/meetings/{meeting_id}/deliverables")
+async def fe_list_deliverables(meeting_id: str):
+    """GET /meetings/:id/deliverables → GET /api/meetings/:id/docs (wrap)"""
+    from ..ui_server import _doc_payload
+    docs = []
+    for kind in DOC_KINDS:
+        payload = _doc_payload(meeting_id, kind)
+        docs.append({
+            "id": f"del-{meeting_id}-{kind}",
+            "meetingId": meeting_id,
+            "type": kind,
+            "name": DOC_LABELS.get(kind, kind),
+            "version": payload.get("version", "1"),
+            "status": "draft",
+            "updatedAt": payload.get("updated_at", ""),
+        })
+    return {"deliverables": docs, "count": len(docs)}
+
+# GET /deliverables/{deliverable_id} — 交付物详情
+@app.get("/deliverables/{deliverable_id}")
+async def fe_get_deliverable(deliverable_id: str):
+    """GET /deliverables/:id → parse {meetingId}:{kind} → file content"""
+    # 格式: del-{meeting_id}-{kind}
+    parts = deliverable_id.split("-", 2)
+    if len(parts) < 3:
+        raise HTTPException(status_code=400, detail=f"Invalid deliverable_id: {deliverable_id}, expected del-{meeting_id}-{kind}")
+    meeting_id, kind = parts[1], parts[2]
+    doc_path = DOCS_DIR / meeting_id / f"{kind}.md"
+    if not doc_path.exists():
+        raise HTTPException(status_code=404, detail=f"Deliverable {kind} not found for meeting {meeting_id}")
+    content = doc_path.read_text(encoding="utf-8")
+    return {
+        "id": deliverable_id,
+        "meetingId": meeting_id,
+        "type": kind,
+        "name": DOC_LABELS.get(kind, kind),
+        "content": content,
+        "updatedAt": datetime.fromtimestamp(doc_path.stat().st_mtime).isoformat(),
+    }
+
+# GET /meetings/{meeting_id}/events — 会议事件 (SSE)
+# 已通过 GET /api/meetings/{meeting_id}/events 提供 SSE
+
+# GET /client/device-status — 设备状态 (已通过 /api/client/device-status 提供)
+
+# POST /meetings/{meeting_id}/archive — 结束会议并归档
+@app.post("/meetings/{meeting_id}/archive")
+async def fe_archive_meeting(meeting_id: str):
+    """POST /meetings/:id/archive → POST /api/meetings/:id/close + 归档信息"""
+    from ..ui_server import _handle_meeting_close
+    close_result = _handle_meeting_close(meeting_id)
+    # 附加归档信息
+    docs_list = []
+    for kind in DOC_KINDS:
+        doc_path = DOCS_DIR / meeting_id / f"{kind}.md"
+        if doc_path.exists():
+            docs_list.append({"kind": kind, "label": DOC_LABELS.get(kind, kind), "size": doc_path.stat().st_size})
+    return {
+        "meetingId": meeting_id,
+        "status": "archived",
+        "closed": close_result,
+        "deliverables": docs_list,
+        "summary": f"Meeting {meeting_id} archived with {len(docs_list)} deliverables",
+    }
+
+
+# =============================================================================
 # 静态文件服务
 # =============================================================================
 
