@@ -12,7 +12,7 @@ use crate::config::{AppState, ClientConfig, AudioConfig, SseConfig, load_client_
 pub use crate::config::client_config_path;
 
 #[tauri::command]
-async fn start_capture(
+pub async fn start_capture(
     app: AppHandle,
     state: State<'_, AppState>,
     auto_upload: bool,
@@ -126,7 +126,7 @@ async fn start_capture(
 }
 
 #[tauri::command]
-async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
     log::info!("=== stop_capture 触发 ===");
     log::info!("  capturing={} (设 false 中)", state.capturing.load(Ordering::SeqCst));
     state.capturing.store(false, Ordering::SeqCst);
@@ -168,7 +168,7 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn list_audio_devices() -> Result<Vec<audio::AudioDeviceInfo>, String> {
+pub async fn list_audio_devices() -> Result<Vec<audio::AudioDeviceInfo>, String> {
     log::info!("list_audio_devices 调用");
     let r = audio::list_input_devices().map_err(|e| {
         log::error!("枚举音频设备失败: {e}");
@@ -184,7 +184,7 @@ async fn list_audio_devices() -> Result<Vec<audio::AudioDeviceInfo>, String> {
 }
 
 #[tauri::command]
-async fn set_gpu_url(state: State<'_, AppState>, url: String) -> Result<(), String> {
+pub async fn set_gpu_url(state: State<'_, AppState>, url: String) -> Result<(), String> {
     let trimmed = url.trim().to_string();
     if trimmed.is_empty() {
         return Err("地址不能为空".into());
@@ -202,21 +202,21 @@ async fn set_gpu_url(state: State<'_, AppState>, url: String) -> Result<(), Stri
 }
 
 #[tauri::command]
-async fn get_gpu_url(state: State<'_, AppState>) -> Result<String, String> {
+pub async fn get_gpu_url(state: State<'_, AppState>) -> Result<String, String> {
     let url = state.gpu_url.lock().await.clone();
     log::info!("get_gpu_url: {}", url);
     Ok(url)
 }
 
 #[tauri::command]
-async fn get_log_path_cmd() -> Result<String, String> {
+pub async fn get_log_path_cmd() -> Result<String, String> {
     let p = get_log_path();
     log::info!("get_log_path_cmd: {}", p);
     Ok(p)
 }
 
 #[tauri::command]
-async fn open_log_dir_cmd(app: AppHandle) -> Result<String, String> {
+pub async fn open_log_dir_cmd(app: AppHandle) -> Result<String, String> {
     use tauri_plugin_opener::OpenerExt;
     let p = get_log_path();
     log::info!("open_log_dir_cmd: reveal {}", p);
@@ -230,7 +230,7 @@ async fn open_log_dir_cmd(app: AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn open_config_dir_cmd(app: AppHandle) -> Result<String, String> {
+pub async fn open_config_dir_cmd(app: AppHandle) -> Result<String, String> {
     use tauri_plugin_opener::OpenerExt;
     let p = client_config_path();
     log::info!("open_config_dir_cmd: reveal {}", p.display());
@@ -257,7 +257,7 @@ async fn open_config_dir_cmd(app: AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn kb_search(
+pub async fn kb_search(
     state: State<'_, AppState>,
     query: String,
     top_k: u32,
@@ -279,7 +279,7 @@ async fn kb_search(
 }
 
 #[tauri::command]
-async fn fetch_meeting_chat_history(
+pub async fn fetch_meeting_chat_history(
     state: State<'_, AppState>,
     meeting_id: String,
 ) -> Result<serde_json::Value, String> {
@@ -302,7 +302,7 @@ async fn fetch_meeting_chat_history(
 }
 
 #[tauri::command]
-async fn post_meeting_chat(
+pub async fn post_meeting_chat(
     state: State<'_, AppState>,
     meeting_id: String,
     message: String,
@@ -334,7 +334,7 @@ async fn post_meeting_chat(
     Ok(body)
 }
 // === run_capture_loop ===
-async fn run_capture_loop(
+pub async fn run_capture_loop(
     app: AppHandle,
     gpu_url: String,
     meeting_id: String,
@@ -538,7 +538,7 @@ async fn run_capture_loop(
 
 /// GPU 端 KB 检索 (本地客户端不能直接连 KB, 走 GPU server 代理)
 #[tauri::command]
-async fn kb_search(
+pub async fn kb_search(
     state: State<'_, AppState>,
     query: String,
     top_k: u32,
@@ -566,7 +566,7 @@ async fn kb_search(
 /// (2026-06-27: docs 走 SSE doc-status 自动推流, fetch_meeting_docs 删掉, 只保留 chat 系列)
 
 #[tauri::command]
-async fn fetch_meeting_chat_history(
+pub async fn fetch_meeting_chat_history(
     state: State<'_, AppState>,
     meeting_id: String,
 ) -> Result<serde_json::Value, String> {
@@ -589,7 +589,7 @@ async fn fetch_meeting_chat_history(
 }
 
 #[tauri::command]
-async fn post_meeting_chat(
+pub async fn post_meeting_chat(
     state: State<'_, AppState>,
     meeting_id: String,
     message: String,
@@ -624,7 +624,7 @@ async fn post_meeting_chat(
 /// SSE 接收主循环: 连接服务端事件流, 自动重连, 实时推送给前端
 
 // === run_sse_loop ===
-async fn run_sse_loop(
+pub async fn run_sse_loop(
     app: AppHandle,
     gpu_url: String,
     meeting_id: String,
