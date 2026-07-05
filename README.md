@@ -2,7 +2,7 @@
 
 > **本地优先的会议操作系统级 AI 助手** —— 为 VP / 售前 / 项目负责人设计,运行在 VP 自己桌面客户端,数据完全本地化。
 
-**v0.7.0** (2026-07-01) — 协作提问层 + 6→2 kinds 合并 + UI 实时折叠面板 (见 CHANGELOG)。**v0.6.0** (2026-07-01) — 8 项产品需求合入:RAG 切 Chroma 嵌入式 / KB 改用户主动上传+会议隔离 / 客户端麦克风+内录双轨 / 首页强制会议选择 / chat 上传+agent 主动 / demo 多版本 / agent 网络搜索+KB 工具。详见 [CHANGELOG](#v060-2026-07-01-8-项需求合入) + [ADR-0019 ~ 0025](docs/decisions/README.md)。
+**v0.8.5** (2026-07-04) — LLM env 透传 + fork 架构 + API 参考文档。详见 [CHANGELOG](#v085-2026-07-04-llm-env-透传--fork-架构--api-参考文档)。
 
 [English](#english) | [中文](#中文)
 
@@ -76,35 +76,39 @@ VPBUDDY_GPU_URL=http://192.168.10.63:8765 ./vpbuddy-client
 ### 架构
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  VP 桌面客户端 (Ubuntu 24.04 / macOS 14+ / Win11)  │
-├─────────────────────────────────────────────────────┤
-│  Audio loopback (PipeWire / WASAPI / BlackHole)     │
-│        ↓                                            │
-│  ASR (funasr paraformer-zh)                        │
-│        ↓                                            │
-│  MeetingState (5 类事实累积)                       │
-│        ↓                                            │
-│  6 × sub_session (in-process AIAgent)              │
-│  ┌────┬────┬────┬────┬────┬────┐                  │
-│  │req │arch│tasks│api │risk│demo│                  │
-│  └────┴────┴────┴────┴────┴────┘                  │
-│        ↓                                            │
-│  Knowledge Base (sqlite-vec + sentence-transformers)│
-│        ↓                                            │
-│  Web UI (FastAPI + Vanilla JS, port 8765)          │
-└─────────────────────────────────────────────────────┘
-
-可选: GPU 服务器 (cuda) 跑 ASR/embedding,加速
+┌───────────────────────────────────────────────────────────┐
+│  VP 桌面客户端 (Ubuntu 24.04 / macOS 14+ / Win11)        │
+├───────────────────────────────────────────────────────────┤
+│  Tauri 2.6+ (cpal 音频采集)                               │
+│     ↓ WAV chunks (HTTP POST) / SSE 事件流                 │
+│     ┌───────────────────┐   ┌────────────────────────┐   │
+│     │ GPU 服务器          │   │  MiniMax-M3 LLM        │   │
+│     │ 47.100.182.3:28765│   │  (OpenAI 兼容 API)      │   │
+│     │                    │   │                         │   │
+│     │  master session    │   │  batch_docs agent      │   │
+│     │  meeting:{mid}:    │───│  (fork 自 chat)        │   │
+│     │  vp-chat ←→ Chat   │   │  5 文档一次 LLM 调用    │   │
+│     │       ↓ fork       │   └────────────────────────┘   │
+│     │  ┌────────────────┐│   ┌────────────────────────┐   │
+│     │  │ demo agent     ││   │  funasr ASR (GPU)      │   │
+│     │  │ (fork 自 chat)  ││   │  pyannote 说话人分离    │   │
+│     │  │ HTML 原型生成   ││   │  Chroma RAG (嵌入式)   │   │
+│     │  └────────────────┘│   └────────────────────────┘   │
+│     └───────────────────┘                                 │
+└───────────────────────────────────────────────────────────┘
 ```
+**架构变化历史**:
+- **v1.40 及之前** (ADR-0029): 3 个完全独立的 session (chat / batch_docs / demo)
+- **v1.41** (ADR-0041, 2026-07-04): doc agent fork 自主 chat session, 继承上下文
 
 ### 文档
 
 | 主题 | 链接 |
 |------|------|
+| **📡 API 参考 (外部客户端) 🔥** | [docs/api-reference.md](docs/api-reference.md) |
 | **架构** | [docs/design/总体架构.md](docs/design/总体架构.md) |
 | **产品需求** | [docs/product-spec/](docs/product-spec/) |
-| **决策记录** | [docs/decisions/](docs/decisions/) (ADR-0004 / 0005 / 0009) |
+| **决策记录** | [docs/decisions/](docs/decisions/) |
 | **安装指南** | [docs/部署/INSTALL.md](docs/部署/INSTALL.md) |
 | **Phase B Tauri 客户端** | [INSTALL.md §Phase B](./docs/部署/INSTALL.md#phase-b-tauri-桌面客户端-2026-06-24-adr-0016-落地) / [ADR-0016](./docs/decisions/0016-桌面客户端技术选型.md) |
 | **流式 E2E** | [ADR-0013](./docs/decisions/0013-流式E2E-端到端工作流.md) |
@@ -165,12 +169,13 @@ python3 -c "from run_agent import AIAgent; print('✅ VPBuddy ↔ Hermes 真连�
 - **LLM**: OpenAI 兼容 API(默认 MiniMax-M3,可换 GPT-4o / Claude / Qwen 等)
 - **音频**: PipeWire / PulseAudio / WASAPI / BlackHole (跨平台)
 
-### 状态(2026-06-24)
+### 状态(2026-07-04)
 
-- ✅ MVP 全链路 work: 音频 → ASR → 6 文档 → KB → UI 检索
-- ✅ Tauri 桌面客户端编译过 (`cargo build --release`) + 6 子 session E2E 联调通过
-- ✅ 5 个 cargo test + 1 个 GPU E2E 联调测试
-- ✅ 文档齐全: 16 个 ADR + INSTALL.md + CI 工作流
+- ✅ 全链路 work: 上传音频 → ASR → batch_docs 5 文档 + demo → SSE 实时推流
+- ✅ fork 架构: doc agent 继承 chat 上下文 (parent_session_id)
+- ✅ Tauri 桌面客户端编译通过 + e2e 测试套 (30+ 测试)
+- ✅ API 参考文档对外公开, 外部开发者可自行实现网页客户端
+- ✅ 文档齐全: 41 个 ADR + INSTALL.md + CI 工作流 + API 参考
 
 ### License
 

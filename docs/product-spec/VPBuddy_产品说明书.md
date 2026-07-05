@@ -2,6 +2,10 @@
 > 原始 .docx 文件同目录保留。
 >
 > **版本历史**:
+> - **v2.1** (2026-07-04): **LLM env 透传 + fork 架构 + API 参考文档**:
+>   1. **LLM env 透传** (ADR-0040): 子 agent 显式传 `OPENAI_BASE_URL` + `OPENAI_API_KEY`, 避免走 openrouter → 401
+>   2. **fork 模型** (ADR-0041): doc agent 通过 `parent_session_id` 继承 chat 上下文, 不再独立 session
+>   3. **新增 [API 参考文档](../api-reference.md)**: 所有 29 个 HTTP 端点 + SSE 事件流 + 典型流程, 供外部客户端集成
 > - **v1.0 - v1.13**: 见 `VPBuddy_产品说明书_v1.*_2026-06-20.md` (历史归档, 都已过时)
 > - **v2.0** (2026-07-01): **8 项产品需求合入 v0.6**:
 >   1. **录音支持麦克风 + 内录** (Linux 0 操作, macOS 需 BlackHole, Windows WASAPI loopback 0 操作) — 见 ADR-0021
@@ -142,32 +146,40 @@ Sub-agent系统：
 
 核心机制:交付物后台持续生成+ 持续累积演化(无延迟约束)+ **VP 在过程中持续 steer**(改/跳/加/换/参考,任何时候给出方向性输入,AI 实时整合,无『已完成』概念);投屏/外发 = VP 任何时候想看/想发当前状态
 
-### v1.13: 6 个子 session 常驻循环实现(Step 3)
+### v1.41: session fork 架构(ADR-0040/0041, 2026-07-04)
 
-**核心架构**:每种交付物由 1 个**独立常驻子 session** 持续维护,共 6 个:
+**当前架构**: 1 个 master session + 2 个 fork 子 agent
 
-| session_id | doc_kind | 输出 | 维护的文档 |
-|---|---|---|---|
-| `meeting:{mid}:req` | req | Markdown 需求清单 | `docs/{mid}/req.md` |
-| `meeting:{mid}:arch` | arch | Markdown 架构图 | `docs/{mid}/arch.md` |
-| `meeting:{mid}:tasks` | tasks | Markdown 任务卡片 | `docs/{mid}/tasks.md` |
-| `meeting:{mid}:api` | api | OpenAPI / GraphQL schema | `docs/{mid}/api.md` |
-| `meeting:{mid}:risk` | risk | Markdown 风险评估 | `docs/{mid}/risk.md` |
-| `meeting:{mid}:demo` | demo | **可运行的 HTML/代码/mermaid** | `docs/{mid}/demo/` |
+```
+master session: meeting:{mid}:vp-chat     ← 客户端 Chat 页签
+   ├── fork → meeting:{mid}:batch         ← 继承 chat 历史, 生成 req/arch/tasks/api/risk
+   └── fork → meeting:{mid}:demo          ← 继承 chat 历史, 生成 HTML 演示
+```
 
-**子 session 怎么工作**:
-1. 同一个 `session_id` 跨轮触发 → **Hermes 自动保留历史上下文**
-2. 每次触发:读 MeetingState JSON + 自己之前的 doc → 判断是否更新 → **直接 write_file/patch 改文档**(不输出 JSON 让别的进程写)
-3. 后台循环:`sub_session_controller.py` 脚本 + `hermes cron` 每 30s 触发一轮
+| session_id | 角色 | 产生内容 |
+|-----------|------|---------|
+| `meeting:{mid}:vp-chat` | master — VP Chat 主控 | 对话历史, 上下文来源 |
+| `meeting:{mid}:batch` | batch_docs — 5 文档一次 LLM 调用 | `req.md` / `arch.md` / `tasks.md` / `api.md` / `risk.md` |
+| `meeting:{mid}:demo` | demo — HTML 原型 | `demo/` 目录 (多版本) |
 
-**关键不做的**(YAGNI):
-- ❌ 自己设计 VPBuddy 专用 tool(直接用 Hermes 通用 tool)
-- ❌ 自己实现 session 持久化(用 Hermes `session_search` + 同 `session_id`)
-- ❌ 自己设计知识库"双模式"(统一 sqlite-vec + 跨会议 RAG)
-- ❌ 子 session 输出 JSON 让别人写(LLM 自己写文件)
-- ❌ 注入量精确控制(跑起来再说)
+**关键设计决策**:
+1. **fork = parent_session_id**: 子 agent 从 master session 读取整个对话历史作为初始化上下文 (Hermes 0.18.0+ 原生支持)
+2. **单向继承**: 子 agent 不修改 parent 历史, parent 感知不到 child
+3. **LLM provider 统一**: chat / batch_docs / demo 都走 MiniMax-M3 (OpenAI 兼容 API, `https://api.minimax.chat/v1`), 确保 fork 上下文兼容
+4. **prompt 差异化**: system prompt 各自不同 (chat=对话, batch_docs=结构化写作, demo=HTML), 但 parent_session_id 只继承对话历史, 不覆盖 system prompt
 
-详见 [ADR-0006](../decisions/0006-MVP-Step3-子session架构.md) + [总体架构 v1.17 §三](../design/总体架构.md)
+**历史背景**:
+- v1.13 (Step 3): 6 个完全独立的子 session, 彼此不可见, 各自调 LLM
+- v1.30 (ADR-0029): 6→2 合并 (batch_docs + demo), 但 chat 仍独立
+- v1.41 (ADR-0041): 合并为 fork 模型, chat 上下文自动注入 doc 生成
+
+**工作流**:
+1. 用户在 chat 页签输入消息 → master session 累积上下文
+2. controller 触发 batch_docs agent → fork 自 master (继承 chat 历史) → AIAgent.chat(prompt) → write_file × 5
+3. controller 触发 demo agent → fork 自 master (继承 chat 历史) → AIAgent.chat(prompt) → write_file HTML
+4. 文档生成后推 SSE doc-update 事件 → 客户端面板更新
+
+**性能**: LLM 调用 6 次 → 2 次 (66%↓), 总文档生成时间 3-5min → 1-2min, 一致性提升 (5 文档共享 LLM 上下文)。
 
 七、Steer 控制层(Steer Center,v1.5 改名)
 
