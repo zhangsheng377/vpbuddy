@@ -9,7 +9,7 @@ use audio::AudioCapture;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use config::{AppState, load_client_config, set_log_path, client_config_path};
+use config::{AppState, load_client_config, set_log_path, get_log_path, save_gpu_url_to_yaml, client_config_path, ClientConfig, AudioConfig, SseConfig};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 fn main() {
@@ -178,7 +178,7 @@ fn main() {
 }
 
 #[tauri::command]
-pub async fn start_capture(
+async fn start_capture(
     app: AppHandle,
     state: State<'_, AppState>,
     auto_upload: bool,
@@ -292,7 +292,7 @@ pub async fn start_capture(
 }
 
 #[tauri::command]
-pub async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
+async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
     log::info!("=== stop_capture 触发 ===");
     log::info!("  capturing={} (设 false 中)", state.capturing.load(Ordering::SeqCst));
     state.capturing.store(false, Ordering::SeqCst);
@@ -334,7 +334,7 @@ pub async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn list_audio_devices() -> Result<Vec<audio::AudioDeviceInfo>, String> {
+async fn list_audio_devices() -> Result<Vec<audio::AudioDeviceInfo>, String> {
     log::info!("list_audio_devices 调用");
     let r = audio::list_input_devices().map_err(|e| {
         log::error!("枚举音频设备失败: {e}");
@@ -350,7 +350,7 @@ pub async fn list_audio_devices() -> Result<Vec<audio::AudioDeviceInfo>, String>
 }
 
 #[tauri::command]
-pub async fn set_gpu_url(state: State<'_, AppState>, url: String) -> Result<(), String> {
+async fn set_gpu_url(state: State<'_, AppState>, url: String) -> Result<(), String> {
     let trimmed = url.trim().to_string();
     if trimmed.is_empty() {
         return Err("地址不能为空".into());
@@ -368,21 +368,21 @@ pub async fn set_gpu_url(state: State<'_, AppState>, url: String) -> Result<(), 
 }
 
 #[tauri::command]
-pub async fn get_gpu_url(state: State<'_, AppState>) -> Result<String, String> {
+async fn get_gpu_url(state: State<'_, AppState>) -> Result<String, String> {
     let url = state.gpu_url.lock().await.clone();
     log::info!("get_gpu_url: {}", url);
     Ok(url)
 }
 
 #[tauri::command]
-pub async fn get_log_path_cmd() -> Result<String, String> {
+async fn get_log_path_cmd() -> Result<String, String> {
     let p = get_log_path();
     log::info!("get_log_path_cmd: {}", p);
     Ok(p)
 }
 
 #[tauri::command]
-pub async fn open_log_dir_cmd(app: AppHandle) -> Result<String, String> {
+async fn open_log_dir_cmd(app: AppHandle) -> Result<String, String> {
     use tauri_plugin_opener::OpenerExt;
     let p = get_log_path();
     log::info!("open_log_dir_cmd: reveal {}", p);
@@ -396,7 +396,7 @@ pub async fn open_log_dir_cmd(app: AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn open_config_dir_cmd(app: AppHandle) -> Result<String, String> {
+async fn open_config_dir_cmd(app: AppHandle) -> Result<String, String> {
     use tauri_plugin_opener::OpenerExt;
     let p = client_config_path();
     log::info!("open_config_dir_cmd: reveal {}", p.display());
@@ -423,7 +423,7 @@ pub async fn open_config_dir_cmd(app: AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn kb_search(
+async fn kb_search(
     state: State<'_, AppState>,
     query: String,
     top_k: u32,
@@ -445,7 +445,7 @@ pub async fn kb_search(
 }
 
 #[tauri::command]
-pub async fn fetch_meeting_chat_history(
+async fn fetch_meeting_chat_history(
     state: State<'_, AppState>,
     meeting_id: String,
 ) -> Result<serde_json::Value, String> {
@@ -468,7 +468,7 @@ pub async fn fetch_meeting_chat_history(
 }
 
 #[tauri::command]
-pub async fn post_meeting_chat(
+async fn post_meeting_chat(
     state: State<'_, AppState>,
     meeting_id: String,
     message: String,
