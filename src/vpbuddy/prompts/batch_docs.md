@@ -51,6 +51,16 @@
 3. 对每个文档判断: 是否需要 patch? (新事实相关 → 是; 否则 → 否)
 4. write_file 5 次, 没改的写原内容 (避免破坏 mtime)
 
+## risk 文档: severity 用法
+
+state 中每条 risk 自带 `[HIGH]` / `[MEDIUM]` / `[LOW]` 标记, 对应严重度。
+生成 risk.md 时:
+- `[HIGH]` → 用 **"⚠️ 高风险"** 标题分组, 写详细
+- `[MEDIUM]` → 用 **"中等"** 分组
+- `[LOW]` → 用 **"低"** 分组, 1 行带过
+- 没有该标记的 risk → 默认 MEDIUM
+- 严禁自己编造 severity 值; 只使用 state 中已有的标记
+
 # 协作提问协议 (ADR-0028)
 
 **必读**: 你的不确定因素先推到 `docs/{meeting_id}/collab.md`, 等待 VP 回答后再 patch 文档.

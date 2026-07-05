@@ -353,8 +353,12 @@ def _get_clean_agent(meeting_id: str):
             platform="subagent",
             quiet_mode=True,
             max_iterations=10,  # 整理任务不需要多轮
-            base_url=os.environ.get("VPBUDDY_LLM_API_BASE", "http://localhost:11434/v1"),
-            model=os.environ.get("VPBUDDY_LLM_MODEL", "qwen3:8b"),
+            # 2026-07-05 fix(#8): 统一 base_url/ model/ api_key
+            # VPBUDDY_LLM_API_BASE 为 ASR clean 专用 (ollama /api/chat 协议),
+            # ASR clean 用较快的小模型 (qwen3:8b), 不影响文档生成等主要链路
+            model=os.environ.get("VPBUDDY_CLEAN_MODEL") or os.environ.get("VPBUDDY_LLM_MODEL", "qwen3:8b"),
+            base_url=os.environ.get("OPENAI_BASE_URL") or os.environ.get("VPBUDDY_LLM_API_BASE", "http://localhost:11434/v1"),
+            api_key=os.environ.get("OPENAI_API_KEY") or os.environ.get("MINIMAX_API_KEY"),
             ephemeral_system_prompt=prompt_template,
         )
         return _CLEAN_AGENT_CACHE[session_id]

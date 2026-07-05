@@ -6,11 +6,14 @@
 - 服务端存储(NFS / 本地磁盘),不依赖云存储
 - 路径:`{data_dir}/meetings/{meeting_id}.json`
 - 每次修改立即落盘(crud 后调用 save)
-- 简单,不要数据库 / 不要锁
+- 2026-07-05 fix(#4): 加 per-meeting 文件锁 + atomic write
 """
 
 from __future__ import annotations
 import json
+import threading
+import tempfile
+import os
 from pathlib import Path
 from .state import MeetingState
 
@@ -18,9 +21,17 @@ from .state import MeetingState
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
+# 2026-07-05 fix(#4): per-meeting 文件锁, 防止并发写丢更新
+_meeting_locks: dict[str, threading.Lock] = {}
+_global_lock = threading.Lock()
 
 
-
+def _get_lock(meeting_id: str) -> threading.Lock:
+    """获取 per-meeting 锁 (线程安全创建)"""
+    with _global_lock:
+        if meeting_id not in _meeting_locks:
+            _meeting_locks[meeting_id] = threading.Lock()
+        return _meeting_locks[meeting_id]
 
 
 class StorageError(Exception):
@@ -38,20 +49,33 @@ class MeetingStorage:
         return self.data_dir / f"{meeting_id}.json"
 
     def save(self, state: MeetingState) -> None:
-        """保存状态到 JSON 文件(立即落盘)
+        """保存状态到 JSON 文件(线程安全 + atomic write)
 
         pydantic v2 的 model_dump_json 不支持 ensure_ascii 参数,
         改用 json.dumps + json.loads 包装一层来保留中文(可读)。
         """
-        path = self._path(state.meeting_id)
-        path.write_text(
-            json.dumps(
+        lock = _get_lock(state.meeting_id)
+        with lock:
+            path = self._path(state.meeting_id)
+            data = json.dumps(
                 json.loads(state.model_dump_json(indent=2)),
                 ensure_ascii=False,
                 indent=2,
-            ),
-            encoding="utf-8",
-        )
+            )
+            # atomic write: 先写临时文件再 rename
+            fd, tmp_path = tempfile.mkstemp(dir=str(self.data_dir), suffix=".json.tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(data)
+                    f.flush()
+                    os.fsync(fd)
+                os.replace(tmp_path, str(path))
+            except BaseException:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
 
     def load(self, meeting_id: str) -> MeetingState:
         """加载会议状态(不存在抛 StorageError)"""

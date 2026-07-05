@@ -159,8 +159,9 @@ def _get_or_create_agent(meeting_id: str, doc_kind: str) -> Any:
                     platform="subagent",
                     quiet_mode=True,
                     max_iterations=30,
+                    # 2026-07-05 fix(#8): 加 VPBUDDY_LLM_API_BASE fallback (跟 _get_chat_agent 一致)
                     model=os.environ.get("VPBUDDY_LLM_MODEL", "MiniMax-M3"),
-                    base_url=os.environ.get("OPENAI_BASE_URL"),
+                    base_url=os.environ.get("OPENAI_BASE_URL") or os.environ.get("VPBUDDY_LLM_API_BASE"),
                     api_key=os.environ.get("OPENAI_API_KEY") or os.environ.get("MINIMAX_API_KEY"),
                 )
 
