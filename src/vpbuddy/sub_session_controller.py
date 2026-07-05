@@ -37,7 +37,6 @@ os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 DATA_DIR = Path(os.environ.get("VPBUDDY_DATA_DIR", PROJECT_ROOT / "data" / "meetings"))
 DOCS_DIR = Path(os.environ.get("VPBUDDY_DOCS_DIR", PROJECT_ROOT / "docs"))
 PROMPTS_DIR = Path(__file__).parent / "prompts"
-POLL_INTERVAL = int(os.environ.get("VPBUDDY_POLL_INTERVAL", "30"))
 PARALLEL_WORKERS = int(os.environ.get("VPBUDDY_PARALLEL_WORKERS", "3"))
 
 # 6 个子 session 对应 6 种 doc_kind
