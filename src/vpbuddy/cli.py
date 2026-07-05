@@ -19,6 +19,10 @@ import sys
 
 def cmd_ui(args: argparse.Namespace) -> int:
     """启动 VPBuddy Web UI(Browser-based, 端口 8765)"""
+    if getattr(args, 'fastapi', False):
+        from .server.fastapi_app import main as fastapi_main
+        extra = ["--port", str(args.port), "--host", args.host]
+        return fastapi_main(extra) or 0
     from .ui_server import main as ui_main
     extra = ["--port", str(args.port), "--host", args.host]
     return ui_main(extra) or 0
@@ -113,6 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ui = sub.add_parser("ui", help="启动 VPBuddy Web UI (:8765) — VP/用户开会用")
     p_ui.add_argument("--port", type=int, default=8765, help="端口(默认 8765)")
     p_ui.add_argument("--host", default="0.0.0.0", help="绑定 host(默认 0.0.0.0)")
+    p_ui.add_argument("--fastapi", action="store_true", help="使用 FastAPI 服务器 (#6, v0.9.0)")
     p_ui.set_defaults(func=cmd_ui)
 
     # controller
