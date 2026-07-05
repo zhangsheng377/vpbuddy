@@ -1251,25 +1251,19 @@ class Handler(BaseHTTPRequestHandler):
             })
             _save_stream_meta(meeting_id, meta)
 
-            # 3. 触发 6 个子 session (in-process, 复用 AIAgent 缓存, 跨 chunk 真"长驻")
-            # ADR-0006 + ADR-0009: 同 (mid, kind) 跨次调 trigger_sub_session → 同一 AIAgent
-            #   → 同一 session_id → 持久 LLM 上下文 (本次会议所有累积)
-            # 不同会议起新 AIAgent, 上下文隔离
-            # demo agent 单独拎出来, 跟其他 5 个并行触发 (2026-06-23 张胜东纠正)
-            # 不禁止 fetch/eval (2026-06-23 二次纠正), 先看效果
-            from concurrent.futures import ThreadPoolExecutor
-
-            from .sub_session_controller import trigger_sub_session
-            doc_kinds = DOC_KINDS
+            # ADR-0029: 6 doc kinds 合并为 batch_docs + demo
+            # 实时 chunk 触发 batch_docs (5 文档 1 次) + demo (单独), 不再逐个触发 6 个旧 kind
+            from .sub_session_controller import _dispatch_kind, BATCH_DOCS_KIND, DEMO_KIND
+            doc_kinds = [BATCH_DOCS_KIND, DEMO_KIND]
 
             def _run_sub(mid, kind):
                 try:
-                    r = trigger_sub_session(mid, kind, False)
+                    r = _dispatch_kind(mid, kind, dry_run=False)
                     return (kind, r.get("triggered"), r.get("error"))
                 except Exception as e:
                     return (kind, False, str(e))
 
-            with ThreadPoolExecutor(max_workers=3) as ex:
+            with ThreadPoolExecutor(max_workers=2) as ex:
                 futures = [ex.submit(_run_sub, meeting_id, k) for k in doc_kinds]
                 # 不等结果, fire-and-forget (前端立刻返回 new_segments)
                 # 加 done callback 写日志
@@ -1423,17 +1417,13 @@ class Handler(BaseHTTPRequestHandler):
             })
             _save_stream_meta(meeting_id, meta)
 
-            # 2026-06-30: 6 docs trigger fire-and-forget, 不阻塞 asr_clean + push_event
-            # 原因: 6 docs 各跑 30-100s 调云端 LLM, 阻塞会拖慢 transcript-segment 推送
-            # 张胜东反馈: "asr的前几句才出来, 但demo 早就出来了, 说明不是 asr 慢而是推送/接收慢"
-            from concurrent.futures import ThreadPoolExecutor
-
-            from .sub_session_controller import trigger_sub_session
-            doc_kinds = DOC_KINDS
+            # ADR-0029: 6 doc kinds 合并为 batch_docs + demo
+            from .sub_session_controller import _dispatch_kind, BATCH_DOCS_KIND, DEMO_KIND
+            doc_kinds = [BATCH_DOCS_KIND, DEMO_KIND]
 
             def _run_sub(mid, kind):
                 try:
-                    r = trigger_sub_session(mid, kind, False)
+                    r = _dispatch_kind(mid, kind, dry_run=False)
                     return (kind, r.get("triggered"), r.get("error"))
                 except Exception as e:
                     return (kind, False, str(e))
@@ -1448,9 +1438,7 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as e:
                     print(f"[stream_chunk/bg] {kind} callback err: {e}")
 
-            # 2026-06-30: 独立 executor 不 await, fire-and-forget
-            # 用 daemon=True 让线程不阻塞进程退出
-            _bg_executor = ThreadPoolExecutor(max_workers=6, thread_name_prefix="doc-trigger")
+            _bg_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="doc-trigger")
             for k in doc_kinds:
                 fut = _bg_executor.submit(_run_sub, meeting_id, k)
                 fut.add_done_callback(lambda f, kk=k: _log_done(f, kk))
