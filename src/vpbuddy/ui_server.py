@@ -59,6 +59,25 @@ DOC_LABELS = {
 _CHAT_AGENT_CACHE: dict[str, Any] = {}
 _CHAT_AGENT_LOCK = threading.Lock()
 
+# 2026-07-05 fix(#4): per-meeting 文件锁 for stream_meta + chat_history
+_meta_locks: dict[str, threading.Lock] = {}
+_chat_locks: dict[str, threading.Lock] = {}
+_file_lock_global = threading.Lock()
+
+
+def _get_meta_lock(meeting_id: str) -> threading.Lock:
+    with _file_lock_global:
+        if meeting_id not in _meta_locks:
+            _meta_locks[meeting_id] = threading.Lock()
+        return _meta_locks[meeting_id]
+
+
+def _get_chat_lock(meeting_id: str) -> threading.Lock:
+    with _file_lock_global:
+        if meeting_id not in _chat_locks:
+            _chat_locks[meeting_id] = threading.Lock()
+        return _chat_locks[meeting_id]
+
 # 2026-06-28: ASR 后处理 agent cache — 同 (mid) 复用, 上下文拼接之前的整理结果
 # 设计: 客户端只看到整理后的 transcript-segment, 原始 segments 仍存 meta["transcript_segments"]
 _CLEAN_AGENT_CACHE: dict[str, Any] = {}
@@ -79,21 +98,25 @@ def _stream_meta_path(meeting_id: str) -> Path:
 
 
 def _load_stream_meta(meeting_id: str) -> dict:
-    path = _stream_meta_path(meeting_id)
-    if not path.exists():
-        return {"processed_chunks": [], "transcript_segments": [], "metrics": []}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {"processed_chunks": [], "transcript_segments": [], "metrics": []}
+    lock = _get_meta_lock(meeting_id)
+    with lock:
+        path = _stream_meta_path(meeting_id)
+        if not path.exists():
+            return {"processed_chunks": [], "transcript_segments": [], "metrics": []}
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {"processed_chunks": [], "transcript_segments": [], "metrics": []}
 
 
 def _save_stream_meta(meeting_id: str, meta: dict) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    _stream_meta_path(meeting_id).write_text(
-        json.dumps(meta, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    lock = _get_meta_lock(meeting_id)
+    with lock:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        _stream_meta_path(meeting_id).write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
 
 def _norm_text(text: str) -> str:
@@ -166,6 +189,14 @@ def _chat_path(meeting_id: str) -> Path:
     return DATA_DIR / f"{meeting_id}.chat.json"
 
 
+def _save_chat_history(meeting_id: str, messages: list[dict[str, Any]]) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    _chat_path(meeting_id).write_text(
+        json.dumps(messages[-500:], ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 def _load_chat_history(meeting_id: str) -> list[dict[str, Any]]:
     path = _chat_path(meeting_id)
     if not path.exists():
@@ -177,14 +208,6 @@ def _load_chat_history(meeting_id: str) -> list[dict[str, Any]]:
         return data.get("messages", [])
     except Exception:
         return []
-
-
-def _save_chat_history(meeting_id: str, messages: list[dict[str, Any]]) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    _chat_path(meeting_id).write_text(
-        json.dumps(messages[-500:], ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
 
 
 def _append_chat_message(
@@ -207,9 +230,12 @@ def _append_chat_message(
     }
     if extra:
         message.update(extra)
-    history = _load_chat_history(meeting_id)
-    history.append(message)
-    _save_chat_history(meeting_id, history)
+    # fix(#4): per-meeting lock for atomic read-modify-write
+    lock = _get_chat_lock(meeting_id)
+    with lock:
+        history = _load_chat_history(meeting_id)
+        history.append(message)
+        _save_chat_history(meeting_id, history)
     return message
 
 

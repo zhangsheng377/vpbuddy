@@ -228,7 +228,17 @@ MIT
 
 ## CHANGELOG
 
-### v0.8.6 (2026-07-05) — fork 架构 API 文档 + 客户端 CI 全线修复 + 三平台 Release 自动发布
+### v0.9.0 (2026-07-05) — 后台任务队列 + 经验蒸馏 Phase 1 + BFF API + FastAPI 迁移 (#5, #1, #9, #6)
+
+**核心**: 从 v0.8.x 的 IDE/文档管理阶段进入**服务端架构升级阶段**。后台任务队列解决了长会议线程堆积和重复触发，经验蒸馏提供了"越用越聪明"的长期能力闭环，FastAPI 迁移为产品级 API 层铺路。
+
+**改动**:
+- 🗂️ **#5 后台任务队列**: 新增 `task_manager.py` — per-meeting 单任务队列 (debounce), generation_id 递增防旧覆盖, 全局 bounded ThreadPoolExecutor (4 workers), 可观测任务状态
+- 🧠 **#1 经验蒸馏 Phase 1**: 新增 `experience.py` + `experience_store.py` — ExperienceItem 6 kind 数据模型, 会议结束自动从 MeetingState 提取候选, 聚合索引, batch_docs 生成前检索注入
+- 🏗️ **#6 FastAPI 迁移**: 新增 `server/fastapi_app.py` (1367 行, 28 路由端点) — FastAPI app + StreamingResponse SSE + 配置化 CORS + 双兼容 (旧 http.server 仍可用)
+- 🔌 **#9 BFF API P0**: `GET /api/meetings/{id}/aggregate` 会议聚合 DTO + `GET /api/client/device-status` 设备状态
+- 🔐 **#4 JSON 并发保护 (完善)**: stream_meta/chat_history 加 per-meeting 文件锁, _append_chat_message 原子 read-modify-write
+- 📝 **版本号**: pyproject/Cargo.toml/tauri.conf.json/package.json/__init__.py → 0.9.0
 
 **核心**: v0.8.5 (fork 架构 + LLM env 透传) 发布后 CI 因 stash 冲突残留 + commands.rs 导入缺失而持续失败。本次**彻底修复 CI 流水线**,实现真正 One-Click Release。
 
