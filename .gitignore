@@ -59,6 +59,7 @@ target/
 .env
 .env.local
 .env.*.local
+.github_monitor_token
 *.pem
 *.key
 secrets/
