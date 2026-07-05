@@ -745,92 +745,13 @@ def run_one_round(
     return results
 
 
-def main_loop() -> None:
-    """主循环:每 POLL_INTERVAL 秒跑一轮,每小时清理一次 inactive agents"""
-    print("VPBuddy sub-session controller started")
-    print(f"  DATA_DIR: {DATA_DIR}")
-    print(f"  DOCS_DIR: {DOCS_DIR}")
-    print(f"  POLL_INTERVAL: {POLL_INTERVAL}s")
-    print(f"  PARALLEL_WORKERS: {PARALLEL_WORKERS}")
-    print(f"  DOC_KINDS: {DOC_KINDS}")
-    print(f"  AIAgent in-process: {'✅ enabled' if _AGENT_AVAILABLE else '❌ disabled (subprocess fallback)'}")
-    print(f"  auto-cleanup: 每 {int(3600 / POLL_INTERVAL)} 轮 ≈ 1 小时")
-
-    # 2026-07-01 ADR-0023 Phase 5: 启动 agent 主动消息后台监控 (silence / time_node)
-    try:
-        from .agent_proactive import start_monitor
-        start_monitor()
-        print(f"  proactive monitor: ✅ enabled (silence {int(os.environ.get('VPBUDDY_PROACTIVE_INTERVAL', '60'))}s 轮询)")
-    except Exception as e:
-        print(f"  proactive monitor: ❌ failed: {e}")
-
-    print()
-    cleanup_counter = 0
-    CLEANUP_EVERY: int = max(1, int(3600 / POLL_INTERVAL))  # noqa: N806 (period seconds)
-    while True:
-        run_one_round()
-        cleanup_counter += 1
-        if cleanup_counter >= CLEANUP_EVERY:
-            cleanup_counter = 0
-            try:
-                result = cleanup_inactive_agents(inactive_minutes=30, dry_run=False)
-                if result["cleaned"]:
-                    print(
-                        f"  [auto-cleanup] cleaned {len(result['cleaned'])} inactive meetings, "
-                        f"cache {result['cache_size_before']} → {result['cache_size_after']}"
-                    )
-            except Exception as e:
-                logger.warning(f"auto-cleanup failed: {e}")
-        print(f"  sleep {POLL_INTERVAL}s...\n")
-        time.sleep(POLL_INTERVAL)
-
-
-def main(argv: list[str] | None = None) -> int:
-    """Controller CLI 主入口 — `python -m vpbuddy.sub_session_controller`"""
-    global PARALLEL_WORKERS
-    parser = argparse.ArgumentParser(description="VPBuddy sub-session controller")
-    parser.add_argument("--once", action="store_true", help="只跑一轮就退出")
-    parser.add_argument("--meeting", help="只跑指定会议 ID")
-    parser.add_argument("--dry-run", action="store_true", help="只渲染 prompt,不真触发")
-    parser.add_argument("--list-meetings", action="store_true", help="列出活跃会议并退出")
-    parser.add_argument("--serial", action="store_true", help="强制串行(默认并发)")
-    parser.add_argument("--workers", type=int, help=f"并发线程数(默认 {PARALLEL_WORKERS})")
-    parser.add_argument(
-        "--cleanup-agents",
-        type=int,
-        metavar="MINUTES",
-        help="清理 inactive_minutes 分钟没更新的会议对应 AIAgent 缓存(0=用默认 30)",
-    )
-    args = parser.parse_args(argv)
-
-    if args.list_meetings:
-        meetings = list_active_meetings()
-        print(f"Active meetings ({len(meetings)}):")
-        for m in meetings:
-            print(f"  - {m}")
-        return 0
-
-    if args.cleanup_agents is not None:
-        threshold = args.cleanup_agents if args.cleanup_agents > 0 else 30
-        result = cleanup_inactive_agents(inactive_minutes=threshold, dry_run=False)
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0
-
-    if args.once:
-        meetings = [args.meeting] if args.meeting else None
-        if args.workers:
-            PARALLEL_WORKERS = args.workers
-        run_one_round(
-            meeting_ids=meetings,
-            dry_run=args.dry_run,
-            parallel=not args.serial,
-        )
-        return 0
-
-    # 默认主循环(7×24)
-    main_loop()
-    return 0
+# ── 历史: main_loop / main — v0.9.0 删除 ──
+# Controller 轮询 7×24 架构已于 v0.9.0 移除。
+# 文档生成改由 _close_meeting() 通过 task_manager 触发。
+# _dispatch_kind / run_one_round / list_active_meetings / cleanup_inactive_agents 等函数保留,
+# 供 task_manager._doc_runner 和 CLI vpbuddy list 使用。
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    print("sub_session_controller 不再提供独立入口。文档生成由 _close_meeting 通过 task_manager 触发。")
+    sys.exit(0)

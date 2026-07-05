@@ -5,11 +5,12 @@ Hermes TUI 是 Hermes 自己的 dev 工具,不是 VPBuddy 入口 — 别混了�
 
 子命令:
   vpbuddy ui            # 启动 VPBuddy Web UI (:8765) — VP/用户开会用
-  vpbuddy controller    # 启动后台 controller (7×24 跑 6 文档生成)
   vpbuddy transcribe    # 转写音频(调用 GPU 服务器)
   vpbuddy setup-gpu     # 装 GPU 模型(本地一次性)
   vpbuddy list          # 列出活跃会议
   vpbuddy version       # 打印版本
+
+v0.9.0: controller 子命令已移除 — 文档生成由 _close_meeting 通过 task_manager 触发。
 """
 from __future__ import annotations
 
@@ -27,19 +28,6 @@ def cmd_ui(args: argparse.Namespace) -> int:
     extra = ["--port", str(args.port), "--host", args.host]
     return fastapi_main(extra) or 0
 
-
-def cmd_controller(args: argparse.Namespace) -> int:
-    """启动后台 controller(7×24 跑 6 文档生成)"""
-    from .sub_session_controller import main as controller_main
-    # 透传剩余参数给 sub_session_controller.main()(它自己的 argparse)
-    extra = []
-    if args.once:
-        extra.append("--once")
-    if args.meeting:
-        extra.extend(["--meeting", args.meeting])
-    if args.dry_run:
-        extra.append("--dry-run")
-    return controller_main(extra) or 0
 
 
 def cmd_transcribe(args: argparse.Namespace) -> int:
@@ -119,13 +107,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_ui.add_argument("--host", default="0.0.0.0", help="绑定 host(默认 0.0.0.0)")
     p_ui.add_argument("--legacy", action="store_true", help="使用旧 BaseHTTPRequestHandler 服务器 (默认走 FastAPI)")
     p_ui.set_defaults(func=cmd_ui)
-
-    # controller
-    p_ctrl = sub.add_parser("controller", help="启动后台 controller (7×24 跑 6 文档生成)")
-    p_ctrl.add_argument("--once", action="store_true", help="只跑一轮就退出")
-    p_ctrl.add_argument("--meeting", help="只跑指定会议 ID")
-    p_ctrl.add_argument("--dry-run", action="store_true", help="只渲染 prompt,不真触发")
-    p_ctrl.set_defaults(func=cmd_controller)
 
     # transcribe
     p_tx = sub.add_parser("transcribe", help="转写音频(调用 GPU 服务器)")

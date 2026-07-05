@@ -1855,55 +1855,86 @@ class Handler(BaseHTTPRequestHandler):
 
 
     def _handle_meeting_close(self, meeting_id: str):
-        """2026-07-01 ADR-0022: 用户主动 [结束会议] 按钮调
+        """2026-07-01 ADR-0022: 用户主动 [结束会议] 按钮调 — 委托给模块级函数"""
+        result = _close_meeting(meeting_id)
+        return self._json(result)
 
-        行为:
-        1. push_event("meeting-complete", {...}) — 客户端 SSE 收到, 状态切 'closed'
-        2. close_meeting(meeting_id) — 服务端 SSE 订阅者退出
-        3. clear proactive throttle (ADR-0023 Phase 5: 下次开同 ID 会议, 主动消息能再触发)
-        4. v0.9.0 #1: 经验蒸馏 — 从 MeetingState 提取经验候选
-        """
+
+# ── 模块级会议关闭函数 (v0.9.0: 供 FastAPI + VPBuddyHandler 共用) ──
+
+def _close_meeting(meeting_id: str) -> dict:
+    """关闭会议: SSE complete 事件 + 经验蒸馏 + 文档生成触发.
+
+    被 ui_server.VPBuddyHandler._handle_meeting_close 和 FastAPI 路由共用.
+    不依赖 self, 返回 dict 由调用方序列化.
+
+    v0.9.0: 新增 task_manager 提交文档生成 (替代旧 controller 轮询).
+    """
+    from .realtime_server import close_meeting, push_event
+    from .task_manager import get_task_manager
+    from .sub_session_controller import _dispatch_kind, BATCH_DOCS_KIND, DEMO_KIND
+
+    try:
+        push_event(meeting_id, "meeting-complete", {
+            "meeting_id": meeting_id,
+            "status": "user_closed",
+            "note": "用户主动结束 (ADR-0022)",
+        })
+        closed = close_meeting(meeting_id)
+
+        # 清 proactive 节流
         try:
-            from .realtime_server import close_meeting, push_event
-            push_event(meeting_id, "meeting-complete", {
-                "meeting_id": meeting_id,
-                "status": "user_closed",
-                "note": "用户主动结束 (ADR-0022)",
-            })
-            closed = close_meeting(meeting_id)
-            # 2026-07-01 ADR-0023: 清 proactive 节流, 下次复用同 mid 时主动消息能再触发
-            try:
-                from .agent_proactive import clear_throttle
-                cleared = clear_throttle(meeting_id)
-            except Exception:
-                cleared = 0
+            from .agent_proactive import clear_throttle
+            cleared = clear_throttle(meeting_id)
+        except Exception:
+            cleared = 0
 
-            # v0.9.0 #1: 经验蒸馏 — 从 MeetingState 提取候选
-            extracted_count = 0
-            try:
-                from .storage import MeetingStorage
-                from .experience_store import extract_from_meeting_state, save_experiences
-                storage = MeetingStorage(DATA_DIR)
-                if storage.exists(meeting_id):
-                    state = storage.load(meeting_id)
-                    items = extract_from_meeting_state(meeting_id, state, meeting_title=meeting_id)
-                    if items:
-                        save_experiences(meeting_id, items)
-                        extracted_count = len(items)
-                        print(f"[experience] 会议 {meeting_id} 提取 {extracted_count} 条经验候选 → data/experiences/{meeting_id}.json")
-            except Exception as e:
-                print(f"[experience] 会议 {meeting_id} 经验提取失败: {e}")
-
-            print(f"[ui_server] 用户主动 close_meeting: {meeting_id}, 关闭 {closed} 个 SSE 订阅者, 清 {cleared} 个 proactive 节流, 提取 {extracted_count} 条经验")
-            return self._json({
-                "meeting_id": meeting_id,
-                "closed_subscribers": closed,
-                "proactive_cleared": cleared,
-                "experiences_extracted": extracted_count,
-                "status": "closed",
-            })
+        # 经验蒸馏 (#1)
+        extracted_count = 0
+        try:
+            from .storage import MeetingStorage
+            from .experience_store import extract_from_meeting_state, save_experiences
+            storage = MeetingStorage(DATA_DIR)
+            if storage.exists(meeting_id):
+                state = storage.load(meeting_id)
+                items = extract_from_meeting_state(meeting_id, state, meeting_title=meeting_id)
+                if items:
+                    save_experiences(meeting_id, items)
+                    extracted_count = len(items)
+                    print(f"[experience] 会议 {meeting_id} 提取 {extracted_count} 条经验候选")
         except Exception as e:
-            return self._json({"error": str(e)}, 500)
+            print(f"[experience] 会议 {meeting_id} 经验提取失败: {e}")
+
+        # v0.9.0: 通过 task_manager 提交文档生成 (替代旧 controller 轮询)
+        doc_task_submitted = False
+        try:
+            def _doc_runner(gen_id: int, mid: str) -> dict:
+                kinds = [BATCH_DOCS_KIND, DEMO_KIND]
+                results = {}
+                for kind in kinds:
+                    try:
+                        r = _dispatch_kind(mid, kind, dry_run=False)
+                        results[kind] = {"triggered": r.get("triggered"), "error": r.get("error")}
+                    except Exception as e:
+                        results[kind] = {"triggered": False, "error": str(e)}
+                return results
+            get_task_manager().submit(meeting_id, _doc_runner)
+            doc_task_submitted = True
+        except Exception as e:
+            print(f"[close_meeting] 文档生成任务提交失败: {e}")
+
+        print(f"[close_meeting] {meeting_id}: 关闭 {closed} 个 SSE, 清 {cleared} 个 throttle, "
+              f"提取 {extracted_count} 条经验, doc_task={doc_task_submitted}")
+        return {
+            "meeting_id": meeting_id,
+            "closed_subscribers": closed,
+            "proactive_cleared": cleared,
+            "experiences_extracted": extracted_count,
+            "doc_task_submitted": doc_task_submitted,
+            "status": "closed",
+        }
+    except Exception as e:
+        return {"error": str(e), "status": "close_failed"}
 
     def _500(self, msg):
         self.send_response(500)
