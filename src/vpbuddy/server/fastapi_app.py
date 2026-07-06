@@ -402,12 +402,14 @@ async def post_meeting_material(meeting_id: str, request: Request):
 
     multipart/form-data:
         file: binary (必需)
-        name: str (可选, 默认用文件名)
 
     上传后:
         1. 保存为 Material 实体
-        2. 进 Hermes 主会话 (chat 路径, LLM 当场处理)
-        3. 异步进知识库
+        2. 根据文件类型处理：
+           - 文本 (.txt/.md/.csv等): 读取内容，喂给 Hermes
+           - 图片: 调 MiniMax vision API 提取描述，喂给 Hermes
+           - 其他 (pdf/pptx等): 告诉 Hermes 已存入知识库
+        3. 同步进知识库（文本/图片描述进 KB）
     """
     content_type = request.headers.get("Content-Type", "")
     if "multipart/form-data" not in content_type:
@@ -431,50 +433,119 @@ async def post_meeting_material(meeting_id: str, request: Request):
         content_type=file_ct,
     )
 
-    # 2. 进 Hermes 主会话 (复用 chat 路径)
-    try:
-        user_msg = _append_chat_message(
-            meeting_id,
-            "user",
-            f"[上传了材料: {filename}]",
-            source="material-upload",
-            extra={"material": meta.to_dict()},
-        )
-        from ..realtime_server import push_event
-        push_event(meeting_id, "chat-message", user_msg)
+    # 2. 判断文件类型，构造喂给 Hermes 的消息
+    file_type = material_storage.classify_file(filename)
+    chat_message = ""
+    chat_extra = {"material": meta.to_dict()}
 
-        result = _run_vp_chat(meeting_id, f"用户上传了一份会议材料：{filename}，请分析其内容并纳入会议上下文。")
-        assistant_msg = _append_chat_message(
-            meeting_id, "assistant", result["content"],
-            source=result["source"], status=result["status"],
-        )
-        push_event(meeting_id, "chat-message", assistant_msg)
-    except Exception as e:
-        print(f"[materials] Hermes 处理失败: {e}")
-
-    # 3. 异步进知识库
-    def _kb_worker():
+    if file_type == "text":
+        content, truncated, err = material_storage.read_text_content(meta.material_id)
+        if content:
+            size_note = f"{len(content)} 字" + ("(截断)" if truncated else "")
+            chat_message = (
+                f"用户上传了会议材料：{filename}\n"
+                f"\n---文件内容 ({size_note})---\n"
+                f"{content}\n"
+                f"---文件内容结束---\n"
+                f"\n请将以上内容纳入会议上下文。"
+            )
+        else:
+            chat_message = f"用户上传了会议材料：{filename}，已存入知识库。"
+    elif file_type == "image":
+        # 调 MiniMax vision API 分析图片内容
         try:
-            from ..kb_api import handle_kb_upload
-            # 构造 multipart body 给 KB upload
-            boundary = b"----material-kb-" + str(uuid.uuid4().hex[:8]).encode()
+            import base64
+            img_b64 = base64.b64encode(file_data).decode()
+            data_uri = f"data:{file_ct};base64,{img_b64}"
+
+            import os as _os
+            from openai import OpenAI as _OpenAI
+            _vclient = _OpenAI(
+                base_url=_os.environ.get("OPENAI_BASE_URL", "https://api.minimax.chat/v1"),
+                api_key=_os.environ.get("OPENAI_API_KEY", ""),
+            )
+            _vresp = _vclient.chat.completions.create(
+                model=_os.environ.get("MODEL", "minimax-m3"),
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "请详细描述这张图片的内容，提取所有可识别的文字信息。"},
+                        {"type": "image_url", "image_url": {"url": data_uri}},
+                    ],
+                }],
+                max_tokens=2000,
+            )
+            vision_text = _vresp.choices[0].message.content or ""
+            print(f"[materials] Vision 分析完成: {filename} ({len(vision_text)} chars)")
+
+            chat_message = (
+                f"用户上传了截图/图片：{filename}\n"
+                f"\n---图片 AI 分析结果---\n"
+                f"{vision_text}\n"
+                f"---分析结果结束---\n"
+                f"\n请将以上内容纳入会议上下文。"
+            )
+        except Exception as e:
+            print(f"[materials] Vision 分析失败: {e}")
+            chat_message = f"用户上传了截图/图片：{filename}，已保存为会议材料。"
+    else:
+        # binary (pdf/pptx/docx 等): 告诉 Hermes 去 KB 搜
+        chat_message = (
+            f"用户上传了会议材料：{filename}，已存入知识库。"
+            f"如需了解内容，可搜索当前会议的知识库。"
+        )
+
+    # 3. 进 Hermes 主会话
+    if chat_message:
+        try:
+            user_msg = _append_chat_message(
+                meeting_id, "user", f"[上传了材料: {filename}]",
+                source="material-upload", extra=chat_extra,
+            )
+            from ..realtime_server import push_event
+            push_event(meeting_id, "chat-message", user_msg)
+
+            result = _run_vp_chat(meeting_id, chat_message)
+            assistant_msg = _append_chat_message(
+                meeting_id, "assistant", result["content"],
+                source=result["source"], status=result["status"],
+            )
+            push_event(meeting_id, "chat-message", assistant_msg)
+        except Exception as e:
+            print(f"[materials] Hermes 处理失败: {e}")
+
+    # 4. 同步进知识库（文本/图片描述进 KB，二进制原本就异步）
+    try:
+        from ..kb_api import handle_kb_upload
+        boundary = b"----material-kb-" + str(uuid.uuid4().hex[:8]).encode()
+        # 对于图片，把 vision 描述存为 KB 文档（比纯二进制有意义）
+        if file_type == "image" and chat_message:
+            kb_content = f"[图片 AI 分析]\n{chat_message}".encode()
+            parts = [
+                b"--" + boundary + b"\r\n",
+                b'Content-Disposition: form-data; name="meeting_id"\r\n\r\n' + meeting_id.encode() + b"\r\n",
+                b"--" + boundary + b"\r\n",
+                b'Content-Disposition: form-data; name="file"; filename="vision_desc_' + filename.encode() + b'.txt"\r\n',
+                b"Content-Type: text/plain\r\n\r\n",
+                kb_content,
+                b"\r\n--" + boundary + b"--\r\n",
+            ]
+        else:
             parts = [
                 b"--" + boundary + b"\r\n",
                 b'Content-Disposition: form-data; name="meeting_id"\r\n\r\n' + meeting_id.encode() + b"\r\n",
                 b"--" + boundary + b"\r\n",
                 b'Content-Disposition: form-data; name="file"; filename="' + filename.encode() + b'"\r\n',
-                b"Content-Type: application/octet-stream\r\n\r\n",
+                b"Content-Type: " + file_ct.encode() + b"\r\n\r\n",
                 file_data,
                 b"\r\n--" + boundary + b"--\r\n",
             ]
-            kb_body = b"".join(parts)
-            kb_ct = f"multipart/form-data; boundary={boundary.decode()}"
-            handle_kb_upload(kb_body, kb_ct)
-            print(f"[materials] KB 入库完成: {filename}")
-        except Exception as e:
-            print(f"[materials] KB 入库失败: {e}")
-
-    threading.Thread(target=_kb_worker, daemon=True).start()
+        kb_body = b"".join(parts)
+        kb_ct = f"multipart/form-data; boundary={boundary.decode()}"
+        handle_kb_upload(kb_body, kb_ct)
+        print(f"[materials] KB 入库完成: {filename}")
+    except Exception as e:
+        print(f"[materials] KB 入库失败: {e}")
 
     return meta.to_dict()
 

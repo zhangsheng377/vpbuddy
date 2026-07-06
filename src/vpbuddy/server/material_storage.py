@@ -36,6 +36,14 @@ ALLOWED_EXTENSIONS = {
     ".mp4", ".mov", ".avi",
 }
 
+# 可直接读取文本内容的文件类型（喂给 Hermes）
+TEXT_EXTENSIONS = {".txt", ".md", ".csv", ".json", ".xml", ".yaml", ".yml"}
+# 图片文件类型（调 vision API 分析）
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+
+# 文本文件最大喂给 Hermes 的字数
+MAX_TEXT_CHARS = 50000
+
 
 def init(data_dir: Path) -> None:
     """初始化材料存储基目录。在服务启动时调用一次。"""
@@ -203,6 +211,10 @@ def get_material(material_id: str) -> MaterialMeta | None:
 
 def get_file_path(material_id: str) -> Path | None:
     """返回材料的文件路径（用于下载）。"""
+    meta = get_material(material_id)
+    if meta is None:
+        return None
+    # 多目录搜索
     base = _base()
     if not base.exists():
         return None
@@ -211,15 +223,47 @@ def get_file_path(material_id: str) -> Path | None:
             continue
         mat_dir = meeting_dir / material_id
         if mat_dir.is_dir():
-            meta_path = mat_dir / "meta.json"
-            if meta_path.exists():
-                try:
-                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                    fn = meta.get("filename")
-                    if fn:
-                        fp = mat_dir / fn
-                        if fp.exists():
-                            return fp
-                except Exception:
-                    return None
+            fp = mat_dir / meta.filename
+            if fp.exists():
+                return fp
     return None
+
+
+def classify_file(filename: str) -> str:
+    """按扩展名分类文件：text / image / binary"""
+    ext = Path(filename).suffix.lower()
+    if ext in TEXT_EXTENSIONS:
+        return "text"
+    if ext in IMAGE_EXTENSIONS:
+        return "image"
+    return "binary"
+
+
+def read_text_content(material_id: str) -> tuple[str | None, bool, str | None]:
+    """读取文本类材料的内容。
+
+    返回 (content, truncated, error):
+        content=None 表示不支持读取该类型
+        truncated=True 表示被截断
+        error 为错误信息（如果有）
+    """
+    meta = get_material(material_id)
+    if meta is None:
+        return None, False, "material not found"
+    ext = Path(meta.filename).suffix.lower()
+    if ext not in TEXT_EXTENSIONS:
+        return None, False, None  # 不是文本类型，不报错
+    fp = get_file_path(material_id)
+    if fp is None:
+        return None, False, "file not found on disk"
+    try:
+        text = fp.read_text(encoding="utf-8", errors="replace")
+        truncated = len(text) > MAX_TEXT_CHARS
+        if truncated:
+            text = text[:MAX_TEXT_CHARS] + (
+                f"\n\n[...已截断，原始文件约 {len(text)} 字，"
+                f"完整内容已存入知识库可供搜索]"
+            )
+        return text, truncated, None
+    except Exception as e:
+        return None, False, str(e)
