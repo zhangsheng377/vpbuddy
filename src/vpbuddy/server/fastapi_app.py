@@ -548,6 +548,21 @@ async def post_stream_chunk(
             pass
 
 
+def infer_speaker_map(segments: list[dict]) -> dict[str, str]:
+    """从 segments 推断 speaker 映射 (按时长排序 → S00=最多, S01=次, S02=第三)
+
+    Returns: {speaker_id: speaker_name} 如 {"SPEAKER_00": "VP", "SPEAKER_01": "PM", "SPEAKER_02": "Designer"}
+    """
+    from collections import defaultdict
+    durs = defaultdict(float)
+    for s in segments:
+        durs[s["speaker_id"]] += s["end_sec"] - s["start_sec"]
+    sorted_spks = sorted(durs.keys(), key=lambda k: -durs[k])
+    default_names = ["VP", "PM", "Designer", "Guest1", "Guest2"]
+    return {spk: default_names[i] if i < len(default_names) else f"Speaker{i+1}"
+            for i, spk in enumerate(sorted_spks)}
+
+
 def _process_chunk_sync(
     meeting_id: str,
     tmp_path: str,
@@ -559,9 +574,8 @@ def _process_chunk_sync(
     """同步处理 WAV chunk (同步模式)."""
     import time as _time
 
-    from ..ingest import _classify, infer_speaker_map
     from ..scripts.gpu_transcribe import process
-    from ..state import MeetingState, Platform, Priority
+    from ..state import MeetingState, Platform
     from ..storage import MeetingStorage
     from ..task_manager import get_task_manager
     from ..sub_session_controller import _dispatch_kind, BATCH_DOCS_KIND, DEMO_KIND
@@ -598,31 +612,11 @@ def _process_chunk_sync(
             spk_map.setdefault(spk_id, spk_name)
         for spk_id, spk_name in spk_map.items():
             state.register_speaker(spk_id, spk_name)
-        existing_texts = {
-            _norm_text(getattr(item, "text", ""))
-            for item in (
-                state.requirements + state.goals + state.features
-                + state.risks + state.open_questions
-            )
-        }
-        for s in new_segs:
-            text = s["text"]
-            norm = _norm_text(text)
-            if not norm or norm in existing_texts:
-                continue
-            existing_texts.add(norm)
-            spk_name = spk_map.get(s["speaker_id"], "UNKNOWN")
-            kind, prio = _classify(text)
-            if kind == "requirement":
-                state.add_requirement(text, priority=prio, speaker_id=spk_name)
-            elif any(k in text for k in ["目标", "希望", "为了", "达成"]):
-                state.add_goal(text, speaker_id=spk_name)
-            elif any(k in text for k in ["功能", "支持", "能力", "可以"]):
-                state.add_feature(text, speaker_id=spk_name)
-            elif kind == "risk":
-                state.add_risk(text, priority=prio, speaker_id=spk_name)
-            elif kind == "question":
-                state.add_question(text, is_urgent=(prio == Priority.HIGH), speaker_id=spk_name)
+        # 增量 ASR 清洗: 仅处理新 segments, 追加到 cleaned_text
+        from ..server.asr_clean import clean_transcript
+        cleaned = clean_transcript(new_segs)
+        if cleaned:
+            state.cleaned_text = state.cleaned_text + "\n" + cleaned if state.cleaned_text else cleaned
     storage.save(state)
 
     meta.setdefault("processed_chunks", []).append(chunk_index)
@@ -668,6 +662,7 @@ def _process_chunk_sync(
                 "speaker_id": s["speaker_id"],
                 "chunk_index": chunk_index,
                 "speaker_name": spk_map.get(s["speaker_id"], "UNKNOWN"),
+                "cleaned": True,
             })
         push_event(meeting_id, "state-update", _state_payload(state, include_items=True))
         push_event(meeting_id, "metrics-update", {
@@ -719,9 +714,8 @@ def _process_chunk_background(
     try:
         import time as _time
 
-        from ..ingest import _classify, infer_speaker_map
         from ..scripts.gpu_transcribe import process
-        from ..state import MeetingState, Platform, Priority
+        from ..state import MeetingState, Platform
         from ..storage import MeetingStorage
         from ..task_manager import get_task_manager
         from ..sub_session_controller import _dispatch_kind, BATCH_DOCS_KIND, DEMO_KIND
@@ -758,31 +752,11 @@ def _process_chunk_background(
                 spk_map.setdefault(spk_id, spk_name)
             for spk_id, spk_name in spk_map.items():
                 state.register_speaker(spk_id, spk_name)
-            existing_texts = {
-                _norm_text(getattr(item, "text", ""))
-                for item in (
-                    state.requirements + state.goals + state.features
-                    + state.risks + state.open_questions
-                )
-            }
-            for s in new_segs:
-                text = s["text"]
-                norm = _norm_text(text)
-                if not norm or norm in existing_texts:
-                    continue
-                existing_texts.add(norm)
-                spk_name = spk_map.get(s["speaker_id"], "UNKNOWN")
-                kind, prio = _classify(text)
-                if kind == "requirement":
-                    state.add_requirement(text, priority=prio, speaker_id=spk_name)
-                elif any(k in text for k in ["目标", "希望", "为了", "达成"]):
-                    state.add_goal(text, speaker_id=spk_name)
-                elif any(k in text for k in ["功能", "支持", "能力", "可以"]):
-                    state.add_feature(text, speaker_id=spk_name)
-                elif kind == "risk":
-                    state.add_risk(text, priority=prio, speaker_id=spk_name)
-                elif kind == "question":
-                    state.add_question(text, is_urgent=(prio == Priority.HIGH), speaker_id=spk_name)
+            # 增量 ASR 清洗: 仅处理新 segments, 追加到 cleaned_text
+            from ..server.asr_clean import clean_transcript
+            cleaned = clean_transcript(new_segs)
+            if cleaned:
+                state.cleaned_text = state.cleaned_text + "\n" + cleaned if state.cleaned_text else cleaned
         storage.save(state)
 
         meta.setdefault("transcript_segments", []).extend(new_segs)
@@ -943,49 +917,29 @@ async def post_upload_audio(
         tmp_path = tmp.name
 
     try:
-        from ..ingest import ingest_transcript
-        from ..scripts.gpu_transcribe import process
-        from ..state import Platform
+        import asyncio
+        from ..storage import MeetingStorage
 
-        transcript = process(tmp_path)
-        state = ingest_transcript(
+        # 调用 _process_chunk_sync 统一处理路径 (chunk_index=0 表示一次性上传)
+        # 同步函数需在 asyncio.to_thread 中执行, 避免堵塞事件循环
+        await asyncio.to_thread(
+            _process_chunk_sync,
             meeting_id=meeting_id,
-            transcript=transcript,
-            project_name=f"上传会议 {meeting_id}",
-            platform=Platform.LOCAL,
+            tmp_path=tmp_path,
+            chunk_index=0,
+            chunk_start_sec=0,
+            overlap_sec=0,
+            client_sent_at=time.time(),
         )
 
-        # 通过 task_manager 触发文档生成 (v0.9.0: 替代旧 controller subprocess)
-        try:
-            from ..task_manager import get_task_manager
-            from ..sub_session_controller import _dispatch_kind, BATCH_DOCS_KIND, DEMO_KIND
-            def _doc_runner(gen_id: int, mid: str) -> dict:
-                import threading
-                results: dict = {}
-                lock = threading.Lock()
-                def _run(kind: str):
-                    try:
-                        r = _dispatch_kind(mid, kind, dry_run=False)
-                        with lock:
-                            results[kind] = {"triggered": r.get("triggered"), "error": r.get("error")}
-                    except Exception as e:
-                        with lock:
-                            results[kind] = {"triggered": False, "error": str(e)}
-                threads = [
-                    threading.Thread(target=_run, args=(BATCH_DOCS_KIND,), daemon=True),
-                    threading.Thread(target=_run, args=(DEMO_KIND,), daemon=True),
-                ]
-                for t in threads: t.start()
-                for t in threads: t.join()
-                return results
-            get_task_manager().submit(meeting_id, _doc_runner)
-        except Exception as e:
-            print(f"[fastapi] 文档生成任务提交失败: {e}")
+        # 重新加载 state 获取 cleaned_text_length
+        storage = MeetingStorage(DATA_DIR)
+        state = storage.load(meeting_id)
 
         return {
             "meeting_id": meeting_id,
-            "transcript_segments": len(transcript.get("segments", [])),
-            "num_speakers": transcript.get("num_speakers", 0),
+            "transcript_segments": len(_load_stream_meta(meeting_id).get("transcript_segments", [])),
+            "num_speakers": len(state.speaker_map),
             "cleaned_text_length": len(state.cleaned_text),
             "docs_ready_in_seconds": 30,
             "message": "Audio processed, docs will be ready in ~30s",

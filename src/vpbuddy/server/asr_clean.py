@@ -77,13 +77,6 @@ _SYSTEM_PROMPT = """你是 VPBuddy 会议转写整理助手 (ASR post-processor)
 - 严格保持 [时间戳] 和 SPEAKER_ID 原样
 - 整理后的 text 字段直接输出，不要带引号或前缀
 
-## 上下文拼接 (重要)
-你会看到之前的整理结果 (previous_cleaned)，确保:
-- 说话人 ID 不变 (SPEAKER_02 一直是 SPEAKER_02)
-- 时间戳递增
-- 如果当前段是上一段的延续，可以合并: "好的，那就这么定了。"
-- 如果当前段是新的发言方，保留分段
-
 ### 噪声过滤
 - **意义不明的 ASR 噪声**（回声残留 / 半句话 / 孤立零碎词 / 无意义重复）— **直接删除**
 - **保留有内容的发言**（即使很短但语义明确）— 照常保留整理
@@ -119,21 +112,20 @@ def _get_llm() -> Llama:
 
 def clean_transcript(
     segments: list[dict],
-    previous_cleaned: str = "",
     timeout: int = 120,
 ) -> str:
-    """对一段 (或整场) 转录 segments 做 LLM 清洗, 返回完整 cleaned text.
+    """对一段转录 segments 做增量 LLM 清洗, 返回仅本次 segments 的 cleaned text.
 
     Args:
         segments: funasr ASR 输出的 segments 列表, 每个含 start_sec, speaker_id, text
-        previous_cleaned: 已有的 cleaned_text (来自 MeetingState), 空字符串表示首次运行
         timeout: LLM 调用超时 (秒), 默认 120
 
     Returns:
-        清洗后的完整文本。失败时返回原始拼接 (fallback, 不阻塞流程)。
+        清洗后的文本。失败时返回原始拼接 (fallback, 不阻塞流程)。
+        调用方负责拼接到 state.cleaned_text。
     """
     if not segments:
-        return previous_cleaned  # 无新段, 原样返回已有 cleaned
+        return ""
 
     # 1. 格式化为带时间戳的行
     timestamp_lines = []
@@ -148,19 +140,14 @@ def clean_transcript(
         timestamp_lines.append(f"[{mm:02d}:{ss:04.1f}] {spk}: {txt}")
     raw_block = "\n".join(timestamp_lines)
 
-    # 2. 构造 user message: 包含完整历史 + 新原始段
-    prev_text = previous_cleaned if previous_cleaned else "(none, meeting start)"
+    # 2. 构造 user message: 仅含本次待清洗 segments
     user_msg_lines = [
         "请整理下面这段 funasr ASR 原始输出。",
         "",
-        "之前已清洗的全文 (供上下文参考):",
-        prev_text,
-        "",
-        "当前新增的原始 ASR segments:",
+        "原始 ASR segments:",
         raw_block,
         "",
         "【输出要求】",
-        "- 整合已有清洗文本和新增原始文本, 输出一份**完整的清洗后全文**",
         "- 修正 funasr 常见错误 (同音字、英文术语)",
         "- 删除噪声/无意义内容",
         "- 保留说话人标记和时间戳",
@@ -187,11 +174,6 @@ def clean_transcript(
     except Exception as e:
         print(f"[asr_clean/clean_transcript] LLM 调用失败: {e}")
 
-    # 失败时 fallback: 拼接到 previous_cleaned 后
-    fallback = previous_cleaned
-    if previous_cleaned and raw_block:
-        fallback += "\n" + raw_block
-    elif not previous_cleaned:
-        fallback = raw_block
-    print(f"[asr_clean/clean_transcript] fallback 到原始拼接 ({len(fallback)} chars)")
-    return fallback
+    # 失败时 fallback: 返回原始拼接
+    print(f"[asr_clean/clean_transcript] fallback 到原始拼接 ({len(raw_block)} chars)")
+    return raw_block
