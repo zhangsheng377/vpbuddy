@@ -452,41 +452,68 @@ async def post_meeting_material(meeting_id: str, request: Request):
         else:
             chat_message = f"用户上传了会议材料：{filename}，已存入知识库。"
     elif file_type == "image":
-        # 调 MiniMax vision API 分析图片内容
-        # data: URI 不被支持 (error 400 code 2013)
-        # 改用公网 HTTP URL: http://47.100.182.3:28765/api/materials/{id}/file
+        # 图片: 两条路并行
+        # ① 告诉 Hermes 文件路径 + 已入 KB，让模型自己决定怎么用
+        # ② 同步调 MiniMax vision 提取文字描述，追加到消息中
+        import base64 as _base64
+        file_path_on_disk = material_storage.get_file_path(meta.material_id)
+        disk_path = str(file_path_on_disk) if file_path_on_disk else "(unknown)"
+        
+        chat_message = (
+            f"用户上传了截图/图片：{filename}\n"
+            f"服务器文件路径：{disk_path}\n"
+            f"已存入知识库（可搜索 KB 获取内容）。"
+        )
+        
+        # 尝试 vision 分析
         try:
             import os as _os
             from openai import OpenAI as _OpenAI
-            _vclient = _OpenAI(
-                base_url=_os.environ.get("OPENAI_BASE_URL", "https://api.minimax.chat/v1"),
-                api_key=_os.environ.get("OPENAI_API_KEY", ""),
-            )
-            public_url = f"http://47.100.182.3:28765/api/materials/{meta.material_id}/file"
-            _vresp = _vclient.chat.completions.create(
-                model=_os.environ.get("MODEL", "minimax-m3"),
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "请详细描述这张图片的内容，提取所有可识别的文字信息。"},
-                        {"type": "image_url", "image_url": {"url": public_url}},
-                    ],
-                }],
-                max_tokens=2000,
-            )
-            vision_text = _vresp.choices[0].message.content or ""
-            print(f"[materials] Vision 分析完成: {filename} ({len(vision_text)} chars)")
-
-            chat_message = (
-                f"用户上传了截图/图片：{filename}\n"
-                f"\n---图片 AI 分析结果---\n"
-                f"{vision_text}\n"
-                f"---分析结果结束---\n"
-                f"\n请将以上内容纳入会议上下文。"
-            )
+            
+            base_url = _os.environ.get("OPENAI_BASE_URL", "https://api.minimax.chat/v1")
+            api_key = _os.environ.get("OPENAI_API_KEY") or _os.environ.get("MINIMAX_API_KEY") or ""
+            if not api_key:
+                # 从 /root/.hermes/.env 读 key
+                try:
+                    with open("/root/.hermes/.env") as _f:
+                        for _line in _f:
+                            if "=" in _line and not _line.strip().startswith("#"):
+                                _k, _v = _line.strip().split("=", 1)
+                                if _k in ("OPENAI_API_KEY", "MINIMAX_API_KEY"):
+                                    api_key = _v.strip()
+                                    break
+                except Exception:
+                    pass
+            
+            if api_key:
+                import requests as _requests
+                _vresp = _requests.post(
+                    f"{base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json={
+                        "model": _os.environ.get("MODEL", "minimax-m3"),
+                        "messages": [{
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "请详细描述这张图片的内容，提取所有可识别的文字信息。"},
+                                {"type": "image_url", "image_url": {
+                                    "url": f"data:{file_ct or 'image/png'};base64,{_base64.b64encode(file_data).decode()}"
+                                }},
+                            ],
+                        }],
+                        "max_tokens": 2000,
+                    },
+                    timeout=60,
+                )
+                vision_text = _vresp.json().get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+                print(f"[materials] Vision 分析完成: {filename} ({len(vision_text)} chars)")
+                chat_message += f"\n\n---图片 AI 分析结果---\n{vision_text}\n---分析结果结束---"
+            else:
+                print(f"[materials] Vision 跳过: 无 API key")
         except Exception as e:
             print(f"[materials] Vision 分析失败: {e}")
-            chat_message = f"用户上传了截图/图片：{filename}，已保存为会议材料。"
+
+        chat_message += "\n\n请将以上内容纳入会议上下文。"
     else:
         # binary (pdf/pptx/docx 等): 告诉 Hermes 去 KB 搜
         chat_message = (
