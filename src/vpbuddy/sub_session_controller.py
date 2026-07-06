@@ -341,41 +341,20 @@ def get_doc_path(meeting_id: str, doc_kind: str) -> Path:
 
 
 def format_state_summary(state) -> str:
-    """把 MeetingState 格式化成 LLM 友好的摘要(全文,不截断——YAGNI)"""
+    """把 MeetingState 格式化成 LLM 友好的摘要 (v0.10.0: 使用 cleaned_text 替代旧 5 类 facts)."""
     parts = [f"# 会议 {state.meeting_id} 累积摘要", ""]
     parts.append(f"- 平台: {state.platform.value}")
     parts.append(f"- 最后更新: {state.last_updated}")
     parts.append("")
 
-    if state.requirements:
-        parts.append(f"## 需求 ({len(state.requirements)} 条)")
-        for r in state.requirements:
-            parts.append(f"- [{r.priority.value.upper()}] {r.id}: {r.text}"
-                         + (f" (来自: {r.speaker_name})" if r.speaker_name else ""))
-        parts.append("")
-
-    if state.goals:
-        parts.append(f"## 目标 ({len(state.goals)} 条)")
-        for g in state.goals:
-            parts.append(f"- {g.id}: {g.text}")
-        parts.append("")
-
-    if state.features:
-        parts.append(f"## 功能 ({len(state.features)} 条)")
-        for f in state.features:
-            parts.append(f"- {f.id}: {f.text}")
-        parts.append("")
-
-    if state.risks:
-        parts.append(f"## 风险 ({len(state.risks)} 条)")
-        for r in state.risks:
-            parts.append(f"- [{r.severity.value.upper()}] {r.id}: {r.text}")
-        parts.append("")
-
-    if state.open_questions:
-        parts.append(f"## 开放问题 ({len(state.open_questions)} 条)")
-        for q in state.open_questions:
-            parts.append(f"- {q.id}: {q.text}")
+    if state.cleaned_text:
+        parts.append("## 清理后的会议转写文本 (完整)")
+        # 截断展示, 避免 prompt 过长; LLM 知道需要时可以 read_file 读完整 state
+        text = state.cleaned_text
+        if len(text) > 8000:
+            parts.append(text[:8000] + "\n\n[...已截断, 完整文本见 state JSON]")
+        else:
+            parts.append(text)
         parts.append("")
 
     if state.speaker_map:

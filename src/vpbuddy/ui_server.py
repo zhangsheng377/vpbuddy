@@ -237,12 +237,19 @@ def _append_chat_message(
 
 
 def _meeting_context_for_chat(meeting_id: str) -> dict[str, Any]:
-    state_payload: dict[str, Any] = {"meeting_id": meeting_id, "items": []}
+    """构建 VP Chat 上下文 (v0.10.0: 使用 cleaned_text 替代旧 facts)."""
+    state_payload: dict[str, Any] = {"meeting_id": meeting_id, "cleaned_text": "", "items": []}
     try:
         from .storage import MeetingStorage
         storage = MeetingStorage(DATA_DIR)
         if storage.exists(meeting_id):
-            state_payload = _state_payload(storage.load(meeting_id), include_items=True)
+            state = storage.load(meeting_id)
+            # 只传递 cleaned_text, 不再传递旧 5 类 facts 的分项计数
+            state_payload["meeting_id"] = state.meeting_id
+            state_payload["cleaned_text"] = state.cleaned_text[:5000] if state.cleaned_text else ""
+            state_payload["cleaned_text_length"] = len(state.cleaned_text)
+            state_payload["speaker_map"] = state.speaker_map
+            state_payload["last_updated"] = state.last_updated
     except Exception as e:
         state_payload["error"] = str(e)
 
@@ -507,6 +514,7 @@ def _state_payload(state, include_items: bool = True) -> dict[str, Any]:
         "features": len(state.features),
         "risks": len(state.risks),
         "questions": len(state.open_questions),
+        "cleaned_text_length": len(state.cleaned_text),
         "last_updated": state.last_updated,
     }
     # 2026-07-01 ADR-0021: 音频源类型, 默认 microphone
@@ -545,6 +553,7 @@ def list_meetings() -> list[dict]:
                 continue
             item_count = sum(len(data.get(k, [])) for k in
                              ["requirements", "goals", "features", "risks", "open_questions"])
+            cleaned_len = len(data.get("cleaned_text", ""))
             out.append({
                 "meeting_id": data.get("meeting_id", f.stem),
                 "platform": data.get("platform", "unknown"),
@@ -553,6 +562,7 @@ def list_meetings() -> list[dict]:
                 "started_at": data.get("started_at"),
                 "last_updated": data.get("last_updated"),
                 "item_count": item_count,
+                "cleaned_text_length": cleaned_len,
             })
         except Exception:
             continue
@@ -562,8 +572,8 @@ def list_meetings() -> list[dict]:
 def _validate_meeting_id(mid: str) -> tuple[bool, str]:
     """校验 meeting_id 格式 (ADR-0022). 返 (ok, err_msg)."""
     import re
-    if not (3 <= len(mid) <= 32):
-        return False, "会议名长度 3-32 字符"
+    if not (3 <= len(mid) <= 48):
+        return False, "会议名长度 3-48 字符"
     if not re.match(r"^[A-Za-z0-9_\-]+$", mid):
         return False, "会议名只能含字母数字下划线连字符, 无空格/中文"
     return True, ""

@@ -38,7 +38,7 @@
 
 # 输入
 
-## 当前会议累积 (state)
+## 当前会议转写文本 (cleaned)
 {state_summary}
 
 ## 5 文档上次输出
@@ -49,23 +49,21 @@
 
 # 判断逻辑
 
-1. 读 state.facts (requirements / goals / features / risks / open_questions)
-2. 对比 last_docs, 识别新增 / 修改的事实
+1. 读下方 `## 当前会议转写文本` 块中的 cleaned text (由 LLM 修正过的完整转写)
+2. 对比 last_docs, 识别新增 / 修改的会议内容
 3. **首次运行 (所有 last_docs 为空) → 直接写 5 个文件, 不用判断**:
-   - 有 facts 的文档 → 按 facts 生成内容
-   - 无 facts 的文档 → 写占位行 `(本会议暂无 X 需求)`
-4. 非首次运行: 对每个文档判断是否需要 patch (新事实相关 → 是; 否则 → 否)
+   - cleaned text 有内容 → 按转写内容生成文档
+   - cleaned text 为空 → 写占位行 `(本会议暂无 X 需求)`
+4. 非首次运行: 对每个文档判断是否需要 patch (新内容相关 → 是; 否则 → 否)
 5. **write_file 5 次**, 没改的写原内容 (避免破坏 mtime)
 
-## risk 文档: severity 用法
+## risk 文档: 从 cleaned text 提取风险
 
-state 中每条 risk 自带 `[HIGH]` / `[MEDIUM]` / `[LOW]` 标记, 对应严重度。
+从 `## 当前会议转写文本` 中识别风险内容, 自行判断严重度。
 生成 risk.md 时:
-- `[HIGH]` → 用 **"⚠️ 高风险"** 标题分组, 写详细
-- `[MEDIUM]` → 用 **"中等"** 分组
-- `[LOW]` → 用 **"低"** 分组, 1 行带过
-- 没有该标记的 risk → 默认 MEDIUM
-- 严禁自己编造 severity 值; 只使用 state 中已有的标记
+- 高风险内容 → 用 **"⚠️ 高风险"** 标题分组, 写详细
+- 中等风险 → 用 **"中等"** 分组
+- 低风险 → 用 **"低"** 分组, 1 行带过
 
 # 协作提问协议 (ADR-0028)
 
@@ -146,7 +144,7 @@ section 命名:
 # 工具调用示例
 
 ```
-1. 调 read_file(state JSON 路径) → 解析 facts
+1. 调 read_file(state JSON 路径) → 解析 cleaned_text
 2. 调 terminal 跑 collab list_pending → 拿待答问题
 3. (可选) 调 terminal 跑 collab ask_question 推自己不确定的
 4. 调 read_file(5 个文档路径) → 拿上次内容

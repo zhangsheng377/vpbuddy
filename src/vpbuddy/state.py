@@ -144,6 +144,10 @@ class MeetingState(BaseModel):
     risks: list[Risk] = Field(default_factory=list)
     open_questions: list[Question] = Field(default_factory=list)
 
+    # === 清理后的完整会议转写文本 (v0.10.0: 替代旧 5 类 facts 作为 LLM 上下文) ===
+    # append-only: 每次 ASR pass 追加, ingest.py 通过 asr_clean 写入
+    cleaned_text: str = ""
+
     # === 元数据 ===
     speaker_map: dict[str, str] = Field(default_factory=dict)  # speaker_id -> speaker_name
     last_updated: str = Field(default_factory=_now)

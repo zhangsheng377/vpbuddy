@@ -986,11 +986,7 @@ async def post_upload_audio(
             "meeting_id": meeting_id,
             "transcript_segments": len(transcript.get("segments", [])),
             "num_speakers": transcript.get("num_speakers", 0),
-            "state_items": {
-                "requirements": len(state.requirements),
-                "risks": len(state.risks),
-                "questions": len(state.open_questions),
-            },
+            "cleaned_text_length": len(state.cleaned_text),
             "docs_ready_in_seconds": 30,
             "message": "Audio processed, docs will be ready in ~30s",
         }
@@ -1296,19 +1292,21 @@ async def fe_list_meetings():
     return {"meetings": meetings, "count": len(meetings)}
 
 # GET /meetings/{meeting_id} — 会议详情聚合
-@app.get("/meetings/{meeting_id}")
+@app.get("/api/meetings/{meeting_id}")
 async def fe_get_meeting(meeting_id: str):
     """GET /meetings/:id → 聚合 state + docs + collab + experiences"""
     from ..storage import MeetingStorage, StorageError
     result: dict[str, Any] = {"id": meeting_id}
 
     try:
-        storage = MeetingStorage(DATA_DIR)
-        if storage.exists(meeting_id):
-            state = storage.load(meeting_id)
-            result["state"] = state.model_dump(mode="json")
-        else:
-            result["state"] = None
+            storage = MeetingStorage(DATA_DIR)
+            if storage.exists(meeting_id):
+                state = storage.load(meeting_id)
+                result["state"] = state.model_dump(mode="json")
+                result["cleaned_text_length"] = len(state.cleaned_text)
+            else:
+                result["state"] = None
+                result["cleaned_text_length"] = 0
     except Exception as e:
         result["state_error"] = str(e)
 

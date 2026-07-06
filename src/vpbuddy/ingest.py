@@ -1,94 +1,75 @@
 """
-VPBuddy transcript → MeetingState 启发式 ingest 公共函数
-(2026-06-23 从 e2e_ingest.py 抽出, 让 UI/CLI/Controller 都能调)
+VPBuddy transcript → MeetingState ingest via LLM cleaning (v0.10.0).
 
-设计:
-- 不引入 LLM 分类 (YAGNI, 真用户场景 state 由会议内嵌解析)
-- 启发式 REQ/RISK/QUE 规则, 89 段 → ~15 项入库
-- speaker_id → speaker_name 映射从 segment 文本启发推断
+取代旧的启发式 regex 分类 (requirement/risk/question 分段提取)。
+新设计:
+- 不自己做分类, 而是通过 `server.asr_clean.clean_transcript()` 做全量 LLM 清洗
+- 清洗后的完整文本存入 `state.cleaned_text` (append-only)
+- 旧的事实分类字段 (requirements/goals/features/risks/open_questions) 保留但不主动写入
+- speaker_id → speaker_name 映射仍保留
 """
 from __future__ import annotations
 
-import re
-
 from .state import MeetingState, Platform, Priority
 
-# 启发式分类规则
-REQ_PATTERNS = [
-    r"需要.*?",
-    r"得.*?(?:加|做|改|实现|落地)",
-    r"应该.*?",
-    r"必须.*?",
-    r"加上.*?",
-    r"实现.*?",
-    r"(?:P0|P1|P2).*?",
-    r"那我们继续.*?",
-    r"先.*?(?:做|改|实现|落地).*?",
-    r"建议.*?",
-    r"可以.*?",
-    r"(?:核心|关键|主要).*?(?:是|就是).*?",
-    r"用.*?(?:做|实现).*?",
-    r"通过.*?(?:做|实现).*?",
-    r"(?:要|要加|要做).*?",
+# ⚠️ 以下 _classify / REQ_PATTERNS / RISK_PATTERNS 等保留给 streaming 路径向后兼容
+# (fastapi_app.py _process_chunk_sync / _process_chunk_background 仍使用)
+# 新代码不应调用 _classify. 未来版本将删除.
+import re
+
+_REQ_PATTERNS_DEPRECATED = [
+    r"需要.*?", r"得.*?(?:加|做|改|实现|落地)", r"应该.*?", r"必须.*?",
+    r"加上.*?", r"实现.*?", r"(?:P0|P1|P2).*?", r"那我们继续.*?",
+    r"先.*?(?:做|改|实现|落地).*?", r"建议.*?", r"可以.*?",
+    r"(?:核心|关键|主要).*?(?:是|就是).*?", r"用.*?(?:做|实现).*?",
+    r"通过.*?(?:做|实现).*?", r"(?:要|要加|要做).*?",
 ]
-RISK_PATTERNS = [
-    r"(?:担心|风险|怕).*?",
-    r"挂了.*?",
-    r"(?:没|没有).*?(?:fallback|降级|兜底|watchdog)",
-    r"挡.*?",
-    r"延迟感",
-    r"会不会.*?",
-    r"经常.*?(?:阻|断|挂)",
+_RISK_PATTERNS_DEPRECATED = [
+    r"(?:担心|风险|怕).*?", r"挂了.*?",
+    r"(?:没|没有).*?(?:fallback|降级|兜底|watchdog)", r"挡.*?",
+    r"延迟感", r"会不会.*?", r"经常.*?(?:阻|断|挂)",
 ]
-QUESTION_PATTERNS = [
-    r".*?\?$",
-    r".*?(?:对吧|怎么办|怎么|是不是|会不会).*?",
-    r".*?还是不.*?",
-    r".*?(?:怎么|如何).*?办.*?",
-    r".*?谁.*?",
-    r".*?(?:几|多少).*?",
+_QUESTION_PATTERNS_DEPRECATED = [
+    r".*?\?$", r".*?(?:对吧|怎么办|怎么|是不是|会不会).*?",
+    r".*?还是不.*?", r".*?(?:怎么|如何).*?办.*?",
+    r".*?谁.*?", r".*?(?:几|多少).*?",
     r".*?(?:什么|哪个).*?(?:方案|办法|框架).*?",
 ]
-DECISION_PATTERNS = [
-    r"先.*?(?:这样|不动|做|跑起来|这样).*?",
-    r"就是.*?",
-    r"按.*?(?:ADR|\d+).*?",
-    r"散会",
+_DECISION_PATTERNS_DEPRECATED = [
+    r"先.*?(?:这样|不动|做|跑起来|这样).*?", r"就是.*?",
+    r"按.*?(?:ADR|\d+).*?", r"散会",
     r"我.*?(?:来|会).*?(?:总结|做|改|写|加|标)",
     r"今天.*?(?:先|的).*?(?:到这|先这样|完)",
-    r"我们.*?(?:今天|就).*?",
-    r"嗯.*?",
-    r"对.*?",
-    r"好.*?(?:的|了|，|。|就|那)",
-    r"明白.*?",
-    r"那就.*?",
-    r"继续.*?",
-    r"下一个.*?",
-    r"辛苦.*?",
+    r"我们.*?(?:今天|就).*?", r"嗯.*?", r"对.*?",
+    r"好.*?(?:的|了|，|。|就|那)", r"明白.*?",
+    r"那就.*?", r"继续.*?", r"下一个.*?", r"辛苦.*?",
     r"那就到时候再说.*?",
 ]
-
-HIGH_PRIO_KEYWORDS = ["P0", "必须", "挂", "挡", "fallback", "风险", "担心"]
+_HIGH_PRIO_KEYWORDS_DEPRECATED = ["P0", "必须", "挂", "挡", "fallback", "风险", "担心"]
 
 
 def _classify(text: str) -> tuple[str, Priority]:
-    """返回 (item_type, priority), 默认 ('skip', LOW)"""
+    """⚠️ DEPRECATED (v0.10.0): 旧启发式分类, 仅保留给 streaming 路径向后兼容.
+
+    返回 (item_type, priority), 默认 ('skip', LOW).
+    新代码不应调用; 使用 server.asr_clean.clean_transcript() 替代.
+    """
     text_clean = text.strip().rstrip("，。,. ")
     if not text_clean or len(text_clean) < 6:
         return ("skip", Priority.LOW)
-    for p in RISK_PATTERNS:
+    for p in _RISK_PATTERNS_DEPRECATED:
         if re.search(p, text_clean):
-            prio = Priority.HIGH if any(k in text_clean for k in HIGH_PRIO_KEYWORDS) else Priority.MEDIUM
+            prio = Priority.HIGH if any(k in text_clean for k in _HIGH_PRIO_KEYWORDS_DEPRECATED) else Priority.MEDIUM
             return ("risk", prio)
-    for p in DECISION_PATTERNS:
+    for p in _DECISION_PATTERNS_DEPRECATED:
         if re.search(p, text_clean):
             return ("decision", Priority.MEDIUM)
-    for p in QUESTION_PATTERNS:
+    for p in _QUESTION_PATTERNS_DEPRECATED:
         if re.search(p, text_clean):
             return ("question", Priority.MEDIUM)
-    for p in REQ_PATTERNS:
+    for p in _REQ_PATTERNS_DEPRECATED:
         if re.search(p, text_clean):
-            prio = Priority.HIGH if any(k in text_clean for k in HIGH_PRIO_KEYWORDS) else Priority.MEDIUM
+            prio = Priority.HIGH if any(k in text_clean for k in _HIGH_PRIO_KEYWORDS_DEPRECATED) else Priority.MEDIUM
             return ("requirement", prio)
     return ("skip", Priority.LOW)
 
@@ -117,7 +98,7 @@ def ingest_transcript(
     speaker_map: dict[str, str] | None = None,
     storage=None,
 ) -> MeetingState:
-    """从 funasr 转写结果 → MeetingState, 启发式分类入 req/risk/question
+    """从 funasr 转写结果 → MeetingState, 通过 LLM 清洗存储完整 cleaned_text
 
     Args:
         meeting_id: 会议 ID
@@ -131,37 +112,34 @@ def ingest_transcript(
         MeetingState 实例 (已 save 到 storage)
     """
     from .storage import MeetingStorage  # 避免循环
+    from .server.asr_clean import clean_transcript
 
     storage = storage or MeetingStorage()
 
     if storage.exists(meeting_id):
-        storage.delete(meeting_id)
-
-    state = MeetingState(
-        meeting_id=meeting_id,
-        platform=platform,
-        project_name=project_name or f"会议 {meeting_id}",
-    )
+        state = storage.load(meeting_id)
+    else:
+        state = MeetingState(
+            meeting_id=meeting_id,
+            platform=platform,
+            project_name=project_name or f"会议 {meeting_id}",
+        )
 
     spk_map = speaker_map or infer_speaker_map(transcript["segments"])
     for spk_id, spk_name in spk_map.items():
         state.register_speaker(spk_id, spk_name)
 
-    counts = {"requirement": 0, "risk": 0, "question": 0, "decision": 0, "skip": 0}
-    for s in transcript["segments"]:
-        text = s["text"]
-        spk_name = spk_map.get(s["speaker_id"], "UNKNOWN")
-        kind, prio = _classify(text)
-        counts[kind] += 1
-        if kind == "skip":
-            continue
-        if kind == "requirement":
-            state.add_requirement(text, priority=prio, speaker_id=spk_name)
-        elif kind == "risk":
-            state.add_risk(text, priority=prio, speaker_id=spk_name)
-        elif kind == "question":
-            state.add_question(text, is_urgent=(prio == Priority.HIGH), speaker_id=spk_name)
+    # 通过 LLM 清洗全量 segments, 传入已有 cleaned_text 作为上下文
+    segments = transcript.get("segments", [])
+    if segments:
+        cleaned = clean_transcript(
+            segments=segments,
+            previous_cleaned=state.cleaned_text,
+            timeout=120,
+        )
+        if cleaned:
+            # append-only: 新 cleaned 替换旧 cleaned (LLM 已整合全部历史)
+            state.cleaned_text = cleaned
 
     storage.save(state)
-    state._ingest_counts = counts  # type: ignore  # 附加元信息
     return state
