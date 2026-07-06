@@ -113,8 +113,7 @@ document.getElementById("btn-rec").addEventListener("click", async () => {
     try {
       const e = document.getElementById("audio-device").value || null;
       const sourceKind = document.getElementById("audio-source-kind").value || "microphone";
-      currentMeetingId = await invoke("start_capture", {
-        autoUpload: document.getElementById("auto-upload").checked,
+      currentMeetingId = await invoke("start_realtime_capture", {
         audioDevice: e,
         meetingId: mid,
         audioSource: sourceKind,
