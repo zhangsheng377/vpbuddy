@@ -70,6 +70,9 @@ from ..ui_server import (
     get_status,
 )
 
+# ── 材料存储 ──
+from ..server import material_storage
+
 # ── FastAPI 应用 ──
 app = FastAPI(
     title="VPBuddy API",
@@ -117,6 +120,13 @@ async def startup_warmup():
     except Exception as e:
         logger.warning("KB Chroma 预热跳过: %s", e)
         print(f"[fastapi_app] KB Chroma 预热跳过: {e}", flush=True)
+
+    # 材料存储初始化
+    try:
+        material_storage.init(DATA_DIR)
+    except Exception as e:
+        logger.warning("材料存储初始化失败: %s", e)
+        print(f"[fastapi_app] 材料存储初始化失败: {e}", flush=True)
 
 
 # =============================================================================
@@ -211,6 +221,7 @@ def get_meeting_state(meeting_id: str):
             "transcript_segments": meta.get("transcript_segments", [])[-300:],
             "metrics": meta.get("metrics", [])[-100:],
             "processed_chunks": meta.get("processed_chunks", []),
+            "materials": material_storage.list_materials(meeting_id),
         }
     except HTTPException:
         raise
@@ -371,6 +382,123 @@ async def get_meeting_events(meeting_id: str, request: Request):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# =============================================================================
+# Material Routes (会议材料)
+# =============================================================================
+
+
+@app.get("/api/meetings/{meeting_id}/materials")
+async def get_meeting_materials(meeting_id: str):
+    """GET /api/meetings/{id}/materials — 列出会议材料"""
+    items = material_storage.list_materials(meeting_id)
+    return {"meeting_id": meeting_id, "materials": items, "count": len(items)}
+
+
+@app.post("/api/meetings/{meeting_id}/materials")
+async def post_meeting_material(meeting_id: str, request: Request):
+    """POST /api/meetings/{id}/materials — 上传会议材料
+
+    multipart/form-data:
+        file: binary (必需)
+        name: str (可选, 默认用文件名)
+
+    上传后:
+        1. 保存为 Material 实体
+        2. 进 Hermes 主会话 (chat 路径, LLM 当场处理)
+        3. 异步进知识库
+    """
+    content_type = request.headers.get("Content-Type", "")
+    if "multipart/form-data" not in content_type:
+        raise HTTPException(status_code=400, detail="Content-Type must be multipart/form-data")
+
+    body = await request.body()
+    fields, file_data = _parse_multipart(body, content_type)
+
+    if not file_data:
+        raise HTTPException(status_code=400, detail="No file in upload")
+
+    # 提取文件名和 Content-Type
+    filename = fields.get("name") or "material.bin"
+    # 尽量从原有文件的 content-type 还原扩展名
+    file_ct = "application/octet-stream"
+    raw_name = fields.get("filename", "")
+    if raw_name:
+        filename = raw_name
+
+    # 1. 保存为 Material
+    meta = material_storage.store_file(
+        meeting_id=meeting_id,
+        file_bytes=file_data,
+        filename=filename,
+        content_type=file_ct,
+    )
+
+    # 2. 进 Hermes 主会话 (复用 chat 路径)
+    try:
+        user_msg = _append_chat_message(
+            meeting_id,
+            "user",
+            f"[上传了材料: {filename}]",
+            source="material-upload",
+            extra={"material": meta.to_dict()},
+        )
+        from ..realtime_server import push_event
+        push_event(meeting_id, "chat-message", user_msg)
+
+        result = _run_vp_chat(meeting_id, f"用户上传了一份会议材料：{filename}，请分析其内容并纳入会议上下文。")
+        assistant_msg = _append_chat_message(
+            meeting_id, "assistant", result["content"],
+            source=result["source"], status=result["status"],
+        )
+        push_event(meeting_id, "chat-message", assistant_msg)
+    except Exception as e:
+        print(f"[materials] Hermes 处理失败: {e}")
+
+    # 3. 异步进知识库
+    def _kb_worker():
+        try:
+            from ..kb_api import handle_kb_upload
+            # 构造 multipart body 给 KB upload
+            boundary = b"----material-kb-" + str(uuid.uuid4().hex[:8]).encode()
+            parts = [
+                b"--" + boundary + b"\r\n",
+                b'Content-Disposition: form-data; name="meeting_id"\r\n\r\n' + meeting_id.encode() + b"\r\n",
+                b"--" + boundary + b"\r\n",
+                b'Content-Disposition: form-data; name="file"; filename="' + filename.encode() + b'"\r\n',
+                b"Content-Type: application/octet-stream\r\n\r\n",
+                file_data,
+                b"\r\n--" + boundary + b"--\r\n",
+            ]
+            kb_body = b"".join(parts)
+            kb_ct = f"multipart/form-data; boundary={boundary.decode()}"
+            handle_kb_upload(kb_body, kb_ct)
+            print(f"[materials] KB 入库完成: {filename}")
+        except Exception as e:
+            print(f"[materials] KB 入库失败: {e}")
+
+    threading.Thread(target=_kb_worker, daemon=True).start()
+
+    return meta.to_dict()
+
+
+@app.get("/api/materials/{material_id}")
+async def get_material_detail(material_id: str):
+    """GET /api/materials/{id} — 材料详情"""
+    meta = material_storage.get_material(material_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail=f"Material not found: {material_id}")
+    return meta.to_dict()
+
+
+@app.get("/api/materials/{material_id}/file")
+async def get_material_file(material_id: str):
+    """GET /api/materials/{id}/file — 下载材料原文件"""
+    fp = material_storage.get_file_path(material_id)
+    if fp is None:
+        raise HTTPException(status_code=404, detail=f"Material file not found: {material_id}")
+    return FileResponse(str(fp))
 
 
 # =============================================================================
