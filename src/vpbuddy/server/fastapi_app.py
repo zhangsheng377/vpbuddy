@@ -87,9 +87,9 @@ else:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 
@@ -960,13 +960,23 @@ async def post_upload_audio(
             from ..task_manager import get_task_manager
             from ..sub_session_controller import _dispatch_kind, BATCH_DOCS_KIND, DEMO_KIND
             def _doc_runner(gen_id: int, mid: str) -> dict:
-                results = {}
-                for kind in [BATCH_DOCS_KIND, DEMO_KIND]:
+                import threading
+                results: dict = {}
+                lock = threading.Lock()
+                def _run(kind: str):
                     try:
                         r = _dispatch_kind(mid, kind, dry_run=False)
-                        results[kind] = {"triggered": r.get("triggered"), "error": r.get("error")}
+                        with lock:
+                            results[kind] = {"triggered": r.get("triggered"), "error": r.get("error")}
                     except Exception as e:
-                        results[kind] = {"triggered": False, "error": str(e)}
+                        with lock:
+                            results[kind] = {"triggered": False, "error": str(e)}
+                threads = [
+                    threading.Thread(target=_run, args=(BATCH_DOCS_KIND,), daemon=True),
+                    threading.Thread(target=_run, args=(DEMO_KIND,), daemon=True),
+                ]
+                for t in threads: t.start()
+                for t in threads: t.join()
                 return results
             get_task_manager().submit(meeting_id, _doc_runner)
         except Exception as e:
@@ -1137,53 +1147,22 @@ async def post_chat(meeting_id: str, request: Request):
 
 @app.post("/api/meetings/{meeting_id}/close")
 def post_meeting_close(meeting_id: str):
-    """POST /api/meetings/{id}/close — 主动结束会议 (ADR-0022)
+    """POST /api/meetings/{id}/close — 结束会议并触发文档生成
 
+    委托 ui_server._close_meeting 统一处理:
     1. push_event("meeting-complete")
     2. close_meeting (SSE 订阅者退出)
     3. clear proactive throttle
-    4. 经验蒸馏 (v0.9.0 #1)
+    4. 经验蒸馏
+    5. task_manager.submit → batch_docs + demo 生成
     """
+    from ..ui_server import _close_meeting
     try:
-        from ..realtime_server import close_meeting, push_event
-
-        push_event(meeting_id, "meeting-complete", {
-            "meeting_id": meeting_id,
-            "status": "user_closed",
-            "note": "用户主动结束 (ADR-0022)",
-        })
-        closed = close_meeting(meeting_id)
-
-        # 清 proactive 节流
-        try:
-            from ..agent_proactive import clear_throttle
-
-            cleared = clear_throttle(meeting_id)
-        except Exception:
-            cleared = 0
-
-        # 经验蒸馏
-        extracted_count = 0
-        try:
-            from ..experience_store import extract_from_meeting_state, save_experiences
-            from ..storage import MeetingStorage
-
-            storage = MeetingStorage(DATA_DIR)
-            if storage.exists(meeting_id):
-                state = storage.load(meeting_id)
-                items = extract_from_meeting_state(meeting_id, state, meeting_title=meeting_id)
-                if items:
-                    save_experiences(meeting_id, items)
-                    extracted_count = len(items)
-        except Exception:
-            pass
-
+        result = _close_meeting(meeting_id)
         return {
             "meeting_id": meeting_id,
-            "closed_subscribers": closed,
-            "proactive_cleared": cleared,
-            "experiences_extracted": extracted_count,
             "status": "closed",
+            "details": result,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -1,5 +1,6 @@
 """agent_proactive module"""
 from __future__ import annotations
+from pathlib import Path
 
 
 # Auto-computed project root. P1#1 (2026-07-04)

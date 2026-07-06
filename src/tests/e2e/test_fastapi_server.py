@@ -82,11 +82,15 @@ def fastapi_test_server() -> Generator[str, None, None]:
 # =============================================================================
 
 
-def _http_get(url: str, timeout: float = 5.0) -> tuple[int, bytes, dict]:
+def _http_get(url: str, timeout: float = 5.0,
+              extra_headers: dict | None = None) -> tuple[int, bytes, dict]:
     """GET 请求, 返回 (status, body, headers)."""
     import urllib.request
 
     req = urllib.request.Request(url, method="GET")
+    if extra_headers:
+        for k, v in extra_headers.items():
+            req.add_header(k, v)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         body = r.read()
         headers = dict(r.headers)
@@ -139,11 +143,12 @@ class TestFastAPIRoutes:
         status, body, headers = _http_get(f"{fastapi_test_server}/api/status")
         assert status == 200
         data = json.loads(body)
-        assert "version" in data or "data_dir" in data or "status" in data
+        assert "stats" in data and "paths" in data
 
     def test_cors_headers(self, fastapi_test_server: str):
-        """验证 CORS 头存在."""
-        _, _, headers = _http_get(f"{fastapi_test_server}/api/status")
+        """验证 CORS 头存在 (带 Origin header 模拟浏览器跨域请求)."""
+        _, _, headers = _http_get(f"{fastapi_test_server}/api/status",
+                                  extra_headers={"Origin": "http://localhost:1420"})
         cors_header = None
         for k, v in headers.items():
             if k.lower() == "access-control-allow-origin":
@@ -195,7 +200,7 @@ class TestFastAPIRoutes:
 
     def test_post_stream_start(self, fastapi_test_server: str):
         """POST /api/meetings/stream_start."""
-        body, headers = _http_post(
+        status, body, headers = _http_post(
             f"{fastapi_test_server}/api/meetings/stream_start",
             data=b"{}",
             content_type="application/json",
@@ -298,7 +303,7 @@ class TestFastAPIRoutes:
 
     def test_post_kb_search_post(self, fastapi_test_server: str):
         """POST /api/kb/search."""
-        body, _ = _http_post(
+        _, body, _ = _http_post(
             f"{fastapi_test_server}/api/kb/search",
             data=json.dumps({"query": "test"}).encode(),
             content_type="application/json",
@@ -323,7 +328,7 @@ class TestFastAPIRoutes:
         import urllib.error
 
         try:
-            body, _ = _http_post(
+            _, body, _ = _http_post(
                 f"{fastapi_test_server}/api/meetings/test_mid_999/close",
                 data=b"{}",
                 content_type="application/json",
@@ -337,7 +342,7 @@ class TestFastAPIRoutes:
         import urllib.error
 
         try:
-            body, _ = _http_post(
+            _, body, _ = _http_post(
                 f"{fastapi_test_server}/api/meetings/test_mid_999/chat",
                 data=json.dumps({"message": "hello"}).encode(),
                 content_type="application/json",
@@ -352,7 +357,7 @@ class TestFastAPIRoutes:
         import urllib.error
 
         try:
-            body, _ = _http_post(
+            _, body, _ = _http_post(
                 f"{fastapi_test_server}/api/meetings/test_mid_999/collab/"
                 f"ask?section=req&question=test_q",
                 data=b"{}",
@@ -367,7 +372,7 @@ class TestFastAPIRoutes:
         import urllib.error
 
         try:
-            body, _ = _http_post(
+            _, body, _ = _http_post(
                 f"{fastapi_test_server}/api/meetings/test_mid_999/collab/"
                 f"answer?qid=q1&answer=ans",
                 data=b"{}",
@@ -382,7 +387,7 @@ class TestFastAPIRoutes:
         import urllib.error
 
         try:
-            body, _ = _http_post(
+            _, body, _ = _http_post(
                 f"{fastapi_test_server}/api/meetings/test_mid_999/stream_stop",
                 data=b"{}",
                 content_type="application/json",
@@ -433,7 +438,7 @@ class TestFastAPIRoutes:
         import urllib.error
 
         try:
-            body, _ = _http_post(
+            _, body, _ = _http_post(
                 f"{fastapi_test_server}/api/_e2e/check_docs_complete?mid=test",
                 data=b"{}",
                 content_type="application/json",

@@ -214,7 +214,7 @@ def gpu_server() -> str:
 
     Returns: GPU server base URL.
     """
-    if not _http_ready(GPU_SERVER_URL):
+    if not _http_ready(f"{GPU_SERVER_URL}/api/status"):
         pytest.skip(f"GPU server 不通: {GPU_SERVER_URL} (部署路径不通, e2e 跳过)")
     return GPU_SERVER_URL
 

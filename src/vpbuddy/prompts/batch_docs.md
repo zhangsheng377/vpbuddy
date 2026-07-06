@@ -51,8 +51,11 @@
 
 1. 读 state.facts (requirements / goals / features / risks / open_questions)
 2. 对比 last_docs, 识别新增 / 修改的事实
-3. 对每个文档判断: 是否需要 patch? (新事实相关 → 是; 否则 → 否)
-4. write_file 5 次, 没改的写原内容 (避免破坏 mtime)
+3. **首次运行 (所有 last_docs 为空) → 直接写 5 个文件, 不用判断**:
+   - 有 facts 的文档 → 按 facts 生成内容
+   - 无 facts 的文档 → 写占位行 `(本会议暂无 X 需求)`
+4. 非首次运行: 对每个文档判断是否需要 patch (新事实相关 → 是; 否则 → 否)
+5. **write_file 5 次**, 没改的写原内容 (避免破坏 mtime)
 
 ## risk 文档: severity 用法
 

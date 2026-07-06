@@ -23,20 +23,14 @@ from __future__ import annotations
 
 import json
 import sys
-import threading
 import time
 from pathlib import Path
-from http.server import ThreadingHTTPServer
-import socket
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from vpbuddy.ui_server import (
-    Handler,
-    DATA_DIR as REAL_DATA_DIR,
-)
+from vpbuddy.ui_server import DATA_DIR as REAL_DATA_DIR
 from vpbuddy.kb_api import (
     _parse_multipart,
     handle_chat_upload,
@@ -401,6 +395,26 @@ def test_allowed_image_extensions_set():
     assert ALLOWED_IMAGE_EXTENSIONS == expected
 
 
+
+# ── 替身 RAG (不真连 Chroma) ──
+
+
+class _FakeRag:
+    """替身 get_rag: 不真连 Chroma."""
+
+    def __init__(self):
+        self.added = []
+
+    def add(self, ids, documents, metadatas):
+        self.added.append({"ids": ids, "documents": documents, "metadatas": metadatas})
+
+    def query(self, *a, **kw):
+        return {"ids": [[]], "documents": [[]], "metadatas": [[]]}
+
+    def count(self):
+        return 0
+
+
 # ── handle_kb_upload 向后兼容 (老调用方 parts["file"] 已升级) ──
 
 
@@ -514,160 +528,4 @@ def test_handle_chat_upload_mixed_files(tmp_path, monkeypatch):
     assert "rejected" in statuses
 
 
-# ── _handle_chat multipart 端点 smoke (走 HTTP) ──
-
-
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-class _FakeRag:
-    """替身 get_rag: 不真连 Chroma."""
-
-    def __init__(self):
-        self.added = []
-
-    def add(self, ids, documents, metadatas):
-        self.added.append({"ids": ids, "documents": documents, "metadatas": metadatas})
-
-    def query(self, *a, **kw):
-        return {"ids": [[]], "documents": [[]], "metadatas": [[]]}
-
-    def count(self):
-        return 0
-
-
-@pytest.fixture
-def http_server(tmp_path, monkeypatch):
-    """起本地 HTTP server, DATA_DIR + kb rag 都替身."""
-    monkeypatch.setattr("vpbuddy.ui_server.DATA_DIR", tmp_path)
-    monkeypatch.setattr("vpbuddy.ui_server.DOCS_DIR", tmp_path / "docs")
-    monkeypatch.setattr("vpbuddy.kb_api.UPLOADS_DIR", tmp_path / "uploads")
-    monkeypatch.setattr("vpbuddy.kb_api.get_rag", lambda: _FakeRag())
-    # 替身 _run_vp_chat — 不真调 LLM, 返固定字符串
-    monkeypatch.setattr(
-        "vpbuddy.ui_server._run_vp_chat",
-        lambda mid, msg, ctx=None: {"status": "ok", "source": "fake", "content": "fake reply", "error": None},
-    )
-
-    port = _free_port()
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    monkeypatch.setattr(Handler, "protocol_version", "HTTP/1.0")
-    t = threading.Thread(target=server.serve_forever, daemon=True)
-    t.start()
-    yield f"http://127.0.0.1:{port}"
-    server.shutdown()
-    server.server_close()
-
-
-def test_handle_chat_multipart_endpoint_smoke(http_server):
-    """multipart 端到端 smoke (走 HTTP)."""
-    import urllib.request
-
-    boundary = "----TestBoundary99999"
-    body_parts = [
-        f"--{boundary}\r\nContent-Disposition: form-data; name=\"text\"\r\n\r\nask something\r\n".encode(),
-        f"--{boundary}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"a.md\"\r\nContent-Type: text/markdown\r\n\r\n# doc\ncontent\r\n".encode(),
-        f"--{boundary}--\r\n".encode(),
-    ]
-    body = b"".join(body_parts)
-    req = urllib.request.Request(
-        f"{http_server}/api/meetings/chat_ep_mtg/chat",
-        data=body,
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
-    except urllib.error.HTTPError as e:
-        data = json.loads(e.read().decode())
-        pytest.fail(f"HTTP {e.code}: {data}")
-
-    assert data["status"] == "ok"
-    assert data["upload"]["status"] == 200
-    assert data["upload"]["text"] == "ask something"
-    assert len(data["upload"]["files"]) == 1
-    assert data["upload"]["files"][0]["status"] == "kb-stored"
-    # user + assistant 各一条
-    assert data["user_message"]["role"] == "user"
-    assert data["assistant_message"]["role"] == "assistant"
-    assert data["assistant_message"]["content"] == "fake reply"
-
-
-def test_handle_chat_multipart_image_only(http_server):
-    """只传图片 (没文本) → 也能发."""
-    import urllib.request
-
-    boundary = "----ImgBoundary"
-    body_parts = [
-        f"--{boundary}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"snap.png\"\r\nContent-Type: image/png\r\n\r\n".encode()
-        + b"\x89PNG\r\n\x1a\n" + b"\x00" * 50 + b"\r\n",
-        f"--{boundary}--\r\n".encode(),
-    ]
-    body = b"".join(body_parts)
-    req = urllib.request.Request(
-        f"{http_server}/api/meetings/img_only_mtg/chat",
-        data=body,
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        data = json.loads(resp.read().decode())
-    assert data["upload"]["image_count"] == 1
-    assert data["user_message"]["content"]  # 自动拼"[上传了 1 个文件]"之类
-
-
-def test_handle_chat_json_still_works(http_server):
-    """JSON 路径 (原行为) 仍 OK, 没破坏."""
-    import urllib.request
-    req = urllib.request.Request(
-        f"{http_server}/api/meetings/json_mtg/chat",
-        data=json.dumps({"message": "纯文本"}).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        data = json.loads(resp.read().decode())
-    assert data["user_message"]["role"] == "user"
-    assert data["user_message"]["content"] == "纯文本"
-    assert data["assistant_message"]["content"] == "fake reply"
-
-
-# ── close_meeting 清 proactive 节流 ──
-
-
-def test_close_meeting_clears_proactive_throttle(http_server, monkeypatch):
-    """用户主动 close → 清 proactive 节流."""
-    from vpbuddy import realtime_server
-    monkeypatch.setattr(realtime_server, "push_event", lambda *a: None)
-    monkeypatch.setattr(realtime_server, "close_meeting", lambda mid: 0)
-
-    # 先触发 (monkeypatch 掉 _run_async, 避免 collab.ask_question + 异步干扰)
-    from vpbuddy import agent_proactive as ap_mod
-    async_calls = []
-    monkeypatch.setattr(
-        ap_mod, "_run_async",
-        lambda mid, t, text: async_calls.append({"mid": mid, "trigger": t, "text": text}),
-    )
-    trigger("close_clear_mtg", "docs_complete")
-    time.sleep(0.05)
-    assert "close_clear_mtg:docs_complete" in _TRIGGERED
-    # 至少调了 _run_async 一次
-    assert len(async_calls) == 1
-    assert async_calls[0]["trigger"] == "docs_complete"
-
-    import urllib.request
-    req = urllib.request.Request(
-        f"{http_server}/api/meetings/close_clear_mtg/close",
-        data=b"",
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=5) as resp:
-        data = json.loads(resp.read().decode())
-    assert data["status"] == "closed"
-    assert data["proactive_cleared"] == 1
-    # 节流被清空, 可再触发
-    assert "close_clear_mtg:docs_complete" not in _TRIGGERED
+# ── HTTP 端点测试 — v0.9.0 旧 Handler 已删除, 由 FastAPI E2E 覆盖 ──
