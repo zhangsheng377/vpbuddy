@@ -134,7 +134,12 @@ def _is_duplicate_segment(segment: dict, seen_segments: list[dict]) -> bool:
 
 
 def _parse_multipart(body: bytes, content_type: str) -> tuple[dict[str, str], bytes | None]:
-    """用 python-multipart 解析 multipart/form-data (P1#3 2026-07-04)."""
+    """用 python-multipart 解析 multipart/form-data (P1#3 2026-07-04).
+
+    返回 (fields, file_data)，fields 中自动包含:
+        _filename: 上传文件的原始文件名
+        _content_type: 上传文件的 Content-Type
+    """
     from io import BytesIO
     from multipart import parse_form
 
@@ -150,6 +155,11 @@ def _parse_multipart(body: bytes, content_type: str) -> tuple[dict[str, str], by
         data = f.file_object.read()
         if data:
             file_data = data
+            # 提取文件名和 Content-Type
+            if f.file_name:
+                fields["_filename"] = f.file_name.decode("utf-8", "replace")
+            if f.content_type:
+                fields["_content_type"] = f.content_type
 
     parse_form({"Content-Type": content_type.encode()}, BytesIO(body),
                on_field=on_field, on_file=on_file)

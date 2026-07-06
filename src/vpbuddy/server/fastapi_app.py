@@ -420,12 +420,8 @@ async def post_meeting_material(meeting_id: str, request: Request):
         raise HTTPException(status_code=400, detail="No file in upload")
 
     # 提取文件名和 Content-Type
-    filename = fields.get("name") or "material.bin"
-    # 尽量从原有文件的 content-type 还原扩展名
-    file_ct = "application/octet-stream"
-    raw_name = fields.get("filename", "")
-    if raw_name:
-        filename = raw_name
+    filename = fields.get("_filename") or "material.bin"
+    file_ct = fields.get("_content_type") or "application/octet-stream"
 
     # 1. 保存为 Material
     meta = material_storage.store_file(
@@ -1396,6 +1392,12 @@ async def fe_get_meeting(meeting_id: str):
         result["transcript_segments"] = meta.get("transcript_segments", [])
     except Exception:
         result["transcript_segments"] = []
+
+    # Materials
+    try:
+        result["materials"] = material_storage.list_materials(meeting_id)
+    except Exception:
+        result["materials"] = []
 
     return result
 
