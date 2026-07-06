@@ -22,7 +22,7 @@ from typing import Any, AsyncGenerator
 from urllib.parse import parse_qs, urlparse
 
 import uvicorn
-from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -1440,6 +1440,92 @@ def post_e2e_check_docs_complete(
 
     ok = check_all_docs_stored_notify(mid)
     return {"meeting_id": mid, "all_stored": ok}
+
+
+# =============================================================================
+# 前端契约路由别名 (v0.9.0 BFF bridge) — 适配前端 vpbuddy-frontend API.md
+# =============================================================================
+
+# ── 百炼 Fun-ASR 实时转写 WebSocket ──
+
+@app.websocket("/api/meetings/{meeting_id}/realtime_asr")
+async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
+    """WebSocket — 百炼 Fun-ASR-Realtime 实时转写 relay."""
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+    await websocket.accept()
+    _log.info("[ws_realtime_asr] client connected, meeting=%s", meeting_id)
+
+    from .bailian_asr import start_session, send_audio, stop_session
+
+    session = None
+    format_str = "pcm"
+    sample_rate = 16000
+
+    try:
+        # Phase 1: handshake — 收 JSON "start" 消息
+        start_raw = await websocket.receive_text()
+        start_msg = json.loads(start_raw)
+        if start_msg.get("type") != "start":
+            await websocket.send_json({"type": "error", "error": "expected start message"})
+            return
+
+        format_str = start_msg.get("format", "pcm")
+        sample_rate = int(start_msg.get("sample_rate", 16000))
+
+        async def _send_json(msg: dict):
+            try:
+                await websocket.send_json(msg)
+            except Exception:
+                pass
+
+        # Phase 2: 启动百炼识别
+        import asyncio as _as
+        session = start_session(
+            loop=_as.get_running_loop(),
+            meeting_id=meeting_id,
+            send_json=_send_json,
+            sample_rate=sample_rate,
+            fmt=format_str,
+        )
+
+        # Phase 3: relay — 音频帧 → 百炼, 同时监听 stop
+        import asyncio as _asyncio
+        from starlette.websockets import WebSocketState
+
+        while session.running:
+            try:
+                data = await _asyncio.wait_for(websocket.receive(), timeout=0.5)
+            except _asyncio.TimeoutError:
+                continue
+
+            if "text" in data:
+                # JSON 控制消息
+                msg = json.loads(data["text"])
+                if msg.get("type") == "stop":
+                    _log.info("[ws_realtime_asr] client sent stop, meeting=%s", meeting_id)
+                    break
+                elif msg.get("type") == "ping":
+                    await websocket.send_json({"type": "pong"})
+            elif "bytes" in data:
+                # 二进制音频帧
+                send_audio(session, data["bytes"])
+
+    except WebSocketDisconnect:
+        _log.info("[ws_realtime_asr] client disconnected, meeting=%s", meeting_id)
+    except Exception as e:
+        _log.error("[ws_realtime_asr] error meeting=%s: %s", meeting_id, e)
+        try:
+            await websocket.send_json({"type": "error", "error": str(e)})
+        except Exception:
+            pass
+    finally:
+        if session:
+            stop_session(session)
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 # =============================================================================
