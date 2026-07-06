@@ -563,37 +563,39 @@ def infer_speaker_map(segments: list[dict]) -> dict[str, str]:
             for i, spk in enumerate(sorted_spks)}
 
 
-def _process_chunk_sync(
+def _process_chunk_core(
     meeting_id: str,
     tmp_path: str,
     chunk_index: int,
     chunk_start_sec: float,
     overlap_sec: float,
-    client_sent_at: float,
-) -> dict:
-    """同步处理 WAV chunk (同步模式)."""
+    new_segs: list[dict],
+    started: float,
+    is_background: bool = False,
+    client_sent_at: float | None = None,
+    raw_seg_count: int = 0,
+) -> dict | None:
+    """Shared core logic for processing a WAV chunk.
+
+    Handles speaker registration, ASR cleaning, state save,
+    stream_meta update (transcript_segments, metrics, processed_chunks),
+    doc generation trigger, and SSE push.
+
+    Args:
+        new_segs: Already-deduplicated new segments (dedup is done by caller).
+        started: time.time() at the start of processing.
+        is_background: If True, use background-mode SSE push (pending_clean window).
+        client_sent_at: Timestamp when client sent the chunk (for end_to_end_ms).
+        raw_seg_count: Number of raw segments before dedup (for metrics).
+    """
     import time as _time
 
-    from ..scripts.gpu_transcribe import process
     from ..state import MeetingState, Platform
     from ..storage import MeetingStorage
     from ..task_manager import get_task_manager
     from ..sub_session_controller import _dispatch_kind, BATCH_DOCS_KIND, DEMO_KIND
 
-    started = _time.time()
-    transcript = process(tmp_path)
-    raw_segs = transcript.get("segments", [])
-    meta = _load_stream_meta(meeting_id)
-    seen_segments = meta.get("transcript_segments", [])
-    new_segs = []
-    for s in raw_segs:
-        abs_seg = dict(s)
-        abs_seg["start_sec"] = round(float(s.get("start_sec", 0)) + chunk_start_sec, 3)
-        abs_seg["end_sec"] = round(float(s.get("end_sec", 0)) + chunk_start_sec, 3)
-        abs_seg["chunk_index"] = chunk_index
-        if not _is_duplicate_segment(abs_seg, seen_segments + new_segs):
-            new_segs.append(abs_seg)
-
+    # ── 1. 加载/创建 state ──
     storage = MeetingStorage(DATA_DIR)
     if storage.exists(meeting_id):
         state = storage.load(meeting_id)
@@ -604,6 +606,7 @@ def _process_chunk_sync(
             project_name=f"长连接会议 {meeting_id}",
         )
 
+    # ── 2. Speaker registration + ASR cleaning + state save ──
     spk_map = state.speaker_map
     if new_segs:
         inferred = infer_speaker_map(new_segs)
@@ -619,8 +622,11 @@ def _process_chunk_sync(
             state.cleaned_text = state.cleaned_text + "\n" + cleaned if state.cleaned_text else cleaned
     storage.save(state)
 
-    meta.setdefault("processed_chunks", []).append(chunk_index)
-    meta["processed_chunks"] = sorted(set(meta["processed_chunks"]))
+    # ── 3. Stream meta update ──
+    meta = _load_stream_meta(meeting_id)
+    if not is_background:
+        meta.setdefault("processed_chunks", []).append(chunk_index)
+        meta["processed_chunks"] = sorted(set(meta["processed_chunks"]))
     meta.setdefault("transcript_segments", []).extend(new_segs)
     processing_ms = int((_time.time() - started) * 1000)
     end_to_end_ms = int((_time.time() - client_sent_at) * 1000) if client_sent_at else None
@@ -628,7 +634,7 @@ def _process_chunk_sync(
         "chunk_index": chunk_index,
         "chunk_start_sec": chunk_start_sec,
         "overlap_sec": overlap_sec,
-        "raw_segments": len(raw_segs),
+        "raw_segments": raw_seg_count,
         "new_segments": len(new_segs),
         "processing_ms": processing_ms,
         "end_to_end_ms": end_to_end_ms,
@@ -636,7 +642,7 @@ def _process_chunk_sync(
     })
     _save_stream_meta(meeting_id, meta)
 
-    # 通过 task_manager 提交文档生成任务
+    # ── 4. Doc generation trigger ──
     def _doc_runner(gen_id: int, mid: str) -> dict:
         kinds = [BATCH_DOCS_KIND, DEMO_KIND]
         results = {}
@@ -650,147 +656,12 @@ def _process_chunk_sync(
 
     get_task_manager().submit(meeting_id, _doc_runner)
 
-    # 推送 SSE 事件
+    # ── 5. SSE push ──
     try:
         from ..realtime_server import push_event
 
-        for s in new_segs:
-            push_event(meeting_id, "transcript-segment", {
-                "start_sec": s["start_sec"],
-                "end_sec": s["end_sec"],
-                "text": s["text"],
-                "speaker_id": s["speaker_id"],
-                "chunk_index": chunk_index,
-                "speaker_name": spk_map.get(s["speaker_id"], "UNKNOWN"),
-                "cleaned": True,
-            })
-        push_event(meeting_id, "state-update", _state_payload(state, include_items=True))
-        push_event(meeting_id, "metrics-update", {
-            "chunk_index": chunk_index,
-            "processing_ms": processing_ms,
-            "end_to_end_ms": end_to_end_ms,
-            "raw_segments": len(raw_segs),
-            "new_segments": len(new_segs),
-        })
-        push_event(meeting_id, "doc-update", {
-            "status": "triggered",
-            "kinds": DOC_KINDS,
-            "message": "6 docs generation triggered",
-        })
-    except Exception:
-        pass
-
-    return {
-        "meeting_id": meeting_id,
-        "chunk_index": chunk_index,
-        "new_segments": [
-            {
-                "start_sec": s["start_sec"],
-                "end_sec": s["end_sec"],
-                "text": s["text"],
-                "speaker_id": s["speaker_id"],
-                "chunk_index": s.get("chunk_index", chunk_index),
-            }
-            for s in new_segs
-        ],
-        "state_items": _state_payload(state, include_items=False),
-        "metrics": meta.get("metrics", [])[-1],
-        "docs_triggered": True,
-    }
-
-
-def _process_chunk_background(
-    meeting_id: str,
-    tmp_path: str,
-    chunk_index: int,
-    chunk_start_sec: float,
-    overlap_sec: float,
-    client_sent_at: float,
-):
-    """后台 daemon thread 处理 WAV chunk (异步模式).
-
-    逻辑与 _process_chunk_sync 完全一致, 但异常仅记日志.
-    """
-    try:
-        import time as _time
-
-        from ..scripts.gpu_transcribe import process
-        from ..state import MeetingState, Platform
-        from ..storage import MeetingStorage
-        from ..task_manager import get_task_manager
-        from ..sub_session_controller import _dispatch_kind, BATCH_DOCS_KIND, DEMO_KIND
-
-        started = _time.time()
-        transcript = process(tmp_path)
-        raw_segs = transcript.get("segments", [])
-        meta = _load_stream_meta(meeting_id)
-        seen_segments = meta.get("transcript_segments", [])
-        new_segs = []
-        for s in raw_segs:
-            abs_seg = dict(s)
-            abs_seg["start_sec"] = round(float(s.get("start_sec", 0)) + chunk_start_sec, 3)
-            abs_seg["end_sec"] = round(float(s.get("end_sec", 0)) + chunk_start_sec, 3)
-            abs_seg["chunk_index"] = chunk_index
-            if not _is_duplicate_segment(abs_seg, seen_segments + new_segs):
-                new_segs.append(abs_seg)
-
-        storage = MeetingStorage(DATA_DIR)
-        if storage.exists(meeting_id):
-            state = storage.load(meeting_id)
-        else:
-            state = MeetingState(
-                meeting_id=meeting_id,
-                platform=Platform.LOCAL,
-                project_name=f"长连接会议 {meeting_id}",
-            )
-
-        spk_map = state.speaker_map
-        if new_segs:
-            inferred = infer_speaker_map(new_segs)
-            spk_map = dict(state.speaker_map or {})
-            for spk_id, spk_name in inferred.items():
-                spk_map.setdefault(spk_id, spk_name)
-            for spk_id, spk_name in spk_map.items():
-                state.register_speaker(spk_id, spk_name)
-            # 增量 ASR 清洗: 仅处理新 segments, 追加到 cleaned_text
-            from ..server.asr_clean import clean_transcript
-            cleaned = clean_transcript(new_segs)
-            if cleaned:
-                state.cleaned_text = state.cleaned_text + "\n" + cleaned if state.cleaned_text else cleaned
-        storage.save(state)
-
-        meta.setdefault("transcript_segments", []).extend(new_segs)
-        processing_ms = int((_time.time() - started) * 1000)
-        end_to_end_ms = int((_time.time() - client_sent_at) * 1000) if client_sent_at else None
-        meta.setdefault("metrics", []).append({
-            "chunk_index": chunk_index,
-            "chunk_start_sec": chunk_start_sec,
-            "overlap_sec": overlap_sec,
-            "raw_segments": len(raw_segs),
-            "new_segments": len(new_segs),
-            "processing_ms": processing_ms,
-            "end_to_end_ms": end_to_end_ms,
-            "received_at": datetime.now().isoformat(),
-        })
-        _save_stream_meta(meeting_id, meta)
-
-        def _doc_runner_bg(gen_id: int, mid: str) -> dict:
-            kinds = [BATCH_DOCS_KIND, DEMO_KIND]
-            results = {}
-            for kind in kinds:
-                try:
-                    r = _dispatch_kind(mid, kind, dry_run=False)
-                    results[kind] = {"triggered": r.get("triggered"), "error": r.get("error")}
-                except Exception as e:
-                    results[kind] = {"triggered": False, "error": str(e)}
-            return results
-
-        get_task_manager().submit(meeting_id, _doc_runner_bg)
-
-        try:
-            from ..realtime_server import push_event
-
-            # ASR 后处理窗口
+        if is_background:
+            # 背景模式: pending_clean 窗口逻辑
             now_ts = _time.time()
             meta.setdefault("pending_clean", [])
             for s in new_segs:
@@ -846,23 +717,141 @@ def _process_chunk_background(
                         "speaker_name": spk_map.get(s["speaker_id"], "UNKNOWN"),
                         "cleaned": False,
                     })
+        else:
+            # 同步模式: 直接推送每个 segment
+            for s in new_segs:
+                push_event(meeting_id, "transcript-segment", {
+                    "start_sec": s["start_sec"],
+                    "end_sec": s["end_sec"],
+                    "text": s["text"],
+                    "speaker_id": s["speaker_id"],
+                    "chunk_index": chunk_index,
+                    "speaker_name": spk_map.get(s["speaker_id"], "UNKNOWN"),
+                    "cleaned": True,
+                })
 
-            push_event(meeting_id, "state-update", _state_payload(state, include_items=True))
-            push_event(meeting_id, "metrics-update", {
-                "chunk_index": chunk_index,
-                "processing_ms": processing_ms,
-                "end_to_end_ms": end_to_end_ms,
-                "raw_segments": len(raw_segs),
-                "new_segments": len(new_segs),
-            })
-            push_event(meeting_id, "doc-update", {
-                "status": "triggered",
-                "kinds": DOC_KINDS,
-                "message": "6 docs generation triggered",
-            })
-        except Exception as e:
+        push_event(meeting_id, "state-update", _state_payload(state, include_items=True))
+        push_event(meeting_id, "metrics-update", {
+            "chunk_index": chunk_index,
+            "processing_ms": processing_ms,
+            "end_to_end_ms": end_to_end_ms,
+            "raw_segments": raw_seg_count,
+            "new_segments": len(new_segs),
+        })
+        push_event(meeting_id, "doc-update", {
+            "status": "triggered",
+            "kinds": DOC_KINDS,
+            "message": "6 docs generation triggered",
+        })
+    except Exception as e:
+        if is_background:
             print(f"[stream_chunk/bg] push_event error: {e}")
+        # 同步模式: 静默忽略
 
+    if not is_background:
+        return {
+            "meeting_id": meeting_id,
+            "chunk_index": chunk_index,
+            "new_segments": [
+                {
+                    "start_sec": s["start_sec"],
+                    "end_sec": s["end_sec"],
+                    "text": s["text"],
+                    "speaker_id": s["speaker_id"],
+                    "chunk_index": s.get("chunk_index", chunk_index),
+                }
+                for s in new_segs
+            ],
+            "state_items": _state_payload(state, include_items=False),
+            "metrics": meta.get("metrics", [])[-1],
+            "docs_triggered": True,
+        }
+    return None
+
+
+def _process_chunk_sync(
+    meeting_id: str,
+    tmp_path: str,
+    chunk_index: int,
+    chunk_start_sec: float,
+    overlap_sec: float,
+    client_sent_at: float,
+) -> dict:
+    """同步处理 WAV chunk (同步模式), 委托给 _process_chunk_core."""
+    import time as _time
+
+    from ..scripts.gpu_transcribe import process
+
+    started = _time.time()
+    transcript = process(tmp_path)
+    raw_segs = transcript.get("segments", [])
+    meta = _load_stream_meta(meeting_id)
+    seen_segments = meta.get("transcript_segments", [])
+    new_segs = []
+    for s in raw_segs:
+        abs_seg = dict(s)
+        abs_seg["start_sec"] = round(float(s.get("start_sec", 0)) + chunk_start_sec, 3)
+        abs_seg["end_sec"] = round(float(s.get("end_sec", 0)) + chunk_start_sec, 3)
+        abs_seg["chunk_index"] = chunk_index
+        if not _is_duplicate_segment(abs_seg, seen_segments + new_segs):
+            new_segs.append(abs_seg)
+
+    return _process_chunk_core(
+        meeting_id=meeting_id,
+        tmp_path=tmp_path,
+        chunk_index=chunk_index,
+        chunk_start_sec=chunk_start_sec,
+        overlap_sec=overlap_sec,
+        new_segs=new_segs,
+        started=started,
+        is_background=False,
+        client_sent_at=client_sent_at,
+        raw_seg_count=len(raw_segs),
+    )
+
+
+def _process_chunk_background(
+    meeting_id: str,
+    tmp_path: str,
+    chunk_index: int,
+    chunk_start_sec: float,
+    overlap_sec: float,
+    client_sent_at: float,
+):
+    """后台 daemon thread 处理 WAV chunk (异步模式), 委托给 _process_chunk_core."""
+    try:
+        import time as _time
+
+        from ..scripts.gpu_transcribe import process
+
+        started = _time.time()
+        transcript = process(tmp_path)
+        raw_segs = transcript.get("segments", [])
+        meta = _load_stream_meta(meeting_id)
+        seen_segments = meta.get("transcript_segments", [])
+        new_segs = []
+        for s in raw_segs:
+            abs_seg = dict(s)
+            abs_seg["start_sec"] = round(float(s.get("start_sec", 0)) + chunk_start_sec, 3)
+            abs_seg["end_sec"] = round(float(s.get("end_sec", 0)) + chunk_start_sec, 3)
+            abs_seg["chunk_index"] = chunk_index
+            if not _is_duplicate_segment(abs_seg, seen_segments + new_segs):
+                new_segs.append(abs_seg)
+
+        _process_chunk_core(
+            meeting_id=meeting_id,
+            tmp_path=tmp_path,
+            chunk_index=chunk_index,
+            chunk_start_sec=chunk_start_sec,
+            overlap_sec=overlap_sec,
+            new_segs=new_segs,
+            started=started,
+            is_background=True,
+            client_sent_at=client_sent_at,
+            raw_seg_count=len(raw_segs),
+        )
+
+        processing_ms = int((_time.time() - started) * 1000)
         print(
             f"[stream_chunk/bg] {meeting_id}/{chunk_index} done in {processing_ms}ms, "
             f"{len(new_segs)} new segments"

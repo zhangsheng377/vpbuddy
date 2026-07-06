@@ -138,7 +138,7 @@ def http_server(tmp_path, monkeypatch):
         platform=Platform.LOCAL,
         project_name="v0.9 测试会议",
     )
-    real_state.add_requirement("用户认证需求", priority="high")
+    # _add_requirement removed in v0.12.0 along with ingest.py (dead code cleanup)
 
     class _FakeStorage:
         def __init__(self, *args, **kwargs):

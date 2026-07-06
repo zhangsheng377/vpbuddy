@@ -2,6 +2,7 @@
 
 v1.14 修订:不再叫"状态机",就是一个普通 JSON 对象。
 v1.16:5 类核心累积(requirements/goals/features/risks/open_questions)+ 6 项交付物锚点。
+v0.12.0:CRUD 方法已删除(ingest.py 移除),字段保留向后兼容。
 
 设计原则:
 - 一个 JSON 对象,可读可写
@@ -125,10 +126,10 @@ class Question(TrackedItem):
 class MeetingState(BaseModel):
     """会议结构化状态(单一可信源)
 
-    5 类累积项(requirements/goals/features/risks/open_questions)
+    5 类累积项(requirements/goals/features/risks/open_questions, 字段保留向后兼容)
     + 元数据(platform/speaker_map/last_updated)
 
-    跨调用持久化:每条 add/update 操作都立即落盘(NFS JSON)
+    跨调用持久化:每次修改都立即落盘(NFS JSON)
     """
     # === 基础信息 ===
     meeting_id: str = Field(default_factory=lambda: uuid4().hex[:12].upper())
@@ -162,87 +163,6 @@ class MeetingState(BaseModel):
             except Exception:
                 object.__setattr__(self, "vpbuddy_version", "0.1.0")
 
-    # === CRUD:添加 ===
-    def add_requirement(self, text: str, priority: Priority = Priority.MEDIUM,
-                       speaker_id: str | None = None,
-                       source_segment_id: str | None = None) -> Requirement:
-        req = Requirement(text=text, priority=priority,
-                          speaker_id=speaker_id,
-                          source_segment_id=source_segment_id)
-        self.requirements.append(req)
-        self._touch()
-        return req
-
-    def add_goal(self, text: str, **kwargs) -> Goal:
-        goal = Goal(text=text, **kwargs)
-        self.goals.append(goal)
-        self._touch()
-        return goal
-
-    def add_feature(self, text: str, **kwargs) -> Feature:
-        feat = Feature(text=text, **kwargs)
-        self.features.append(feat)
-        self._touch()
-        return feat
-
-    def add_risk(self, text: str, **kwargs) -> Risk:
-        risk = Risk(text=text, **kwargs)
-        self.risks.append(risk)
-        self._touch()
-
-        # 2026-07-01 ADR-0023 Phase 5: RISK 累计 >= 3 触发 agent 主动通知
-        # 阈值检查放这里, 跟 _touch 一起. 只算 MEDIUM/HIGH (LOW 不计).
-        try:
-            meaningful = [r for r in self.risks if r.severity.value in ("medium", "high")]
-            if len(meaningful) >= 3:
-                from .agent_proactive import trigger as _proactive_trigger
-                risk_list = [f"[{r.severity.value.upper()}] {r.text}" for r in meaningful[:5]]
-                _proactive_trigger(
-                    self.meeting_id,
-                    "risk_threshold",
-                    risk_list=risk_list,
-                )
-        except Exception as e:
-            logger.warning(f"Operation failed: {e}")
-
-        return risk
-
-    def add_question(self, text: str, is_urgent: bool = False, **kwargs) -> Question:
-        q = Question(text=text, is_urgent=is_urgent, **kwargs)
-        self.open_questions.append(q)
-        self._touch()
-        return q
-
-    # === CRUD:更新 ===
-    def confirm_item(self, item_type: str, item_id: str, speaker_name: str | None = None) -> TrackedItem:
-        item = self._find_item(item_type, item_id)
-        item.confirm(speaker_name)
-        self._touch()
-        return item
-
-    def reject_item(self, item_type: str, item_id: str) -> TrackedItem:
-        item = self._find_item(item_type, item_id)
-        item.reject()
-        self._touch()
-        return item
-
-    def _find_item(self, item_type: str, item_id: str) -> TrackedItem:
-        """按类型 + ID 找累积项"""
-        collection_map = {
-            "requirement": self.requirements,
-            "goal": self.goals,
-            "feature": self.features,
-            "risk": self.risks,
-            "question": self.open_questions,
-        }
-        if item_type not in collection_map:
-            raise ValueError(f"Unknown item_type: {item_type}. "
-                             f"Must be one of {list(collection_map.keys())}")
-        for item in collection_map[item_type]:
-            if item.id == item_id:
-                return item
-        raise KeyError(f"{item_type} {item_id} not found")
-
     # === 查询 ===
     def list_pending(self) -> list[TrackedItem]:
         """所有 pending 项(按紧急度排序:高优先级优先)"""
@@ -256,14 +176,9 @@ class MeetingState(BaseModel):
         return pending
 
     def stats(self) -> dict[str, int]:
-        """统计各类型数量 + 状态分布"""
+        """基础统计"""
         return {
-            "requirements": len(self.requirements),
-            "goals": len(self.goals),
-            "features": len(self.features),
-            "risks": len(self.risks),
-            "open_questions": len(self.open_questions),
-            "total_pending": len(self.list_pending()),
+            "cleaned_text_length": len(self.cleaned_text),
         }
 
     # === 说话人映射 ===
