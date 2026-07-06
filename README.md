@@ -2,7 +2,7 @@
 
 > **本地优先的会议操作系统级 AI 助手** —— 为 VP / 售前 / 项目负责人设计,运行在 VP 自己桌面客户端,数据完全本地化。
 
-**v0.15.2** (2026-07-06) — 会议材料 Material 实体 + 图片 vision 分析 + 全流程 E2E 40/40。详见 [Releases](https://github.com/zhangsheng377/vpbuddy/releases)。
+**v0.15.3** (2026-07-06) — ASR VAD 修复 + Vision API 调通(data:image base64) + 图片双路(文件路径+KB)。详见 [Releases](https://github.com/zhangsheng377/vpbuddy/releases)。
 
 [English](#english) | [中文](#中文)
 
