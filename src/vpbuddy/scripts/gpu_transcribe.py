@@ -152,6 +152,14 @@ def transcribe(
     P0 修复: 使用 _get_model() 缓存, 不再每次新建 AutoModel.
     """
     model = _get_model(asr=asr, vad=vad, punc=punc, spk=spk, device=device)
+
+    # P1 修复: 重置 streaming VAD 内部 cache, 避免跨次调用形状不匹配
+    # RuntimeError: Sizes of tensors must match except in dimension 1.
+    # Expected size 2 but got size 1 for tensor number 1 in the list.
+    # fsmn-vad 是流式 VAD, model.generate() 后 cache 里残留了上一段音频的帧数状态
+    if hasattr(model, "vad_model") and hasattr(model.vad_model, "cache"):
+        model.vad_model.cache = {}
+
     result = model.generate(input=audio, fs=sr, batch_size_s=DEFAULT_BATCH_SIZE_S)
 
     if not result:
