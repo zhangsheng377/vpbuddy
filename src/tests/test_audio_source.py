@@ -67,7 +67,6 @@ def test_meeting_state_audio_source_default_for_legacy_json():
         "platform": "local",
         "project_name": None,
         "started_at": "2026-06-01T00:00:00+00:00",
-        "requirements": [], "goals": [], "features": [], "risks": [], "open_questions": [],
         "speaker_map": {}, "last_updated": "2026-06-01T00:00:00+00:00",
         "vpbuddy_version": "0.5.0",
     }

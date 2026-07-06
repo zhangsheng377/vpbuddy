@@ -798,17 +798,12 @@ listen("gpu-connection", (e) => {
 // 实时结构化事实更新 (REQ/GOAL/FEAT/RISK/QUE)
 listen("state-update", (e) => {
   const stats = e.payload;
-  // 2026-06-27: 5 类结构化事实降级到 stream 顶部 pill, 不再有 fact-list
-  const reqEl = document.getElementById("fact-req");
-  const goalEl = document.getElementById("fact-goal");
-  const featEl = document.getElementById("fact-feat");
-  const riskEl = document.getElementById("fact-risk");
-  const queEl = document.getElementById("fact-que");
-  if (reqEl) reqEl.textContent = stats.requirements || 0;
-  if (goalEl) goalEl.textContent = stats.goals || 0;
-  if (featEl) featEl.textContent = stats.features || 0;
-  if (riskEl) riskEl.textContent = stats.risks || 0;
-  if (queEl) queEl.textContent = stats.questions || 0;
+  // 旧 5 类 facts 已废弃 (v0.12.0)，客户端不再显示
+  // 保持 listener 兼容旧 payload
+  if (stats.cleaned_text_length != null) {
+    const segEl = document.getElementById("seg-count");
+    if (segEl) segEl.textContent = `${stats.cleaned_text_length} 字清理`;
+  }
 });
 
 // 2026-06-27: 6 文档改并列展示, 删除 click 切换 + refreshDocs + renderDoc 单 viewer

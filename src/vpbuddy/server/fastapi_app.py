@@ -917,16 +917,16 @@ async def post_upload_audio(
         tmp_path = tmp.name
 
     try:
-        import asyncio
         from ..storage import MeetingStorage
 
-        # 调用 _process_chunk_sync 统一处理路径 (chunk_index=0 表示一次性上传)
-        # 同步函数需在 asyncio.to_thread 中执行, 避免堵塞事件循环
-        await asyncio.to_thread(
-            _process_chunk_sync,
+        # 计算下一个 chunk_index (已有 meta 中最大 +1, 或 0)
+        processed = _load_stream_meta(meeting_id).get("processed_chunks", [])
+        chunk_index = (max(processed) + 1) if processed else 0
+
+        _process_chunk_sync(
             meeting_id=meeting_id,
             tmp_path=tmp_path,
-            chunk_index=0,
+            chunk_index=chunk_index,
             chunk_start_sec=0,
             overlap_sec=0,
             client_sent_at=time.time(),

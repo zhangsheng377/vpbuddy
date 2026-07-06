@@ -509,11 +509,6 @@ def _state_payload(state, include_items: bool = True) -> dict[str, Any]:
 
     payload = {
         "meeting_id": state.meeting_id,
-        "requirements": len(state.requirements),
-        "goals": len(state.goals),
-        "features": len(state.features),
-        "risks": len(state.risks),
-        "questions": len(state.open_questions),
         "cleaned_text_length": len(state.cleaned_text),
         "last_updated": state.last_updated,
     }

@@ -133,7 +133,7 @@ def test_headless_client_full_flow(server: str) -> None:
         assert "metrics-update" in event_types, event_types
         assert "doc-update" in event_types, event_types
         assert "chat-message" in event_types, event_types
-        assert result["state"]["state"]["requirements"] >= 1, result["state"]
+        assert result["state"]["state"], result["state"]
         assert len(docs) == 6, docs
         assert any(doc["kind"] == "demo" and "VPBuddy Demo" in doc["content"] for doc in docs), docs
         assert chat["source"] == "hermes", chat
