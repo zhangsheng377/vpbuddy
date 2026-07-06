@@ -1,4 +1,4 @@
-// GPU server 通信: 创建会议 + 上传 30s 切片 (multipart)
+// GPU server 通信: 创建会议 + 上传 30s 切片 (multipart) + WS 实时转写 (百炼)
 
 use anyhow::Result;
 use reqwest::multipart;
@@ -12,6 +12,130 @@ pub struct TranscriptSegment {
     pub speaker_id: String,
     #[serde(default)]
     pub chunk_index: u64,
+}
+
+// ── 百炼 WebSocket 实时转写 ──
+
+/// 百炼 WS 实时转写客户端.
+/// 通过 GPU Server relay 连接阿里百炼 fun-asr-realtime.
+pub struct BailianWsHandle {
+    write_half: tokio::sync::mpsc::Sender<Vec<u8>>,
+    stop_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    recv_handle: tokio::task::JoinHandle<()>,
+}
+
+impl BailianWsHandle {
+    /// 连接 WS, 启动接收循环. 返回 handle 供发送 PCM 帧和停止.
+    pub async fn connect(
+        gpu_url: &str,
+        meeting_id: &str,
+        sample_rate: u32,
+        on_transcript: impl Fn(String, f32, f32, bool) + Send + 'static,
+        on_error: impl Fn(String) + Send + 'static,
+    ) -> Result<Self> {
+        let ws_url = gpu_url
+            .replace("http://", "ws://")
+            .replace("https://", "wss://");
+        let url = format!("{}/api/meetings/{}/realtime_asr", ws_url, meeting_id);
+
+        use tokio_tungstenite::connect_async;
+        use tokio_tungstenite::tungstenite::Message;
+        use futures_util::{SinkExt, StreamExt};
+
+        let (ws_stream, _) = connect_async(&url).await?;
+        let (mut write, mut read) = ws_stream.split();
+
+        // Send start handshake
+        let start_msg = serde_json::json!({
+            "type": "start",
+            "format": "pcm",
+            "sample_rate": sample_rate,
+        });
+        write.send(Message::Text(start_msg.to_string())).await?;
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop2 = stop.clone();
+
+        // Send task: forward PCM frames from channel to WS
+        let send_handle = tokio::spawn(async move {
+            while let Some(data) = rx.recv().await {
+                if stop2.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                if write.send(Message::Binary(data)).await.is_err() {
+                    break;
+                }
+            }
+            // Send stop message
+            let _ = write
+                .send(Message::Text(
+                    serde_json::json!({"type": "stop"}).to_string(),
+                ))
+                .await;
+            let _ = write.close().await;
+        });
+
+        // Recv task: parse transcripts from WS → callback
+        let recv_handle = tokio::spawn(async move {
+            loop {
+                match read.next().await {
+                    Some(Ok(Message::Text(text))) => {
+                        if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&text) {
+                            match msg["type"].as_str() {
+                                Some("transcript") => {
+                                    let txt = msg["text"].as_str().unwrap_or("").to_string();
+                                    let bt = msg["begin_time"].as_f64().unwrap_or(0.0) as f32 / 1000.0;
+                                    let et = msg["end_time"].as_f64().unwrap_or(0.0) as f32 / 1000.0;
+                                    let is_end = msg["is_sentence_end"].as_bool().unwrap_or(false);
+                                    if !txt.is_empty() {
+                                        on_transcript(txt, bt, et, is_end);
+                                    }
+                                }
+                                Some("asr_error") | Some("error") => {
+                                    let err = msg["error"].as_str().unwrap_or("unknown").to_string();
+                                    on_error(err);
+                                }
+                                Some("asr_complete") => {
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    Some(Err(e)) => {
+                        on_error(format!("WS error: {e}"));
+                        break;
+                    }
+                    Some(Ok(Message::Close(_))) | None => break,
+                    _ => {}
+                }
+            }
+            // Wait for send to finish
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            let _ = send_handle.await;
+        });
+
+        Ok(Self {
+            write_half: tx,
+            stop_flag: stop,
+            recv_handle,
+        })
+    }
+
+    /// 发送一帧 PCM 音频 (100ms/chunk, 3200 bytes @ 16kHz mono 16bit)
+    pub async fn send_frame(&self, data: Vec<u8>) -> Result<()> {
+        if self.write_half.send(data).await.is_err() {
+            anyhow::bail!("WS send channel closed");
+        }
+        Ok(())
+    }
+
+    /// 等待转写完成 (blocking)
+    pub async fn join(self) {
+        self.stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = self.recv_handle.await;
+    }
 }
 
 /// 在 GPU 端创建一个"长连接"会议, 后续 chunk 都 push 到这个 meeting

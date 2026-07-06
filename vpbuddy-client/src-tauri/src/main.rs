@@ -162,6 +162,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             start_capture,
+            start_realtime_capture,
             stop_capture,
             list_audio_devices,
             set_gpu_url,
@@ -303,9 +304,6 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
         log::warn!("  capture_handle 为空, 没在跑采集?");
     }
 
-    // 2026-06-28 ADR-0018: 通知服务端 audio capture 已停, 但 SSE 继续
-    // 等 GPU 后台 6 docs 全 stored 后 close_meeting 触发 SSE 自然退出
-    // 不再 await sse_handle (老逻辑 1.5s 超时)
     if let Some(mid) = state.meeting_id.lock().await.clone() {
         let gpu_url = state.gpu_url.lock().await.clone();
         let stop_url = format!("{}/api/meetings/{}/stream_stop", gpu_url, mid);
@@ -323,13 +321,167 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
     } else {
         log::warn!("  meeting_id 为空, 没有活跃会议");
     }
-    // 2026-07-02 Phase 7 v0.8.0 cleanup: 重置 audio_source 状态
-    // (v0.7.1 留值不重置, ADR-0032 写明本 PR 收尾)
     *state.audio_source.lock().await = None;
     log::debug!("  ✓ audio_source state 重置为 None (v0.8.0 cleanup)");
-
-    // 注意: sse_handle 不 await — SSE 继续等 GPU 6 docs 完成 + close_meeting
     log::info!("=== stop_capture 完成 ===");
+    Ok(())
+}
+
+// ── 百炼实时转写模式 (v0.16) ──
+
+#[tauri::command]
+async fn start_realtime_capture(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    audio_device: Option<String>,
+    meeting_id: Option<String>,
+    audio_source: Option<String>,
+) -> Result<String, String> {
+    if state.capturing.load(Ordering::SeqCst) {
+        return Err("已在采集中".into());
+    }
+    let mid_in = meeting_id
+        .as_deref().map(str::trim).filter(|s| !s.is_empty())
+        .ok_or_else(|| "请先选择或输入会议名 (ADR-0022)".to_string())?
+        .to_string();
+    let audio_source_norm = audio_source
+        .as_deref().map(str::trim).filter(|s| !s.is_empty())
+        .unwrap_or("microphone").to_lowercase();
+    if !["microphone", "loopback", "both"].contains(&audio_source_norm.as_str()) {
+        return Err(format!("非法 audio_source: {audio_source_norm}"));
+    }
+
+    log::info!("=== start_realtime_capture (百炼 WS 模式) ===");
+    log::info!("  meeting_id: {mid_in}, audio_source: {audio_source_norm}");
+
+    let gpu_url = state.gpu_url.lock().await.clone();
+    let meeting_id = upload::init_meeting(&gpu_url, &mid_in, &audio_source_norm)
+        .await.map_err(|e| format!("init 会议失败: {e}"))?;
+    log::info!("  ✓ meeting_id: {meeting_id}");
+    *state.meeting_id.lock().await = Some(meeting_id.clone());
+    *state.audio_source.lock().await = Some(audio_source_norm.clone());
+
+    state.capturing.store(true, Ordering::SeqCst);
+    state.total_bytes.store(0, Ordering::SeqCst);
+    state.total_uploads.store(0, Ordering::SeqCst);
+
+    // SSE 照常启动 (收文档更新)
+    let app_sse = app.clone();
+    let gpu_url_sse = gpu_url.clone();
+    let mid_sse = meeting_id.clone();
+    let capturing_sse = state.capturing.clone();
+    let sse_handle = tokio::spawn(async move {
+        run_sse_loop(app_sse, gpu_url_sse, mid_sse, capturing_sse).await;
+    });
+    *state.sse_handle.lock().await = Some(sse_handle);
+
+    let handle = tokio::spawn(async move {
+        if let Err(e) = run_realtime_loop(
+            app, gpu_url, meeting_id,
+            state.capturing.clone(), state.total_bytes.clone(),
+            audio_device, audio_source_norm, state.native_sample_rate.clone(),
+        ).await {
+            let _ = app.emit("error", format!("实时采集错误: {e}"));
+        }
+    });
+
+    *state.capture_handle.lock().await = Some(handle);
+    Ok(meeting_id)
+}
+
+/// 百炼 WS 实时采集循环: cpal → resample 16kHz → 100ms PCM frame → WS send
+pub async fn run_realtime_loop(
+    app: AppHandle,
+    gpu_url: String,
+    meeting_id: String,
+    capturing: Arc<AtomicBool>,
+    bytes: Arc<AtomicU64>,
+    audio_device: Option<String>,
+    audio_source: String,
+    native_rate: Arc<AtomicU32>,
+) -> anyhow::Result<()> {
+    use tokio::sync::mpsc as tmpsc;
+    let (tx, mut rx) = tmpsc::channel::<Vec<i16>>(128);
+
+    // cpal 采集 (spawn_blocking)
+    let capturing_bg = capturing.clone();
+    let native_rate_bg = native_rate.clone();
+    let audio_source_bg = audio_source.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let mut capture = AudioCapture::new_with_source(audio_device, &audio_source_bg)?;
+        native_rate_bg.store(capture.native_sample_rate(), Ordering::SeqCst);
+        log::info!("实时模式: cpal 就绪, native_rate={}", capture.native_sample_rate());
+        while capturing_bg.load(Ordering::SeqCst) {
+            match capture.read_chunk_blocking(0.1) {
+                Ok(samples) if !samples.is_empty() => {
+                    let _ = tx.blocking_send(samples);
+                }
+                Ok(_) => {}
+                Err(e) => { log::error!("cpal 采集中断: {e}"); break; }
+            }
+        }
+        log::info!("实时模式: cpal 退出");
+        Ok(())
+    });
+
+    let sample_rate = 16000u32;
+    // 连接百炼 WS
+    let app_ws = app.clone();
+    let ws = upload::BailianWsHandle::connect(
+        &gpu_url, &meeting_id, sample_rate,
+        move |text, bt, et, is_end| {
+            let _ = app_ws.emit("transcript-segment", serde_json::json!({
+                "text": text, "start_sec": bt, "end_sec": et,
+                "speaker_id": "SPEAKER_00", "chunk_index": 0,
+                "is_sentence_end": is_end,
+            }));
+        },
+        move |err| {
+            let _ = app.emit("error", format!("WS: {err}"));
+        },
+    ).await?;
+    log::info!("实时模式: WS 已连接");
+
+    let frame_size = (sample_rate as usize) / 10; // 100ms PCM frame
+    let mut total_bytes_sent: u64 = 0;
+
+    // 主循环: 收 audio → resample → 满 100ms → WS send
+    loop {
+        let samples = match tokio::time::timeout(
+            std::time::Duration::from_secs(2), rx.recv(),
+        ).await {
+            Ok(Some(s)) => s,
+            Ok(None) => break,
+            Err(_) => {
+                if !capturing.load(Ordering::SeqCst) { break; }
+                continue;
+            }
+        };
+
+        let native = native_rate.load(Ordering::SeqCst);
+        let resampled: Vec<i16> = if native == sample_rate || native == 0 {
+            samples
+        } else {
+            audio::resample_linear(&samples, native, sample_rate)
+        };
+
+        // 按 100ms 帧 pushing
+        for chunk in resampled.chunks(frame_size) {
+            let pcm_bytes: Vec<u8> = chunk.iter()
+                .flat_map(|s| s.to_le_bytes())
+                .collect();
+            if ws.send_frame(pcm_bytes).await.is_err() {
+                log::warn!("实时模式: WS 发送失败");
+                break;
+            }
+            total_bytes_sent += pcm_bytes.len() as u64;
+            bytes.store(total_bytes_sent, Ordering::SeqCst);
+        }
+    }
+
+    log::info!("实时模式: 循环结束, 等待 WS complete...");
+    ws.join().await;
+    log::info!("实时模式: 完成, 总计 {} bytes 发送", total_bytes_sent);
     Ok(())
 }
 
