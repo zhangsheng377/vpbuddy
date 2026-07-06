@@ -77,6 +77,7 @@ impl BailianWsHandle {
         });
 
         // Recv task: parse transcripts from WS → callback
+        let stop_recv = stop.clone();
         let recv_handle = tokio::spawn(async move {
             loop {
                 match read.next().await {
@@ -112,7 +113,7 @@ impl BailianWsHandle {
                 }
             }
             // Wait for send to finish
-            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            stop_recv.store(true, std::sync::atomic::Ordering::Relaxed);
             let _ = send_handle.await;
         });
 

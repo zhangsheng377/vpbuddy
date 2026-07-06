@@ -375,15 +375,22 @@ async fn start_realtime_capture(
     });
     *state.sse_handle.lock().await = Some(sse_handle);
 
-    let handle = tokio::spawn(async move {
-        if let Err(e) = run_realtime_loop(
-            app, gpu_url, meeting_id,
-            state.capturing.clone(), state.total_bytes.clone(),
-            audio_device, audio_source_norm, state.native_sample_rate.clone(),
-        ).await {
-            let _ = app.emit("error", format!("实时采集错误: {e}"));
-        }
-    });
+    let capturing2 = state.capturing.clone();
+     let bytes2 = state.total_bytes.clone();
+     let native2 = state.native_sample_rate.clone();
+     let mid2 = meeting_id.clone();
+     let src2 = audio_source_norm.clone();
+     let dev2 = audio_device.clone();
+     let app2 = app.clone();
+     let handle = tokio::spawn(async move {
+         if let Err(e) = run_realtime_loop(
+             app, gpu_url, mid2,
+             capturing2, bytes2,
+             dev2, src2, native2,
+         ).await {
+             let _ = app2.emit("error", format!("实时采集错误: {e}"));
+         }
+     });
 
     *state.capture_handle.lock().await = Some(handle);
     Ok(meeting_id)
@@ -470,11 +477,12 @@ pub async fn run_realtime_loop(
             let pcm_bytes: Vec<u8> = chunk.iter()
                 .flat_map(|s| s.to_le_bytes())
                 .collect();
+            let frame_len = pcm_bytes.len() as u64;
             if ws.send_frame(pcm_bytes).await.is_err() {
                 log::warn!("实时模式: WS 发送失败");
                 break;
             }
-            total_bytes_sent += pcm_bytes.len() as u64;
+            total_bytes_sent += frame_len;
             bytes.store(total_bytes_sent, Ordering::SeqCst);
         }
     }
