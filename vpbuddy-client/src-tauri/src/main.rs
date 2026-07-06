@@ -490,6 +490,19 @@ pub async fn run_realtime_loop(
     log::info!("实时模式: 循环结束, 等待 WS complete...");
     ws.join().await;
     log::info!("实时模式: 完成, 总计 {} bytes 发送", total_bytes_sent);
+
+    // 触发文档生成 (等同 stream_stop → close)
+    let close_url = format!("{}/api/meetings/{}/close", gpu_url, meeting_id);
+    match reqwest::Client::new()
+        .post(&close_url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+    {
+        Ok(r) => log::info!("close_meeting: HTTP {}", r.status()),
+        Err(e) => log::warn!("close_meeting 调用失败: {e}"),
+    }
+
     Ok(())
 }
 

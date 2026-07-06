@@ -358,50 +358,61 @@ document.getElementById("demo-latest-btn")?.addEventListener("click", () => {
 
 // === 监听 Tauri 后端事件 ===
 // 2026-06-27 加强: 时间戳 + 说话人分色块 + 自动滚动到顶 + 新增提示动画
+// ── 实时 ASR 去重: 同 begin_time 的行更新而非新增 ──
+const _asrDedup = new Map();  // key: "startSec|spkId", value: DOM element
+
 listen("transcript-segment", (e) => {
   const seg = e.payload;
-  // 2026-06-28: 收到新段, 重置延迟计时器 (新 chunk 转写完了)
   if (latencyTimer) {
     latencyStartMs = Date.now();
     document.getElementById("latency").textContent = `已等 0.0s / ${LATENCY_WINDOW_S}s (刚出字)`;
   }
   segCount += 1;
-  // 2026-06-29: 支持多行 cleaned 事件 — 拆 \n 逐条显示
-  // 张胜东反馈: cleaned 文本含 [MM:SS] SPEAKER_XX: text\n[MM:SS]...
-  const lines = (seg.text || "").split("\n").filter(l => l.trim());
   const list = document.getElementById("stream-list");
-  for (const line of lines) {
-    // 尝试从 line 提取 [MM:SS] SPEAKER: text
-    let timeStr = "", spkId = seg.speaker_id || "?", text = line;
-    const m = line.match(/^\[(\d+:\d+[\.\d]*)\]\s*(SPEAKER_\w+):\s*(.*)/);
-    if (m) {
-      timeStr = m[1];
-      spkId = m[2];
-      text = m[3];
-    } else {
-      // 没有时间戳, 用 event 整体 start_sec
-      const startSec = seg.start_sec || 0;
-      const mm = Math.floor(startSec / 60).toString().padStart(2, "0");
-      const ss = (startSec % 60).toFixed(1).padStart(4, "0");
-      timeStr = `${mm}:${ss}`;
+  const startSec = seg.start_sec || 0;
+  const spkId = seg.speaker_id || "SPEAKER_00";
+  const text = seg.text || "";
+  
+  // 实时模式: 用 begin_time + speaker_id 去重
+  const dedupKey = `${startSec.toFixed(1)}|${spkId}`;
+  let item = _asrDedup.get(dedupKey);
+  
+  if (item) {
+    // 更新已有行
+    const textSpan = item.querySelector(".text");
+    if (textSpan) textSpan.textContent = text;
+    // 如果句子完整, 标记行结束
+    if (seg.is_sentence_end) {
+      item.classList.add("stream-item-final");
+      _asrDedup.delete(dedupKey);  // 不再更新此行
     }
+    item.classList.add("stream-item-fresh");
+    setTimeout(() => item.classList.remove("stream-item-fresh"), 600);
+  } else {
+    // 新建行
+    const mm = Math.floor(startSec / 60).toString().padStart(2, "0");
+    const ss = (startSec % 60).toFixed(1).padStart(4, "0");
+    const timeStr = `${mm}:${ss}`;
     const colorIdx = parseInt(spkId.slice(-2), 10) % 8;
-    const item = document.createElement("div");
+    item = document.createElement("div");
     item.className = "stream-item";
-    // 2026-06-29: cleaned 事件标记浅蓝色背景
-    if (seg.cleaned) item.classList.add("stream-item-cleaned");
+    if (seg.is_sentence_end) item.classList.add("stream-item-final");
     item.innerHTML =
       `<span class="time">${timeStr}</span>` +
       `<span class="spk spk-${colorIdx}">${escapeHtml(spkId)}</span>` +
       ` <span class="text">${escapeHtml(text)}</span>`;
     list.insertBefore(item, list.firstChild);
     item.classList.add("stream-item-fresh");
-    setTimeout(() => item.classList.remove("stream-item-fresh"), 800);
+    setTimeout(() => item.classList.remove("stream-item-fresh"), 600);
+    
+    if (!seg.is_sentence_end) {
+      _asrDedup.set(dedupKey, item);  // 未完成: 留下等后续更新
+    }
   }
-  document.getElementById("seg-count").textContent = `${segCount} 段`;
-  // 显示"最近一段"提示
+  
+  document.getElementById("seg-count").textContent = `${segCount} 段 (${_asrDedup.size} 进行中)`;
   const lastBadge = document.getElementById("last-seg");
-  if (lastBadge) lastBadge.textContent = `最新: ${(seg.text || "").slice(0, 30)}`;
+  if (lastBadge) lastBadge.textContent = `最新: ${text.slice(0, 30)}`;
 });
 
 listen("capture-stats", (e) => {
