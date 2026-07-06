@@ -453,24 +453,23 @@ async def post_meeting_material(meeting_id: str, request: Request):
             chat_message = f"用户上传了会议材料：{filename}，已存入知识库。"
     elif file_type == "image":
         # 调 MiniMax vision API 分析图片内容
+        # data: URI 不被支持 (error 400 code 2013)
+        # 改用公网 HTTP URL: http://47.100.182.3:28765/api/materials/{id}/file
         try:
-            import base64
-            img_b64 = base64.b64encode(file_data).decode()
-            data_uri = f"data:{file_ct};base64,{img_b64}"
-
             import os as _os
             from openai import OpenAI as _OpenAI
             _vclient = _OpenAI(
                 base_url=_os.environ.get("OPENAI_BASE_URL", "https://api.minimax.chat/v1"),
                 api_key=_os.environ.get("OPENAI_API_KEY", ""),
             )
+            public_url = f"http://47.100.182.3:28765/api/materials/{meta.material_id}/file"
             _vresp = _vclient.chat.completions.create(
                 model=_os.environ.get("MODEL", "minimax-m3"),
                 messages=[{
                     "role": "user",
                     "content": [
                         {"type": "text", "text": "请详细描述这张图片的内容，提取所有可识别的文字信息。"},
-                        {"type": "image_url", "image_url": {"url": data_uri}},
+                        {"type": "image_url", "image_url": {"url": public_url}},
                     ],
                 }],
                 max_tokens=2000,
