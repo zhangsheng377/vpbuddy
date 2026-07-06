@@ -1489,6 +1489,52 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
             fmt=format_str,
         )
 
+        # 启动自驱动文档 generator: 做完一轮看 ASR 文本变化量，有变化就继续
+        import threading as _threading
+        import time as _time2
+
+        _doc_run_lock = _threading.Lock()
+        _doc_last_text_len = [0]
+        _doc_running = [True]
+
+        def _doc_self_loop(gen_id: int, mid: str) -> dict:
+            """自驱动文档 runner: 做完 -> 比文本长度 -> 有增长就 resubmit."""
+            try:
+                kinds = [BATCH_DOCS_KIND, DEMO_KIND]
+                results = {}
+                for kind in kinds:
+                    try:
+                        r = _dispatch_kind(mid, kind, dry_run=False)
+                        results[kind] = {"triggered": r.get("triggered"), "error": r.get("error")}
+                    except Exception as e:
+                        results[kind] = {"triggered": False, "error": str(e)}
+            finally:
+                # 检查 ASR 文本是否有新内容
+                if not _doc_running[0]:
+                    return results
+                try:
+                    from ..storage import MeetingStorage
+                    st = MeetingStorage(DATA_DIR)
+                    if st.exists(mid):
+                        state = st.load(mid)
+                        cur_len = len(state.cleaned_text) if state.cleaned_text else 0
+                        with _doc_run_lock:
+                            prev = _doc_last_text_len[0]
+                            _log.info("[ws_realtime_asr] doc_loop: prev=%d cur=%d", prev, cur_len)
+                            if cur_len > prev + 100:  # 新内容 >100 字
+                                _doc_last_text_len[0] = cur_len
+                                get_task_manager().submit(mid, _doc_self_loop)
+                except Exception:
+                    pass
+            return results
+
+        # 延迟 10s 给 ASR 一些初始文本，然后提交第一轮
+        async def _kick_docs():
+            await _asyncio.sleep(10)
+            get_task_manager().submit(meeting_id, _doc_self_loop)
+
+        _asyncio.create_task(_kick_docs())
+
         # Phase 3: relay — 音频帧 → 百炼, 同时监听 stop
         import asyncio as _asyncio
         from starlette.websockets import WebSocketState
@@ -1520,12 +1566,21 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
         except Exception:
             pass
     finally:
+        _doc_running[0] = False
         if session:
             stop_session(session)
         try:
             await websocket.close()
         except Exception:
             pass
+
+        # WS 断开后最后一次文档生成兜底
+        try:
+            from ..ui_server import _close_meeting
+            _log.info("[ws_realtime_asr] final close_meeting, meeting=%s", meeting_id)
+            _close_meeting(meeting_id)
+        except Exception as _ce:
+            _log.error("[ws_realtime_asr] close_meeting failed: %s", _ce)
 
 
 # =============================================================================
