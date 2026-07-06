@@ -2,7 +2,7 @@
 
 > **本地优先的会议操作系统级 AI 助手** —— 为 VP / 售前 / 项目负责人设计,运行在 VP 自己桌面客户端,数据完全本地化。
 
-**v0.15.3** (2026-07-06) — ASR VAD 修复 + Vision API 调通(data:image base64) + 图片双路(文件路径+KB)。详见 [Releases](https://github.com/zhangsheng377/vpbuddy/releases)。
+**v0.16.0** (2026-07-07) — 百炼 Fun-ASR-Realtime WS 实时转写，首字延迟 <100ms，客户端 Rust WebSocket 音频流推送，服务端 Python relay。详见 [Releases](https://github.com/zhangsheng377/vpbuddy/releases)。
 
 [English](#english) | [中文](#中文)
 
