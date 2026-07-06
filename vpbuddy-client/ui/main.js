@@ -1236,3 +1236,4 @@ document.getElementById("btn-open-config-dir")?.addEventListener("click", async 
     setTimeout(() => { btn.textContent = "打开配置文件"; }, 2000);
   }
 });
+
