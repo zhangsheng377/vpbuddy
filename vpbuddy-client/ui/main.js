@@ -113,7 +113,8 @@ document.getElementById("btn-rec").addEventListener("click", async () => {
     try {
       const e = document.getElementById("audio-device").value || null;
       const sourceKind = document.getElementById("audio-source-kind").value || "microphone";
-      currentMeetingId = await invoke("start_realtime_capture", {
+      currentMeetingId = await invoke("start_capture", {
+        autoUpload: document.getElementById("auto-upload").checked,
         audioDevice: e,
         meetingId: mid,
         audioSource: sourceKind,
@@ -369,50 +370,55 @@ listen("transcript-segment", (e) => {
   }
   segCount += 1;
   const list = document.getElementById("stream-list");
-  const startSec = seg.start_sec || 0;
-  const spkId = seg.speaker_id || "SPEAKER_00";
-  const text = seg.text || "";
-  
-  // 实时模式: 用 begin_time + speaker_id 去重
-  const dedupKey = `${startSec.toFixed(1)}|${spkId}`;
-  let item = _asrDedup.get(dedupKey);
-  
-  if (item) {
-    // 更新已有行
-    const textSpan = item.querySelector(".text");
-    if (textSpan) textSpan.textContent = text;
-    // 如果句子完整, 标记行结束
-    if (seg.is_sentence_end) {
-      item.classList.add("stream-item-final");
-      _asrDedup.delete(dedupKey);  // 不再更新此行
+
+  // 两种模式:
+  // A) cleaned 多行 (HTTP chunk): seg.cleaned==true, text 可能含 \n
+  // B) WS 实时 (百炼): 单行, is_sentence_end 标记完整性
+  const isCleaned = seg.cleaned === true;
+  const lines = isCleaned
+    ? (seg.text || "").split("\n").filter(l => l.trim())
+    : [seg.text || ""];
+
+  for (const line of lines) {
+    let timeStr = "", spkId = seg.speaker_id || "SPEAKER_00", text = line;
+    // 旧版 cleaned 行: [MM:SS] SPEAKER: text
+    const m = line.match(/^\[(\d+:\d+[\.\d]*)\]\s*(SPEAKER_\w+|UNKNOWN):\s*(.*)/);
+    if (m) { timeStr = m[1]; spkId = m[2]; text = m[3]; }
+    else {
+      const startSec = seg.start_sec || 0;
+      timeStr = `${String(Math.floor(startSec/60)).padStart(2,"0")}:${(startSec%60).toFixed(1).padStart(4,"0")}`;
     }
-    item.classList.add("stream-item-fresh");
-    setTimeout(() => item.classList.remove("stream-item-fresh"), 600);
-  } else {
-    // 新建行
-    const mm = Math.floor(startSec / 60).toString().padStart(2, "0");
-    const ss = (startSec % 60).toFixed(1).padStart(4, "0");
-    const timeStr = `${mm}:${ss}`;
-    const colorIdx = parseInt(spkId.slice(-2), 10) % 8;
-    item = document.createElement("div");
-    item.className = "stream-item";
-    if (seg.is_sentence_end) item.classList.add("stream-item-final");
-    item.innerHTML =
-      `<span class="time">${timeStr}</span>` +
-      `<span class="spk spk-${colorIdx}">${escapeHtml(spkId)}</span>` +
-      ` <span class="text">${escapeHtml(text)}</span>`;
-    list.insertBefore(item, list.firstChild);
-    item.classList.add("stream-item-fresh");
-    setTimeout(() => item.classList.remove("stream-item-fresh"), 600);
-    
-    if (!seg.is_sentence_end) {
-      _asrDedup.set(dedupKey, item);  // 未完成: 留下等后续更新
+
+    // 实时模式去重: 同时间+说话人的行原地更新
+    const dedupKey = `${seg.start_sec?.toFixed?.(1) || "0.0"}|${spkId}`;
+    let item = isCleaned ? null : _asrDedup.get(dedupKey);
+
+    if (item) {
+      const textSpan = item.querySelector(".text");
+      if (textSpan) textSpan.textContent = text;
+      if (seg.is_sentence_end) { item.classList.add("stream-item-final"); _asrDedup.delete(dedupKey); }
+      item.classList.add("stream-item-fresh");
+      setTimeout(() => item.classList.remove("stream-item-fresh"), 600);
+    } else {
+      const colorIdx = parseInt(spkId.slice(-2), 10) % 8;
+      item = document.createElement("div");
+      item.className = "stream-item";
+      if (isCleaned) item.classList.add("stream-item-cleaned");
+      if (seg.is_sentence_end) item.classList.add("stream-item-final");
+      item.innerHTML =
+        `<span class="time">${timeStr}</span>` +
+        `<span class="spk spk-${colorIdx}">${escapeHtml(spkId)}</span>` +
+        ` <span class="text">${escapeHtml(text)}</span>`;
+      list.insertBefore(item, list.firstChild);
+      item.classList.add("stream-item-fresh");
+      setTimeout(() => item.classList.remove("stream-item-fresh"), 600);
+      if (!isCleaned && !seg.is_sentence_end) _asrDedup.set(dedupKey, item);
     }
   }
-  
+
   document.getElementById("seg-count").textContent = `${segCount} 段 (${_asrDedup.size} 进行中)`;
   const lastBadge = document.getElementById("last-seg");
-  if (lastBadge) lastBadge.textContent = `最新: ${text.slice(0, 30)}`;
+  if (lastBadge) lastBadge.textContent = `最新: ${(seg.text || "").slice(0, 30)}`;
 });
 
 listen("capture-stats", (e) => {
