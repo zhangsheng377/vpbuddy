@@ -2,7 +2,7 @@
 
 > **本地优先的会议操作系统级 AI 助手** —— 为 VP / 售前 / 项目负责人设计,运行在 VP 自己桌面客户端,数据完全本地化。
 
-**v0.8.6** (2026-07-05) — fork 架构 + 客户端 CI 全线修复 + 三平台构建自动化。详见 [Releases](https://github.com/zhangsheng377/vpbuddy/releases/tag/v0.8.6)。
+**v0.15.2** (2026-07-06) — 会议材料 Material 实体 + 图片 vision 分析 + 全流程 E2E 40/40。详见 [Releases](https://github.com/zhangsheng377/vpbuddy/releases)。
 
 [English](#english) | [中文](#中文)
 
