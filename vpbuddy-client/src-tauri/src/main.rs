@@ -186,6 +186,7 @@ async fn start_capture(
     audio_device: Option<String>,
     meeting_id: Option<String>,
     audio_source: Option<String>,
+    auth_token: Option<String>,
 ) -> Result<String, String> {
     if state.capturing.load(Ordering::SeqCst) {
         return Err("已在采集中".into());
@@ -216,7 +217,7 @@ async fn start_capture(
 
     // 1. 在 GPU 端 init 会议 (复用 UI 选的 meeting_id)
     let gpu_url = state.gpu_url.lock().await.clone();
-    let meeting_id = upload::init_meeting(&gpu_url, &mid_in, &audio_source_norm)
+    let meeting_id = upload::init_meeting(&gpu_url, &mid_in, &audio_source_norm, auth_token)
         .await
         .map_err(|e| {
             log::error!("init 会议失败: {e}");
@@ -336,6 +337,7 @@ async fn start_realtime_capture(
     audio_device: Option<String>,
     meeting_id: Option<String>,
     audio_source: Option<String>,
+    auth_token: Option<String>,
 ) -> Result<String, String> {
     if state.capturing.load(Ordering::SeqCst) {
         return Err("已在采集中".into());
@@ -355,7 +357,7 @@ async fn start_realtime_capture(
     log::info!("  meeting_id: {mid_in}, audio_source: {audio_source_norm}");
 
     let gpu_url = state.gpu_url.lock().await.clone();
-    let meeting_id = upload::init_meeting(&gpu_url, &mid_in, &audio_source_norm)
+    let meeting_id = upload::init_meeting(&gpu_url, &mid_in, &audio_source_norm, auth_token)
         .await.map_err(|e| format!("init 会议失败: {e}"))?;
     log::info!("  ✓ meeting_id: {meeting_id}");
     *state.meeting_id.lock().await = Some(meeting_id.clone());

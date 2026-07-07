@@ -143,18 +143,20 @@ impl BailianWsHandle {
 ///
 /// 2026-07-01 ADR-0021: 加 audio_source 参数 (?audio_source=microphone|loopback|both),
 /// 老客户端不传 → 默认 microphone (向后兼容).
-pub async fn create_meeting(gpu_url: &str, audio_source: &str) -> Result<String> {
+pub async fn create_meeting(gpu_url: &str, audio_source: &str, auth_token: Option<String>) -> Result<String> {
     let url = format!(
         "{}/api/meetings/stream_start?audio_source={}",
         gpu_url,
         urlencoding::encode(audio_source)
     );
     let client = reqwest::Client::new();
-    let resp = client
+    let mut req = client
         .post(&url)
-        .json(&serde_json::json!({"platform": "desktop_client"}))
-        .send()
-        .await?;
+        .json(&serde_json::json!({"platform": "desktop_client"}));
+    if let Some(tok) = auth_token {
+        req = req.header("Authorization", format!("Bearer {tok}"));
+    }
+    let resp = req.send().await?;
     let body: serde_json::Value = resp.json().await?;
     Ok(body["meeting_id"]
         .as_str()
@@ -167,7 +169,7 @@ pub async fn create_meeting(gpu_url: &str, audio_source: &str) -> Result<String>
 /// 调 POST /api/meetings/stream_start?meeting_id=XXX&audio_source=YYY
 /// 服务端: 若 XXX 已存在 → 复用 (返回原 meeting_id), 若不存在 → 用 XXX 创建新 state.
 /// 返回服务端确认的 meeting_id (正常 = XXX 自身).
-pub async fn init_meeting(gpu_url: &str, meeting_id: &str, audio_source: &str) -> Result<String> {
+pub async fn init_meeting(gpu_url: &str, meeting_id: &str, audio_source: &str, auth_token: Option<String>) -> Result<String> {
     let url = format!(
         "{}/api/meetings/stream_start?meeting_id={}&audio_source={}",
         gpu_url,
@@ -175,11 +177,13 @@ pub async fn init_meeting(gpu_url: &str, meeting_id: &str, audio_source: &str) -
         urlencoding::encode(audio_source)
     );
     let client = reqwest::Client::new();
-    let resp = client
+    let mut req = client
         .post(&url)
-        .json(&serde_json::json!({"platform": "desktop_client"}))
-        .send()
-        .await?;
+        .json(&serde_json::json!({"platform": "desktop_client"}));
+    if let Some(tok) = auth_token {
+        req = req.header("Authorization", format!("Bearer {tok}"));
+    }
+    let resp = req.send().await?;
     let body: serde_json::Value = resp.json().await?;
     Ok(body["meeting_id"]
         .as_str()
@@ -342,7 +346,7 @@ mod tests {
             .create_async()
             .await;
 
-        let result = create_meeting(&server.url(), "microphone").await;
+        let result = create_meeting(&server.url(), "microphone", None).await;
         assert!(result.is_ok(), "create_meeting should succeed: {:?}", result.err());
         assert_eq!(result.unwrap(), "test-meeting-001");
 
@@ -361,7 +365,7 @@ mod tests {
             .create_async()
             .await;
 
-        let result = create_meeting(&server.url(), "mic & line").await;
+        let result = create_meeting(&server.url(), "mic & line", None).await;
         assert!(result.is_ok(), "create_meeting with encoded source should succeed: {:?}", result.err());
         assert_eq!(result.unwrap(), "enc-test");
 
@@ -378,7 +382,7 @@ mod tests {
             .create_async()
             .await;
 
-        let result = create_meeting(&server.url(), "microphone").await;
+        let result = create_meeting(&server.url(), "microphone", None).await;
         assert!(result.is_err(), "create_meeting should fail on 500");
         let err_msg = format!("{}", result.err().unwrap());
         assert!(err_msg.contains("500"), "error should mention HTTP 500");
@@ -396,7 +400,7 @@ mod tests {
             .create_async()
             .await;
 
-        let result = create_meeting(&server.url(), "microphone").await;
+        let result = create_meeting(&server.url(), "microphone", None).await;
         assert!(result.is_err(), "create_meeting should fail when meeting_id is missing");
         let err_msg = format!("{}", result.err().unwrap());
         assert!(err_msg.contains("no meeting_id"), "error should mention missing meeting_id");
@@ -415,7 +419,7 @@ mod tests {
             .create_async()
             .await;
 
-        let result = init_meeting(&server.url(), "existing-999", "loopback").await;
+        let result = init_meeting(&server.url(), "existing-999", "loopback", None).await;
         assert!(result.is_ok(), "init_meeting should succeed: {:?}", result.err());
         assert_eq!(result.unwrap(), "existing-999");
 
@@ -436,7 +440,7 @@ mod tests {
             .create_async()
             .await;
 
-        let result = init_meeting(&server.url(), "my meeting/with#chars", "loopback").await;
+        let result = init_meeting(&server.url(), "my meeting/with#chars", "loopback", None).await;
         assert!(result.is_ok(), "init_meeting with special chars should succeed: {:?}", result.err());
         assert_eq!(result.unwrap(), "my meeting/with#chars");
 
@@ -453,7 +457,7 @@ mod tests {
             .create_async()
             .await;
 
-        let result = init_meeting(&server.url(), "nonexistent", "microphone").await;
+        let result = init_meeting(&server.url(), "nonexistent", "microphone", None).await;
         assert!(result.is_err(), "init_meeting should fail on 404");
         let err_msg = format!("{}", result.err().unwrap());
         assert!(err_msg.contains("404"), "error should mention HTTP 404");
@@ -471,7 +475,7 @@ mod tests {
             .create_async()
             .await;
 
-        let result = init_meeting(&server.url(), "test-id", "microphone").await;
+        let result = init_meeting(&server.url(), "test-id", "microphone", None).await;
         assert!(result.is_err(), "init_meeting should fail when meeting_id is missing");
         let err_msg = format!("{}", result.err().unwrap());
         assert!(err_msg.contains("no meeting_id"), "error should mention missing meeting_id");
@@ -504,7 +508,7 @@ mod tests {
             .create_async()
             .await;
 
-        let result = create_meeting(&server.url(), "both").await;
+        let result = create_meeting(&server.url(), "both", None).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "both-test");
 

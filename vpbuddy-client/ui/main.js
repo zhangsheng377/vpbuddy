@@ -241,6 +241,7 @@ document.getElementById("btn-rec").addEventListener("click", async () => {
         audioDevice: e,
         meetingId: mid,
         audioSource: sourceKind,
+        authToken: getAuthToken(),
       });
       recording = true;
       startLatencyTicker();
