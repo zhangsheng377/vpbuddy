@@ -1,10 +1,11 @@
 # VPBuddy HTTP API 参考
 
-> **版本**: v0.16.4 · `@ 2026-07-07`
+> **版本**: v0.18.0 · `@ 2026-07-07`
 > **Base URL**: `http://47.100.182.3:28765`（公网 GPU 服务器）
 > **协议**: HTTP/1.1 · WebSocket 实时 ASR · SSE 实时推送 · Multipart 上传
 > **编码**: 所有请求/响应使用 UTF-8
 > **CORS**: 所有端点返回 `Access-Control-Allow-Origin: *`
+> **认证**: 除 `/api/auth/*` 外所有端点要求 `Authorization: Bearer <token>`
 
 ---
 
@@ -12,67 +13,84 @@
 
 1. [快速开始](#1-快速开始)
 2. [通用约定](#2-通用约定)
-3. [会议](#3-会议)
-   - [GET /api/meetings](#31-列出所有会议)
-   - [GET /api/meetings/{id}/state](#32-获取会议状态)
-   - [POST /api/meetings/upload](#33-上传音频自动生成文档)
-   - [POST /api/meetings/stream_start](#34-创建流式会议)
-   - [WS /api/meetings/{id}/realtime_asr](#35-websocket-实时-asr百炼-fun-asr-realtime)
-   - [POST /api/meetings/{id}/stream_chunk](#36-推送音频切片http-模式)
-   - [POST /api/meetings/{id}/stream_stop](#37-停止录音)
-   - [POST /api/meetings/{id}/close](#38-结束会议)
-   - [GET /api/meetings/check_id](#39-校验会议名)
-4. [文档](#4-文档)
-   - [GET /api/meetings/{id}/docs](#41-获取全部文档)
-   - [GET /api/meetings/{id}/docs/{kind}](#42-获取单个文档)
-   - [GET /api/meetings/{id}/demo/versions](#43-获取demo版本列表)
-5. [Chat 对话](#5-chat-对话)
-   - [POST /api/meetings/{id}/chat](#51-发送chat消息)
-   - [GET /api/meetings/{id}/chat/history](#52-获取chat历史)
-6. [协作提问](#6-协作提问)
-   - [POST /api/meetings/{id}/ask_question](#61-提问)
-   - [POST /api/meetings/{id}/answer_question](#62-回答)
-   - [GET /api/meetings/{id}/collab](#63-获取协作记录)
-7. [SSE 实时事件流](#7-sse-实时事件流)
-   - [GET /api/meetings/{id}/events](#71-sse-事件流)
-8. [知识库 (KB)](#8-知识库-kb)
-   - [GET /api/kb/search](#81-kb搜索get)
-   - [POST /api/kb/search](#82-kb搜索post)
-   - [POST /api/kb/upload](#83-上传文件到kb)
-   - [GET /api/kb/list](#84-kb统计)
-   - [DELETE /api/kb/{doc_id}](#85-删除kb文档)
-9. [系统](#9-系统)
-   - [GET /api/status](#91-系统状态)
-   - [GET /api/timeline](#92-时间线)
+3. [认证](#3-认证)
+   - [POST /api/auth/register](#31-注册)
+   - [POST /api/auth/login](#32-登录)
+   - [GET /api/auth/me](#33-校验当前用户)
+4. [会议](#4-会议)
+   - [GET /api/meetings](#41-列出所有会议)
+   - [GET /api/meetings/{id}/state](#42-获取会议状态)
+   - [POST /api/meetings/upload](#43-上传音频自动生成文档)
+   - [POST /api/meetings/stream_start](#44-创建流式会议)
+   - [WS /api/meetings/{id}/realtime_asr](#45-websocket-实时-asr百炼-fun-asr-realtime)
+   - [POST /api/meetings/{id}/stream_chunk](#46-推送音频切片http-模式)
+   - [POST /api/meetings/{id}/stream_stop](#47-停止录音)
+   - [POST /api/meetings/{id}/close](#48-结束会议)
+   - [GET /api/meetings/check_id](#49-校验会议名)
+5. [文档](#5-文档)
+   - [GET /api/meetings/{id}/docs](#51-获取全部文档)
+   - [GET /api/meetings/{id}/docs/{kind}](#52-获取单个文档)
+   - [GET /api/meetings/{id}/demo/versions](#53-获取demo版本列表)
+6. [Chat 对话](#6-chat-对话)
+   - [POST /api/meetings/{id}/chat](#61-发送chat消息)
+   - [GET /api/meetings/{id}/chat/history](#62-获取chat历史)
+7. [协作提问](#7-协作提问)
+   - [POST /api/meetings/{id}/ask_question](#71-提问)
+   - [POST /api/meetings/{id}/answer_question](#72-回答)
+   - [GET /api/meetings/{id}/collab](#73-获取协作记录)
+8. [SSE 实时事件流](#8-sse-实时事件流)
+   - [GET /api/meetings/{id}/events](#81-sse-事件流)
+9. [知识库 (KB)](#9-知识库-kb)
+   - [GET /api/kb/search](#91-kb搜索get)
+   - [POST /api/kb/search](#92-kb搜索post)
+   - [POST /api/kb/upload](#93-上传文件到kb)
+   - [GET /api/kb/list](#94-kb统计)
+   - [DELETE /api/kb/{doc_id}](#95-删除kb文档)
+10. [系统](#10-系统)
+   - [GET /api/status](#101-系统状态)
+   - [GET /api/timeline](#102-时间线)
 
 ---
 
 ## 1. 快速开始
 
+### 认证 (必读)
+
+```bash
+# 注册新用户, 获得 JWT token (72h 有效)
+curl -X POST http://47.100.182.3:28765/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"you@example.com","password":"your-password"}'
+
+# 响应: {"user_id":"...", "email":"you@example.com", "token":"eyJ..."}
+
+# 所有后续请求携带 token
+TOKEN="eyJ..."
+curl -H "Authorization: Bearer $TOKEN" http://47.100.182.3:28765/api/meetings
+```
+
 ### 实时会议 (WS 百炼 ASR — 推荐)
 
 ```bash
-# 1. 创建流式会议
-curl -X POST "http://47.100.182.3:28765/api/meetings/stream_start?meeting_id=my-meeting&audio_source=microphone"
+# 1. 创建流式会议 (需要 token)
+curl -X POST "http://47.100.182.3:28765/api/meetings/stream_start?meeting_id=my-meeting&audio_source=microphone" \
+  -H "Authorization: Bearer $TOKEN"
 
-# 2. 打开 WebSocket 实时 ASR 连接, 持续推送 PCM 音频帧
+# 2. WebSocket 实时 ASR — 连接后持续推送 PCM 音频帧
 # ws://47.100.182.3:28765/api/meetings/my-meeting/realtime_asr
-# 发送 JSON 控制消息 + binary PCM 帧 (16kHz, mono, int16)
 
-# 3. 15 秒后文档自动开始生成 (无需 close), 查文档
-curl http://47.100.182.3:28765/api/meetings/my-meeting/docs
+# 3. 15 秒后自动生成文档, 查看
+curl -H "Authorization: Bearer $TOKEN" \
+  http://47.100.182.3:28765/api/meetings/my-meeting/docs
 ```
 
 ### 上传音频 (离线模式)
 
 ```bash
-# 1. 上传 30s WAV 音频
 curl -X POST http://47.100.182.3:28765/api/meetings/upload \
+  -H "Authorization: Bearer $TOKEN" \
   -F "audio=@meeting.wav" \
   -F "project_name=产品评审会"
-
-# 2. 等 60s 后查看生成的文档
-curl http://47.100.182.3:28765/api/meetings/UPLOAD_20260704_174209_71171a80/docs
 ```
 
 ---
@@ -87,7 +105,11 @@ curl http://47.100.182.3:28765/api/meetings/UPLOAD_20260704_174209_71171a80/docs
 
 ### 认证
 
-当前 API **无认证**。公网部署建议通过防火墙/反向代理限制访问来源。
+所有 API 端点（除 `/api/auth/*`）要求 `Authorization: Bearer <token>` header。无 token 返回 `401 Unauthorized`。token 通过注册或登录获取，JWT 72 小时过期。参见 [§3 认证](#3-认证)。
+
+### 知识库隔离
+
+知识库按 `user_id` 隔离——每个用户上传的文件只会被自己的检索结果命中。会议仍然按 `meeting_id` 隔离，但 `GET /api/meetings` 只返回当前用户的会议。参见 [ADR-0047](decisions/0047-user-auth-kb-isolation.md)。
 
 ### 会议名规则
 
@@ -107,9 +129,101 @@ data: {json_string}
 
 ---
 
-## 3. 会议
+## 3. 认证
 
-### 3.1 列出所有会议
+### 3.1 注册
+
+```
+POST /api/auth/register
+```
+
+创建新用户，成功后直接返回 JWT token。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| email | string | 是 | 邮箱（唯一），自动转小写 |
+| password | string | 是 | 密码（≥6 位），bcrypt 存储 |
+
+**成功响应** `200`:
+```json
+{
+  "user_id": "a1b2c3d4e5f6",
+  "email": "you@example.com",
+  "token": "eyJhbGciOiJIUzI1NiIs..."
+}
+```
+
+**错误响应**:
+| 状态码 | 说明 |
+|--------|------|
+| 400 | 邮箱格式无效 / 密码 < 6 位 |
+| 409 | 邮箱已注册 |
+
+```bash
+curl -X POST http://47.100.182.3:28765/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"you@example.com","password":"yourpassword"}'
+```
+
+### 3.2 登录
+
+```
+POST /api/auth/login
+```
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| email | string | 是 | 邮箱 |
+| password | string | 是 | 密码 |
+
+**成功响应** `200`: 同注册，返回 `{user_id, email, token}`。
+
+**错误响应**:
+| 状态码 | 说明 |
+|--------|------|
+| 400 | 邮箱/密码为空 |
+| 401 | 邮箱或密码错误 |
+
+```bash
+curl -X POST http://47.100.182.3:28765/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"you@example.com","password":"yourpassword"}'
+```
+
+### 3.3 校验当前用户
+
+```
+GET /api/auth/me
+```
+
+验证 token 有效性并返回用户信息。**注意：此端点也要求 Bearer token**——它既是验证端点也是需要认证的端点。
+
+**Header**: `Authorization: Bearer <token>`
+
+**成功响应** `200`:
+```json
+{
+  "user_id": "a1b2c3d4e5f6",
+  "email": "you@example.com",
+  "created_at": "2026-07-07T14:30:00.000Z"
+}
+```
+
+| 状态码 | 说明 |
+|--------|------|
+| 401 | token 缺失 / 无效 / 已过期 |
+| 404 | 用户已删除 |
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  http://47.100.182.3:28765/api/auth/me
+```
+
+---
+
+## 4. 会议
+
+### 4.1 列出所有会议
 
 ```
 GET /api/meetings
@@ -135,7 +249,7 @@ GET /api/meetings
 
 ---
 
-### 3.2 获取会议状态
+### 4.2 获取会议状态
 
 ```
 GET /api/meetings/{id}/state
@@ -145,7 +259,7 @@ GET /api/meetings/{id}/state
 
 ---
 
-### 3.3 上传音频自动生成文档
+### 4.3 上传音频自动生成文档
 
 ```
 POST /api/meetings/upload
@@ -161,7 +275,7 @@ POST /api/meetings/upload
 
 ---
 
-### 3.4 创建流式会议
+### 4.4 创建流式会议
 
 ```
 POST /api/meetings/stream_start
@@ -186,7 +300,7 @@ POST /api/meetings/stream_start
 
 ---
 
-### 3.5 WebSocket 实时 ASR（百炼 Fun-ASR-Realtime）
+### 4.5 WebSocket 实时 ASR（百炼 Fun-ASR-Realtime）
 
 ```
 WS /api/meetings/{id}/realtime_asr
@@ -247,7 +361,7 @@ WS /api/meetings/{id}/realtime_asr
 
 ---
 
-### 3.6 推送音频切片 (HTTP 模式)
+### 4.6 推送音频切片 (HTTP 模式)
 
 ```
 POST /api/meetings/{id}/stream_chunk
@@ -269,7 +383,7 @@ POST /api/meetings/{id}/stream_chunk
 
 ---
 
-### 3.7 停止录音
+### 4.7 停止录音
 
 ```
 POST /api/meetings/{id}/stream_stop
@@ -279,7 +393,7 @@ POST /api/meetings/{id}/stream_stop
 
 ---
 
-### 3.8 结束会议
+### 4.8 结束会议
 
 ```
 POST /api/meetings/{id}/close
@@ -289,7 +403,7 @@ POST /api/meetings/{id}/close
 
 ---
 
-### 3.9 校验会议名
+### 4.9 校验会议名
 
 ```
 GET /api/meetings/check_id?id=XXX
@@ -301,9 +415,9 @@ GET /api/meetings/check_id?id=XXX
 
 ---
 
-## 4. 文档
+## 5. 文档
 
-### 4.1 获取全部文档
+### 5.1 获取全部文档
 
 ```
 GET /api/meetings/{id}/docs
@@ -347,7 +461,7 @@ WebSocket ASR 连接建立
 
 ---
 
-### 4.2 获取单个文档
+### 5.2 获取单个文档
 
 ```
 GET /api/meetings/{id}/docs/{kind}
@@ -359,7 +473,7 @@ GET /api/meetings/{id}/docs/{kind}
 
 ---
 
-### 4.3 获取 Demo 版本列表
+### 5.3 获取 Demo 版本列表
 
 ```
 GET /api/meetings/{id}/demo/versions
@@ -367,9 +481,9 @@ GET /api/meetings/{id}/demo/versions
 
 ---
 
-## 5. Chat 对话
+## 6. Chat 对话
 
-### 5.1 发送 Chat 消息
+### 6.1 发送 Chat 消息
 
 ```
 POST /api/meetings/{id}/chat
@@ -388,7 +502,7 @@ POST /api/meetings/{id}/chat
 
 ---
 
-### 5.2 获取 Chat 历史
+### 6.2 获取 Chat 历史
 
 ```
 GET /api/meetings/{id}/chat/history
@@ -396,9 +510,9 @@ GET /api/meetings/{id}/chat/history
 
 ---
 
-## 6. 协作提问
+## 7. 协作提问
 
-### 6.1 提问 / 6.2 回答 / 6.3 获取记录
+### 7.1 提问 / 7.2 回答 / 7.3 获取记录
 
 ```
 POST /api/meetings/{id}/ask_question?section=X&question=Y&asker=Z
@@ -408,9 +522,9 @@ GET  /api/meetings/{id}/collab
 
 ---
 
-## 7. SSE 实时事件流
+## 8. SSE 实时事件流
 
-### 7.1 SSE 事件流
+### 8.1 SSE 事件流
 
 ```
 GET /api/meetings/{id}/events
@@ -432,7 +546,7 @@ GET /api/meetings/{id}/events
 
 ---
 
-## 8. 知识库 (KB)
+## 9. 知识库 (KB)
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -444,15 +558,15 @@ GET /api/meetings/{id}/events
 
 ---
 
-## 9. 系统
+## 10. 系统
 
-### 9.1 系统状态
+### 10.1 系统状态
 
 ```
 GET /api/status
 ```
 
-### 9.2 时间线
+### 10.2 时间线
 
 ```
 GET /api/timeline
