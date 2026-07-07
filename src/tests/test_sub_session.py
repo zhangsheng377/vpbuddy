@@ -75,10 +75,10 @@ def populated_meeting():
     sid = "TEST12345ABCD"
     storage = MeetingStorage(data_dir=TEST_DATA)
     state = MeetingState(meeting_id=sid, platform=Platform.LOCAL)
-    state.add_requirement("客户要 SSO 登录", Priority.HIGH)
-    state.add_requirement("支持微信扫码", Priority.MEDIUM)
-    state.add_risk("OAuth 服务可能限流")
-    state.add_question("SSO 走哪个 IdP?")
+    state.requirements.append(Requirement(text="客户要 SSO 登录", priority=Priority.HIGH))
+    state.requirements.append(Requirement(text="支持微信扫码", priority=Priority.MEDIUM))
+    state.risks.append(Risk(text="OAuth 服务可能限流"))
+    state.open_questions.append(Question(text="SSO 走哪个 IdP?"))
     state.speaker_map["SPEAKER_00"] = "客户 张总"
     storage.save(state)
     yield sid
@@ -114,29 +114,22 @@ class TestDocPath:
 
 class TestFormatStateSummary:
     def test_includes_all_sections(self, populated_meeting):
-        """摘要包含所有累积项"""
+        """摘要包含 meeting_id + speaker_map (v0.10.0: 用 cleaned_text 取代旧 5 类 facts)."""
         state = MeetingStorage(data_dir=TEST_DATA).load(populated_meeting)
+        state.cleaned_text = "客户要求 SSO 登录, 支持微信扫码。风险: OAuth 服务可能限流。"
         summary = format_state_summary(state)
         assert "TEST12345ABCD" in summary
-        assert "需求" in summary
         assert "SSO 登录" in summary
-        assert "微信扫码" in summary
-        assert "风险" in summary
-        assert "OAuth 服务可能限流" in summary
-        assert "开放问题" in summary
-        assert "SSO 走哪个 IdP" in summary
         assert "speaker_map" in summary or "说话人" in summary
         assert "张总" in summary
 
     def test_no_truncation_yagni(self, populated_meeting):
-        """YAGNI:不截断,全量 dump"""
+        """YAGNI:不截断,全量 dump (≤8000 字)."""
         state = MeetingStorage(data_dir=TEST_DATA).load(populated_meeting)
-        for i in range(50):
-            state.add_requirement(f"需求 X{i}", Priority.LOW)
+        state.cleaned_text = "需求 X" + " ".join(f"X{i}" for i in range(500))
         summary = format_state_summary(state)
-        # 50 条全在里面(只测前 3 + 最后 1)
-        assert "需求 X0" in summary
-        assert "需求 X49" in summary
+        assert "需求 X" in summary
+        assert "X499" in summary
 
 
 class TestRenderPrompt:
@@ -155,8 +148,7 @@ class TestRenderPrompt:
                 assert "read_file" in p, f"{kind} prompt 缺 read_file (需读 state + 旧文档)"
                 assert "write_file" in p, f"{kind} prompt 缺 write_file (需写 5 个 Markdown)"
             elif kind == DEMO_KIND:
-                # demo agent 只产单 HTML 文件,文字响应即可,不该硬指定工具名
-                assert "read_file" not in p, f"{kind} prompt 不该指定 read_file"
+                # demo agent 需要先读旧 HTML 再增量修改, 允许 read_file
                 assert "write_file" not in p, f"{kind} prompt 不该指定 write_file"
                 assert "patch" not in p, f"{kind} prompt 不该指定 patch"
 
@@ -374,21 +366,22 @@ class TestOfflineDefaults:
     时 conftest 不加载。controller.py 顶部 setdefault 这俩 env var,KB add_document 才不联网。
     """
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows 子进程 Python 初始化受限")
     def test_hf_hub_offline_set_in_controller_module(self):
         """sub_session_controller.py 顶部应设 HF_HUB_OFFLINE=1"""
         import subprocess
-        import sys
-        env = {"PATH": os.environ.get("PATH", ""), "PYTHONPATH": "src"}
         result = subprocess.run(
             [sys.executable, "-c",
              "import os; from vpbuddy import sub_session_controller; "
              "print(os.environ.get('HF_HUB_OFFLINE', 'NOT_SET'))"],
-            capture_output=True, text=True, env=env,
+            capture_output=True, text=True,
+            env={"PATH": os.environ.get("PATH", ""), "PYTHONPATH": "src"},
             cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
         )
         assert result.stdout.strip() == "1", \
             f"Expected HF_HUB_OFFLINE=1 after import, got {result.stdout.strip()!r} (stderr: {result.stderr.strip()!r})"
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows 子进程 Python 初始化受限")
     def test_transformers_offline_set_in_controller_module(self):
         """sub_session_controller.py 顶部应设 TRANSFORMERS_OFFLINE=1"""
         import subprocess

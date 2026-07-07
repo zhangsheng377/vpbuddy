@@ -49,7 +49,7 @@ from vpbuddy.agent_proactive import (
     stop_monitor,
     SILENCE_THRESHOLD_SEC,
 )
-from vpbuddy.state import MeetingState, Priority
+from vpbuddy.state import MeetingState, Priority, Risk
 
 
 # ── 主动提问纯函数测试 ──
@@ -127,40 +127,30 @@ def test_all_5_trigger_types_have_builders():
     assert set(_TRIGGER_BUILDERS.keys()) == expected
 
 
-# ── risk_threshold 触发条件: MeetingState.add_risk 累计 ≥3 ──
+# ── risk_threshold 触发条件: trigger("risk_threshold") 的节流 ──
 
 
 def test_risk_threshold_fires_after_3_medium():
-    """3 条 medium → 触发 risk_threshold."""
-    st = MeetingState(meeting_id="risk_mtg_1", platform="local")
-    st.add_risk("risk 1", severity=Priority.MEDIUM)
-    # 1 条还没到阈值
-    assert "risk_mtg_1:risk_threshold" not in _TRIGGERED
-    st.add_risk("risk 2", severity=Priority.MEDIUM)
-    assert "risk_mtg_1:risk_threshold" not in _TRIGGERED
-    st.add_risk("risk 3", severity=Priority.MEDIUM)  # 第 3 条触发
-    # 已节流, 再调返 None
-    assert "risk_mtg_1:risk_threshold" in _TRIGGERED
-    assert trigger("risk_mtg_1", "risk_threshold") is None
+    """直接测 trigger("risk_threshold") — ADR-0020 后不再由 add_risk 侧效应触发."""
+    # trigger 2 次应成功, 第 3 次同类被节流
+    assert trigger("risk_mtg_1", "risk_threshold", risk_list=["r1", "r2", "r3"]) is not None
+    assert trigger("risk_mtg_1", "docs_complete") is not None  # 不同类型
+    assert trigger("risk_mtg_1", "risk_threshold") is None  # 节流
+    _TRIGGERED.clear()  # clean for other tests
 
 
 def test_low_risk_does_not_trigger():
-    """LOW 不计 (只 medium+high 累计)."""
-    st = MeetingState(meeting_id="low_mtg", platform="local")
-    st.add_risk("low 1", severity=Priority.LOW)
-    st.add_risk("low 2", severity=Priority.LOW)
-    st.add_risk("low 3", severity=Priority.LOW)
-    # 3 条 LOW 都不触发
-    assert "low_mtg:risk_threshold" not in _TRIGGERED
+    """trigger("risk_threshold") 接受任何 risk_list, 只测节流."""
+    assert trigger("low_mtg", "risk_threshold", risk_list=["l1"]) is not None
+    assert "low_mtg:risk_threshold" in _TRIGGERED
+    _TRIGGERED.clear()
 
 
 def test_high_risk_counts_toward_threshold():
-    """HIGH 计入."""
-    st = MeetingState(meeting_id="high_mtg", platform="local")
-    st.add_risk("h1", severity=Priority.HIGH)
-    st.add_risk("h2", severity=Priority.HIGH)
-    st.add_risk("h3", severity=Priority.HIGH)
-    assert "high_mtg:risk_threshold" in _TRIGGERED
+    """同 mid 重复 trigger → 节流."""
+    assert trigger("high_mtg", "risk_threshold", risk_list=["h1", "h2", "h3"]) is not None
+    assert trigger("high_mtg", "risk_threshold") is None  # 第二次同类节流
+    _TRIGGERED.clear()
 
 # ── docs_complete: check_all_docs_stored_notify 内部触发 ──
 

@@ -29,13 +29,13 @@ def test_validate_accepts_alphanumeric():
 def test_validate_rejects_too_short():
     ok, err = _validate_meeting_id("ab")
     assert ok is False
-    assert "3-32" in err
+    assert "3-48" in err
 
 
 def test_validate_rejects_too_long():
-    ok, err = _validate_meeting_id("a" * 33)
+    ok, err = _validate_meeting_id("a" * 49)
     assert ok is False
-    assert "3-32" in err
+    assert "3-48" in err
 
 
 def test_validate_rejects_spaces():
@@ -61,11 +61,11 @@ def test_validate_rejects_special_chars():
 
 
 def test_validate_exact_boundary_lengths():
-    """3 字符 OK, 32 字符 OK."""
+    """3 字符 OK, 48 字符 OK."""
     assert _validate_meeting_id("abc")[0] is True
-    assert _validate_meeting_id("a" * 32)[0] is True
+    assert _validate_meeting_id("a" * 48)[0] is True
     assert _validate_meeting_id("ab")[0] is False
-    assert _validate_meeting_id("a" * 33)[0] is False
+    assert _validate_meeting_id("a" * 49)[0] is False
 
 
 
