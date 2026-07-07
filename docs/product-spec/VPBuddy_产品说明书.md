@@ -1,34 +1,24 @@
 |> **说明**:本文档是 VPBuddy 产品说明书的当前版本。
-> 
-> **版本历史**:
-> - **v2.2** (2026-07-05): **v0.9.0 — 任务队列 + 经验蒸馏 + FastAPI 迁移 + BFF API**:
->   1. **后台任务队列 #5** (ADR-0042): per-meeting debounce + generation_id + bounded ThreadPoolExecutor, 避免长会议线程无限堆积
->   2. **经验蒸馏 Phase 1 #1** (ADR-0043): 会议结束时自动从 MeetingState 提取 6 类经验候选 (domain_fact / product_pattern / decision_rule / terminology / failure_lesson / user_preference), JSON 持久化 + 聚合索引, batch_docs 自动检索注入
->   3. **FastAPI 迁移 #6** (ADR-0044): FastAPI + CORSMiddleware + StreamingResponse + OpenAPI 自动文档, `vpbuddy ui` 默认走 FastAPI, `--legacy` 回退旧 http.server
->   4. **BFF API #9** (ADR-0044): 会议聚合 `GET /meetings/{id}/aggregate` + 设备状态 `GET /api/client/device-status`
->   5. **前端路由别名**: `GET /meetings`, `GET /meetings/{id}/transcript-segments`, `POST /meetings/{id}/recording/start|stop`, `GET /meetings/{id}/deliverables`, `GET /deliverables/{id}`, `POST /meetings/{id}/archive`
-> - **v2.1** (2026-07-04): **LLM env 透传 + fork 架构 + API 参考文档**:
->   1. **LLM env 透传** (ADR-0040): 子 agent 显式传 `OPENAI_BASE_URL` + `OPENAI_API_KEY`, 避免走 openrouter → 401
->   2. **fork 模型** (ADR-0041): doc agent 通过 `parent_session_id` 继承 chat 上下文, 不再独立 session
->   3. **新增 [API 参考文档](../api-reference.md)**: 所有 29 个 HTTP 端点 + SSE 事件流 + 典型流程, 供外部客户端集成
-> - **v1.0 - v1.13**: 已归档删除
-> - **v2.0** (2026-07-01): **8 项产品需求合入 v0.6**:
->   1. **录音支持麦克风 + 内录** (Linux 0 操作, macOS 需 BlackHole, Windows WASAPI loopback 0 操作) — 见 ADR-0021
->   2. **chat 页面支持文件/图片上传** (复用 KB 上传 API) — 见 ADR-0023
->   3. **知识库方案废弃旧库 + 改用户主动上传 + 会议隔离** (旧 sqlite-vec 全部删, 切 Chroma 嵌入式) — 见 ADR-0019/0020
->   4. **首页录音强制会议选择/创建** (按钮 disabled 直到选了旧会议或输入新会议名) — 见 ADR-0022
->   5. **chat 允许 agent 主动提问** (6 doc 完成 / 风险命中 / demo 新版本 / 停顿 / 节点 5 类 trigger, 可关) — 见 ADR-0023
->   6. **demo 版本号 + 多版本切换** (v1/v2/v3... 增量存档, 客户端可切) — 见 ADR-0024
->   7. **6 doc / demo / chat agent 都能网络搜索 + KB 检索** (DDG + Chroma 检索当前会议) — 见 ADR-0025
->   8. **RAG 切分逻辑跟项目解耦** (切 Chroma 嵌入式, 升级只换 framework 不动业务) — 见 ADR-0019
->
-> 详见 [总体架构 v1.21](../design/总体架构.md) + [ADR-0019 ~ 0025](../decisions/)
+|> 
+|> **版本历史**:
+|> - **v2.3** (2026-07-07): **v0.10 — 百炼 ASR 替换 + 文档自驱动**:
+|>   1. **百炼 Fun-ASR-Realtime** (ADR-0046): 替换 funasr+pyannote 本地 GPU 推理，阿里云云端实时逐句转写，无需管理 GPU 模型
+|>   2. **WebSocket 实时 ASR**: 客户端 PCM 流直连百炼，逐句回调写入 `cleaned_text`，延迟 <1s
+|>   3. **文档自驱动 15s 轮询**: 不再等 close，15s 后无条件提交第一轮，之后每 30s 检查增量自动重生成
+|>   4. **会议名长度**: 3-32 → 3-48 字符
+|> - **v2.2** (2026-07-05): **v0.9.0 — 任务队列 + 经验蒸馏 + FastAPI 迁移 + BFF API**:
+|>   1. **后台任务队列 #5** (ADR-0042): per-meeting debounce + generation_id + bounded ThreadPoolExecutor
+|>   2. **经验蒸馏 Phase 1 #1** (ADR-0043): 会议结束时自动提取 6 类经验候选
+|>   3. **FastAPI 迁移 #6** (ADR-0044): FastAPI + CORSMiddleware + StreamingResponse + OpenAPI 自动文档
+|>   4. **BFF API #9** (ADR-0044): 会议聚合 + 设备状态
+|> - **v2.1** (2026-07-04): **LLM env 透传 + fork 架构 + API 参考文档** (ADR-0040/0041)
+|> - **v2.0** (2026-07-01): **8 项产品需求合入 v0.6** (ADR-0019~0025)
 
 ---
 
-# VPBuddy 产品说明书 v2.2
+# VPBuddy 产品说明书 v2.3
 
-> **v2.2** (2026-07-05 修订 — **v0.9.0**): 后台任务队列 #5 / 经验蒸馏 Phase 1 #1 / FastAPI 迁移 #6 / BFF API #9 / 前端路由别名。详见 [ADR-0042 ~ 0044](../decisions/)。
+> **v2.3** (2026-07-07 修订 — **v0.10**): 百炼 Fun-ASR-Realtime 替换本地 ASR + WebSocket 实时逐句转写 + 文档自驱动 15s 轮询。详见 [总体架构 v1.43](../design/总体架构.md) + [ADR-0046](../decisions/0046-bailian-asr.md)。
 
 > **历史版本**:v1.0-v1.13 已归档删除。
 
@@ -305,8 +295,9 @@ VP 任何时候投屏/外发(无『完成』前提)
 
 ## 十二、版本历史
 
-- **v2.2 (2026-07-05)**: v0.9.0 — 后台任务队列 / 经验蒸馏 Phase 1 / FastAPI 迁移 / BFF API / 前端路由别名 (ADR-0042 ~ 0044)
-- **v2.1 (2026-07-04)**: LLM env 透传 / fork 架构 / API 参考文档 (ADR-0040 ~ 0041)
-- **v2.0 (2026-07-01)**: 8 项产品需求合入 v0.6 (ADR-0019 ~ 0025)
+- **v2.3 (2026-07-07)**: v0.10 — 百炼 Fun-ASR-Realtime 替换本地 ASR + WebSocket 实时逐句转写 + 文档自驱动 15s 轮询 (ADR-0046)
+- **v2.2 (2026-07-05)**: v0.9.0 — 后台任务队列 / 经验蒸馏 Phase 1 / FastAPI 迁移 / BFF API (ADR-0042~0044)
+- **v2.1 (2026-07-04)**: LLM env 透传 / fork 架构 / API 参考文档 (ADR-0040~0041)
+- **v2.0 (2026-07-01)**: 8 项产品需求合入 v0.6 (ADR-0019~0025)
 - v1.13 (2026-06-21): 删除飞书 SDK / 妙记 API, 自接 Whisper + pyannote (ADR-0008)
 - v1.0-v1.12: 已归档删除
