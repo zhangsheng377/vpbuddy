@@ -5,11 +5,82 @@
   --text: #e8e8e8;
   --text2: #a0a0a0;
   --accent: #5e6ad2;
-  --success: #10b981;
-  --danger: #ef4444;
-  --warning: #f59e0b;
+  --accent-hover: #4f5bc9;
+  --err: #f87171;
+  --success: #34d399;
+  --warn: #fbbf24;
+  --bg4: #2e3032;
+  --bg5: #3a3c3f;
   --border: rgba(255,255,255,0.08);
+  --bg-surface: #1e1f21;
+  --bg-panel: #141516;
+  --text-primary: #d0d0d0;
 }
+
+/* ===== ADR-0047: Auth overlay ===== */
+.auth-overlay {
+  position: fixed; inset: 0; z-index: 9999;
+  background: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+  flex-direction: column;
+}
+.auth-card {
+  background: var(--bg2);
+  border-radius: 16px;
+  padding: 40px 48px;
+  width: 360px; max-width: 90vw;
+  text-align: center;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+}
+.auth-logo {
+  width: 56px; height: 56px;
+  background: var(--accent);
+  color: #fff; font-size: 28px; font-weight: 700;
+  border-radius: 14px;
+  display: flex; align-items: center; justify-content: center;
+  margin: 0 auto 12px;
+}
+.auth-card h2 {
+  margin: 0; font-size: 22px; color: var(--text);
+}
+.auth-subtitle {
+  margin: 4px 0 20px; color: var(--text2); font-size: 13px;
+}
+.auth-error {
+  color: #f87171; font-size: 13px; margin-bottom: 12px; min-height: 20px;
+}
+.auth-form {
+  display: flex; flex-direction: column; gap: 10px;
+}
+.auth-form input {
+  padding: 12px 14px;
+  border: 1px solid var(--bg3);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  outline: none; transition: border-color 0.2s;
+}
+.auth-form input:focus {
+  border-color: var(--accent);
+}
+.auth-btn {
+  padding: 12px;
+  border: none; border-radius: 8px;
+  background: var(--accent);
+  color: #fff; font-size: 15px; font-weight: 600;
+  cursor: pointer; transition: background 0.2s;
+  margin-top: 4px;
+}
+.auth-btn:hover { background: var(--accent-hover); }
+.auth-switch {
+  margin: 8px 0 0; font-size: 13px; color: var(--text2);
+}
+.auth-switch a {
+  color: var(--accent); text-decoration: none; cursor: pointer;
+}
+.auth-switch a:hover { text-decoration: underline; }
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { font-family: -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); font-size: 13px; height: 100vh; overflow: hidden; }
 #app { display: flex; flex-direction: column; height: 100vh; }

@@ -135,6 +135,7 @@ class MeetingState(BaseModel):
     meeting_id: str = Field(default_factory=lambda: uuid4().hex[:12].upper())
     platform: Platform = Platform.LOCAL  # 默认 LOCAL (VP 桌面客户端麦克风/系统音频, ADR-0004)
     audio_source: AudioSourceKind = AudioSourceKind.MICROPHONE  # 2026-07-01 ADR-0021: 麦克风/内录/双轨
+    owner_id: str = ""  # 2026-07-07 ADR-0047: 会议归属用户
     project_name: str | None = None
     started_at: str = Field(default_factory=_now)
 

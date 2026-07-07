@@ -25,6 +25,130 @@ if (!invoke && window.__TAURI__ && window.__TAURI__.core) {
   listen = () => Promise.reject(new Error("Tauri 未连接"));
 }
 
+// ============================================================================
+// ADR-0047: Auth state & token management
+// ============================================================================
+let authToken = null;
+let authEmail = null;
+
+function getAuthToken() {
+  if (!authToken) { authToken = localStorage.getItem("vpbuddy-token"); }
+  return authToken;
+}
+function setAuthToken(token, email) {
+  authToken = token; authEmail = email;
+  localStorage.setItem("vpbuddy-token", token);
+  localStorage.setItem("vpbuddy-email", email);
+}
+function clearAuthToken() {
+  authToken = null; authEmail = null;
+  localStorage.removeItem("vpbuddy-token");
+  localStorage.removeItem("vpbuddy-email");
+}
+function fetchWithAuth(url, opts = {}) {
+  const token = getAuthToken();
+  if (!token) return fetch(url, opts);
+  opts.headers = opts.headers || {};
+  opts.headers["Authorization"] = "Bearer " + token;
+  return fetch(url, opts);
+}
+
+// ============================================================================
+// Auth UI: login / register overlay
+// ============================================================================
+async function checkAuthAndInit() {
+  const overlay = document.getElementById("auth-overlay");
+  if (!overlay) return;
+
+  // Bind auth form events
+  document.getElementById("auth-login-btn")?.addEventListener("click", handleLogin);
+  document.getElementById("auth-register-btn")?.addEventListener("click", handleRegister);
+  document.getElementById("auth-show-login")?.addEventListener("click", showLoginForm);
+  document.getElementById("auth-show-register")?.addEventListener("click", showRegisterForm);
+
+  const token = getAuthToken();
+  if (!token) { overlay.style.display = "flex"; return; }
+
+  try {
+    const gpu = await getGpuUrl();
+    const resp = await fetch(gpu + "/api/auth/me", { headers: { Authorization: "Bearer " + token } });
+    if (resp.ok) {
+      const data = await resp.json();
+      authEmail = data.email;
+      overlay.style.display = "none";
+    } else { clearAuthToken(); overlay.style.display = "flex"; return; }
+  } catch (e) { clearAuthToken(); overlay.style.display = "flex"; return; }
+
+  // Authenticated — run init
+  initAfterAuth();
+}
+
+function initAfterAuth() {
+  initAudioDevices();
+  (async () => {
+    const el = document.getElementById("log-path");
+    if (!el) return;
+    try { const p = await invoke("get_log_path_cmd"); el.textContent = p; el.title = p; }
+    catch(e) { el.textContent = "(获取失败: " + e + ")"; }
+  })();
+  loadMeetings();
+}
+
+async function handleLogin(e) {
+  e.preventDefault();
+  const email = document.getElementById("auth-email").value.trim();
+  const password = document.getElementById("auth-password").value;
+  const errEl = document.getElementById("auth-error");
+  errEl.textContent = "";
+  if (!email || !password) { errEl.textContent = "请填写邮箱和密码"; return; }
+  try {
+    const gpu = await getGpuUrl();
+    const resp = await fetch(gpu + "/api/auth/login", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await resp.json();
+    if (resp.ok) {
+      setAuthToken(data.token, data.email);
+      document.getElementById("auth-overlay").style.display = "none";
+      initAfterAuth();
+    } else { errEl.textContent = data.error || "登录失败"; }
+  } catch(e) { errEl.textContent = "网络错误"; }
+}
+
+async function handleRegister(e) {
+  e.preventDefault();
+  const email = document.getElementById("auth-email").value.trim();
+  const password = document.getElementById("auth-password").value;
+  const errEl = document.getElementById("auth-error"); errEl.textContent = "";
+  if (!email || !password) { errEl.textContent = "请填写邮箱和密码"; return; }
+  if (password.length < 6) { errEl.textContent = "密码至少 6 位"; return; }
+  try {
+    const gpu = await getGpuUrl();
+    const resp = await fetch(gpu + "/api/auth/register", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await resp.json();
+    if (resp.ok) {
+      setAuthToken(data.token, data.email);
+      document.getElementById("auth-overlay").style.display = "none";
+      initAfterAuth();
+    } else { errEl.textContent = data.error || "注册失败"; }
+  } catch(e) { errEl.textContent = "网络错误"; }
+}
+
+function showLoginForm() {
+  document.getElementById("auth-login-form").style.display = "block";
+  document.getElementById("auth-register-form").style.display = "none";
+  document.getElementById("auth-error").textContent = "";
+}
+function showRegisterForm() {
+  document.getElementById("auth-login-form").style.display = "none";
+  document.getElementById("auth-register-form").style.display = "block";
+  document.getElementById("auth-error").textContent = "";
+}
+
 // === 状态 ===
 let recording = false;
 let segCount = 0;
@@ -175,8 +299,8 @@ function resolveMeetingId() {
       input.focus();
       return null;
     }
-    if (inputVal.length < 3 || inputVal.length > 32) {
-      alert("会议名长度需 3-32 字符");
+    if (inputVal.length < 3 || inputVal.length > 48) {
+      alert("会议名长度需 3-48 字符");
       input.focus();
       return null;
     }
@@ -207,7 +331,7 @@ async function loadMeetings() {
   if (!sel) return;
   const gpu = await getGpuUrl();
   try {
-    const r = await fetch(`${gpu}/api/meetings`);
+    const r = await fetchWithAuth(`${gpu}/api/meetings`);
     const data = await r.json();
     const currentVal = sel.value;
     sel.innerHTML = '<option value="">— 选择已有会议 —</option>' +
@@ -241,7 +365,7 @@ document.getElementById("btn-end-meeting")?.addEventListener("click", async () =
     await invoke("stop_capture");
     // 再调服务端 close
     const gpu = await getGpuUrl();
-    const r = await fetch(`${gpu}/api/meetings/${currentMeetingId}/close`, { method: "POST" });
+    const r = await fetchWithAuth(`${gpu}/api/meetings/${currentMeetingId}/close`, { method: "POST" });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     status_recording_update("会议已结束");
     currentMeetingId = null;
@@ -1206,18 +1330,13 @@ function escapeHtml(s) {
 
 initAudioDevices();
 
+// 2026-07-07 ADR-0047: 启动时先检查 token → 未登录则显示 auth overlay
+// initAfterAuth() 在登录成功后或 token 验证通过后由 checkAuthAndInit() 调用
+checkAuthAndInit();
+
 // 2026-06-27: 设置页显示客户端日志路径 + 复制按钮
-(async () => {
-  const el = document.getElementById("log-path");
-  if (!el) return;
-  try {
-    const p = await invoke("get_log_path_cmd");
-    el.textContent = p;
-    el.title = p;
-  } catch (e) {
-    el.textContent = "(获取失败: " + e + ")";
-  }
-})();
+// (已移到 initAfterAuth, 这里只留事件绑定)
+
 document.getElementById("btn-open-log-dir")?.addEventListener("click", async () => {
   const btn = document.getElementById("btn-open-log-dir");
   if (!btn) return;

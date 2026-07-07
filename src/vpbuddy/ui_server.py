@@ -561,6 +561,7 @@ def list_meetings() -> list[dict]:
             cleaned_len = len(data.get("cleaned_text", ""))
             out.append({
                 "meeting_id": data.get("meeting_id", f.stem),
+                "owner_id": data.get("owner_id", ""),  # 2026-07-07 ADR-0047
                 "platform": data.get("platform", "unknown"),
                 "audio_source": data.get("audio_source", "microphone"),  # 2026-07-01 ADR-0021
                 "project_name": data.get("project_name"),

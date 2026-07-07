@@ -119,15 +119,17 @@ def _is_image(filename: str) -> bool:
     return Path(filename).suffix.lower() in ALLOWED_IMAGE_EXTENSIONS
 
 
-def handle_kb_upload(body: bytes, content_type: str) -> dict:
-    """POST /api/kb/upload — 上传文件进 KB.
+def handle_kb_upload(body: bytes, content_type: str, user_id: str = "") -> dict:
+    """POST /api/kb/upload — 上传文件进 KB (ADR-0047: 按 user_id 存储).
 
     multipart/form-data:
-        meeting_id: str (必填)
-        file: binary (必填, .txt/.md/.pdf) — 单文件 (向后兼容老调用方)
+        meeting_id: str (必填, 用于上传目录组织)
+        file: binary (必填, .txt/.md/.pdf)
 
     2026-07-01 ADR-0023: _parse_multipart 升级支持多文件, 这里为向后兼容仍只取
     files[0]. 多文件上传请走 handle_chat_upload (POST /api/meetings/{id}/chat).
+
+    2026-07-07 ADR-0047: Chroma metadata 加 user_id, 检索按 user 隔离.
     """
     try:
         parts = _parse_multipart(body, content_type)
@@ -166,7 +168,7 @@ def handle_kb_upload(body: bytes, content_type: str) -> dict:
     if not text.strip():
         return {"error": "文件内容为空", "status": 400}
 
-    # 入库 Chroma
+    # 入库 Chroma (ADR-0047: metadata 加 user_id)
     rag = get_rag()
     doc_id = f"{meeting_id}:{file_uuid}"
     now = datetime.now(UTC).isoformat()
@@ -174,6 +176,7 @@ def handle_kb_upload(body: bytes, content_type: str) -> dict:
         ids=[doc_id],
         documents=[text],
         metadatas=[{
+            "user_id": user_id,
             "meeting_id": meeting_id,
             "source": f"upload:{filename}",
             "uploaded_at": now,
@@ -283,8 +286,8 @@ def handle_chat_upload(body: bytes, content_type: str, meeting_id: str) -> dict:
     }
 
 
-def handle_kb_search(params: dict[str, list[str]], body_bytes: bytes) -> dict:
-    """POST /api/kb/search — 检索 KB (默认带 meeting_id 过滤)."""
+def handle_kb_search(params: dict[str, list[str]], body_bytes: bytes, user_id: str = "") -> dict:
+    """POST /api/kb/search — 检索 KB (ADR-0047: 按 user_id 过滤)."""
     if body_bytes.strip():
         try:
             req = json.loads(body_bytes)
@@ -301,12 +304,15 @@ def handle_kb_search(params: dict[str, list[str]], body_bytes: bytes) -> dict:
     meeting_id = req.get("meeting_id") or params.get("meeting_id", [None])[0]
     scope = req.get("scope", "current")
 
-    where: dict[str, str] | None = None
-    if scope == "current" and meeting_id:
-        where = {"meeting_id": meeting_id}
+    # ADR-0047: 按 user_id 过滤 (知识库跨会议共享但按用户隔离)
+    where: dict[str, str] = {}
+    if user_id:
+        where["user_id"] = user_id
+    elif scope == "current" and meeting_id:
+        where["meeting_id"] = meeting_id  # 向后兼容: 无 user_id 时仍按 meeting 过滤
 
     rag = get_rag()
-    results = rag.query(query, top_k=top_k, where=where)
+    results = rag.query(query, top_k=top_k, where=where if where else None)
 
     return {
         "results": results,

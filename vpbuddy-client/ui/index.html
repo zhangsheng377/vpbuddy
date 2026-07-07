@@ -7,6 +7,28 @@
   <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
+  <!-- ADR-0047: Auth overlay — 启动时覆盖主界面 -->
+  <div id="auth-overlay" class="auth-overlay" style="display:flex;">
+    <div class="auth-card">
+      <div class="auth-logo">V</div>
+      <h2>VPBuddy</h2>
+      <p class="auth-subtitle">单用户会议 AI 助手</p>
+      <div id="auth-error" class="auth-error"></div>
+      <form id="auth-login-form" class="auth-form" onsubmit="return false;">
+        <input type="email" id="auth-email" placeholder="邮箱" required autofocus />
+        <input type="password" id="auth-password" placeholder="密码" required />
+        <button type="submit" id="auth-login-btn" class="auth-btn">登 录</button>
+        <p class="auth-switch">没有账号？<a href="#" id="auth-show-register">注册新账号</a></p>
+      </form>
+      <form id="auth-register-form" class="auth-form" style="display:none;" onsubmit="return false;">
+        <input type="email" id="auth-email" placeholder="邮箱" required />
+        <input type="password" id="auth-password" placeholder="密码 (至少 6 位)" required />
+        <button type="submit" id="auth-register-btn" class="auth-btn">注 册</button>
+        <p class="auth-switch">已有账号？<a href="#" id="auth-show-login">返回登录</a></p>
+      </form>
+    </div>
+  </div>
+
   <div id="app">
     <header class="topbar">
       <div class="brand">

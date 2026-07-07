@@ -22,10 +22,11 @@ from typing import Any, AsyncGenerator
 from urllib.parse import parse_qs, urlparse
 
 import uvicorn
-from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 # ── 从 ui_server 导入业务函数和常量 ──
 from ..ui_server import (
@@ -130,15 +131,84 @@ async def startup_warmup():
 
 
 # =============================================================================
+# Auth dependency
+# =============================================================================
+
+_auth_scheme = HTTPBearer(auto_error=False)
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_auth_scheme),
+) -> dict:
+    """FastAPI dependency: 从 Bearer token 提取 user_id."""
+    if credentials is None:
+        raise HTTPException(status_code=401, detail={"error": "请先登录", "status": 401})
+    from .auth import verify_token
+
+    user = verify_token(credentials.credentials)
+    if user is None:
+        raise HTTPException(status_code=401, detail={"error": "token 无效或已过期", "status": 401})
+    return user
+
+
+# =============================================================================
+# Auth Routes
+# =============================================================================
+
+
+@app.post("/api/auth/register")
+async def auth_register(request: Request):
+    """POST /api/auth/register — 注册"""
+    body = await request.json()
+    email = (body.get("email") or "").strip()
+    password = (body.get("password") or "").strip()
+    from .auth import register_user
+
+    result = register_user(email, password, data_dir=str(DATA_DIR))
+    status = result.pop("status", 200)
+    if status != 200:
+        raise HTTPException(status_code=status, detail=result)
+    return result
+
+
+@app.post("/api/auth/login")
+async def auth_login(request: Request):
+    """POST /api/auth/login — 登录"""
+    body = await request.json()
+    email = (body.get("email") or "").strip()
+    password = (body.get("password") or "").strip()
+    from .auth import login_user
+
+    result = login_user(email, password, data_dir=str(DATA_DIR))
+    status = result.pop("status", 200)
+    if status != 200:
+        raise HTTPException(status_code=status, detail=result)
+    return result
+
+
+@app.get("/api/auth/me")
+async def auth_me(user: dict = Depends(get_current_user)):
+    """GET /api/auth/me — 验证当前用户"""
+    from .auth import get_user_by_id
+
+    info = get_user_by_id(user["user_id"], data_dir=str(DATA_DIR))
+    if info is None:
+        raise HTTPException(status_code=404, detail={"error": "用户不存在", "status": 404})
+    return info
+
+
+# =============================================================================
 # GET Routes
 # =============================================================================
 
 
 @app.get("/api/meetings")
-def get_meetings():
+def get_meetings(user: dict = Depends(get_current_user)):
     """GET /api/meetings — 会议列表"""
     meetings = list_meetings()
-    return {"meetings": meetings, "count": len(meetings)}
+    # 按 owner 过滤
+    own = [m for m in meetings if m.get("owner_id") == user["user_id"]]
+    return {"meetings": own, "count": len(own)}
 
 
 @app.get("/api/meetings/check_id")
@@ -155,7 +225,7 @@ def get_meetings_check_id(id: str = Query(..., description="meeting_id")):
 
 
 @app.get("/api/timeline")
-def get_timeline_api():
+def get_timeline_api(user: dict = Depends(get_current_user)):
     """GET /api/timeline — 全部累积项按时间倒序"""
     events = get_timeline()
     return {"events": events, "count": len(events)}
@@ -165,8 +235,9 @@ def get_timeline_api():
 def get_kb_search(
     q: str = Query(""),
     meeting_id: str = Query(None),
+    user: dict = Depends(get_current_user),
 ):
-    """GET /api/kb/search — 跨会议 RAG 检索 (快捷 GET 版)"""
+    """GET /api/kb/search — 跨会议 RAG 检索 (按 user_id 隔离)"""
     if not q.strip():
         return {"results": []}
     from ..kb_api import handle_kb_search
@@ -174,13 +245,14 @@ def get_kb_search(
     params = {"q": [q]}
     if meeting_id:
         params["meeting_id"] = [meeting_id]
-    result = handle_kb_search(params, b"")
+    result = handle_kb_search(params, b"", user_id=user["user_id"])
     return result
 
 
 @app.get("/api/kb/list")
 def get_kb_list(
     meeting_id: str = Query(None),
+    user: dict = Depends(get_current_user),
 ):
     """GET /api/kb/list — 列出 KB 文档"""
     from ..kb_api import handle_kb_list
@@ -192,7 +264,7 @@ def get_kb_list(
 
 
 @app.delete("/api/kb/{doc_id}")
-def delete_kb_doc(doc_id: str):
+def delete_kb_doc(doc_id: str, user: dict = Depends(get_current_user)):
     """DELETE /api/kb/{doc_id} — 删除 KB 文档"""
     from ..kb_api import handle_kb_delete
 
@@ -206,7 +278,7 @@ def get_status_api():
 
 
 @app.get("/api/meetings/{meeting_id}/state")
-def get_meeting_state(meeting_id: str):
+def get_meeting_state(meeting_id: str, user: dict = Depends(get_current_user)):
     """GET /api/meetings/{id}/state — 单场会议状态 / 事实 / 转写历史 / 指标"""
     from ..storage import MeetingStorage
 
@@ -230,7 +302,7 @@ def get_meeting_state(meeting_id: str):
 
 
 @app.get("/api/meetings/{meeting_id}/chat/history")
-def get_meeting_chat_history(meeting_id: str):
+def get_meeting_chat_history(meeting_id: str, user: dict = Depends(get_current_user)):
     """GET /api/meetings/{id}/chat/history — VP Chat 历史"""
     return {
         "meeting_id": meeting_id,
@@ -239,7 +311,7 @@ def get_meeting_chat_history(meeting_id: str):
 
 
 @app.get("/api/meetings/{meeting_id}/collab")
-def get_meeting_collab(meeting_id: str):
+def get_meeting_collab(meeting_id: str, user: dict = Depends(get_current_user)):
     """GET /api/meetings/{id}/collab — 协作提问文档 (ADR-0028)"""
     try:
         from ..collab import collab_stats, list_answered, list_pending, read_collab
@@ -256,7 +328,7 @@ def get_meeting_collab(meeting_id: str):
 
 
 @app.get("/api/meetings/{meeting_id}/aggregate")
-def get_meeting_aggregate(meeting_id: str):
+def get_meeting_aggregate(meeting_id: str, user: dict = Depends(get_current_user)):
     """GET /api/meetings/{id}/aggregate — 会议聚合 DTO (BFF 端点)"""
     result: dict[str, Any] = {"meeting_id": meeting_id}
 
@@ -332,14 +404,14 @@ def get_client_device_status():
 
 
 @app.get("/api/meetings/{meeting_id}/docs")
-def get_meeting_docs(meeting_id: str):
+def get_meeting_docs(meeting_id: str, user: dict = Depends(get_current_user)):
     """GET /api/meetings/{id}/docs — 单场会议 6 类文档正文"""
     docs = [_doc_payload(meeting_id, kind) for kind in DOC_KINDS]
     return {"meeting_id": meeting_id, "docs": docs}
 
 
 @app.get("/api/meetings/{meeting_id}/docs/{kind}")
-def get_meeting_doc(meeting_id: str, kind: str):
+def get_meeting_doc(meeting_id: str, kind: str, user: dict = Depends(get_current_user)):
     """GET /api/meetings/{id}/docs/{kind} — 单场会议某一类文档正文"""
     if kind not in DOC_KINDS:
         raise HTTPException(status_code=400, detail=f"unknown doc kind: {kind}")
@@ -361,7 +433,7 @@ def get_demo_versions(meeting_id: str):
 
 
 @app.get("/api/meetings/{meeting_id}/events")
-async def get_meeting_events(meeting_id: str, request: Request):
+async def get_meeting_events(meeting_id: str, request: Request, user: dict = Depends(get_current_user)):
     """GET /api/meetings/{id}/events — SSE 实时事件流
 
     使用 StreamingResponse 包装 realtime_server.sse_generator (同步生成器)。
@@ -600,7 +672,7 @@ async def get_material_file(material_id: str):
 
 
 @app.post("/api/meetings/stream_start")
-async def post_stream_start(request: Request):
+async def post_stream_start(request: Request, user: dict = Depends(get_current_user)):
     """POST /api/meetings/stream_start — 创建长连接会议
 
     参数通过 query string 传递:
@@ -649,6 +721,7 @@ async def post_stream_start(request: Request):
                 meeting_id=meeting_id,
                 platform=Platform.LOCAL,
                 audio_source=audio_source,
+                owner_id=user["user_id"],
                 project_name=f"长连接会议 {meeting_id}",
             )
             storage.save(state)
@@ -679,6 +752,7 @@ async def post_stream_chunk(
     meeting_id: str,
     request: Request,
     sync: bool = Query(True, description="同步模式 (默认 true, ?sync=false 走异步)"),
+    user: dict = Depends(get_current_user),
 ):
     """POST /api/meetings/{id}/stream_chunk — 接收 30s WAV 切片
 
@@ -1169,7 +1243,7 @@ async def post_upload_audio(
 
 
 @app.post("/api/meetings/{meeting_id}/stream_stop")
-def post_stream_stop(meeting_id: str):
+def post_stream_stop(meeting_id: str, user: dict = Depends(get_current_user)):
     """POST /api/meetings/{id}/stream_stop — 停止录音, 关闭 SSE 订阅者 (ADR-0022)"""
     try:
         from ..realtime_server import close_meeting
@@ -1185,7 +1259,7 @@ def post_stream_stop(meeting_id: str):
 
 
 @app.post("/api/meetings/{meeting_id}/chat")
-async def post_chat(meeting_id: str, request: Request):
+async def post_chat(meeting_id: str, request: Request, user: dict = Depends(get_current_user)):
     """POST /api/meetings/{id}/chat — VP 自由输入接 chat agent
 
     支持 JSON 路径和 multipart/form-data 路径 (ADR-0023).
@@ -1306,7 +1380,7 @@ async def post_chat(meeting_id: str, request: Request):
 
 
 @app.post("/api/meetings/{meeting_id}/close")
-def post_meeting_close(meeting_id: str):
+def post_meeting_close(meeting_id: str, user: dict = Depends(get_current_user)):
     """POST /api/meetings/{id}/close — 结束会议并触发文档生成
 
     委托 ui_server._close_meeting 统一处理:
@@ -1334,6 +1408,7 @@ def post_collab_ask(
     section: str = Query(..., description="文档章节"),
     question: str = Query(..., description="问题内容"),
     asker: str = Query("agent", description="提问方"),
+    user: dict = Depends(get_current_user),
 ):
     """POST /api/meetings/{id}/collab/ask — 协作提问 (ADR-0028)"""
     if not section or not question:
@@ -1371,6 +1446,7 @@ def post_collab_answer(
     qid: str = Query(..., description="问题 ID"),
     answer: str = Query(..., description="回答内容"),
     answerer: str = Query("VP", description="回答方"),
+    user: dict = Depends(get_current_user),
 ):
     """POST /api/meetings/{id}/collab/answer — 协作回答 (ADR-0028)"""
     if not qid or not answer:
@@ -1400,24 +1476,24 @@ def post_collab_answer(
 
 
 @app.post("/api/kb/search")
-async def post_kb_search(request: Request):
-    """POST /api/kb/search — KB 检索 (POST with JSON body)"""
+async def post_kb_search(request: Request, user: dict = Depends(get_current_user)):
+    """POST /api/kb/search — KB 检索 (POST with JSON body, 按 user_id 隔离)"""
     body = await request.body()
     query_params = dict(request.query_params)
     from ..kb_api import handle_kb_search
 
-    result = handle_kb_search(query_params, body)
+    result = handle_kb_search(query_params, body, user_id=user["user_id"])
     return result
 
 
 @app.post("/api/kb/upload")
-async def post_kb_upload(request: Request):
-    """POST /api/kb/upload — 上传文件进 KB (multipart)"""
+async def post_kb_upload(request: Request, user: dict = Depends(get_current_user)):
+    """POST /api/kb/upload — 上传文件进 KB (按 user_id 存储)"""
     content_type = request.headers.get("Content-Type", "")
     body = await request.body()
     from ..kb_api import handle_kb_upload
 
-    result = handle_kb_upload(body, content_type)
+    result = handle_kb_upload(body, content_type, user_id=user["user_id"])
     status = result.get("status", 200)
     if status != 200:
         raise HTTPException(status_code=status, detail=result)
