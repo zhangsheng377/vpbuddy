@@ -150,6 +150,19 @@ def get_current_user(
     return user
 
 
+def _require_meeting_owner(meeting_id: str, user: dict, storage=None):
+    """ADR-0050: 验证当前用户是会议 owner, 否则 403."""
+    from ..storage import MeetingStorage as _MS
+    storage = storage or _MS(DATA_DIR)
+    if not storage.exists(meeting_id):
+        raise HTTPException(status_code=404, detail=f"meeting {meeting_id} not found")
+    state = storage.load(meeting_id)
+    owner = getattr(state, "owner_id", "")
+    if owner and owner != user["user_id"]:
+        raise HTTPException(status_code=403, detail="access denied")
+    return state
+
+
 # =============================================================================
 # Auth Routes
 # =============================================================================
@@ -279,13 +292,8 @@ def get_status_api():
 @app.get("/api/meetings/{meeting_id}/state")
 def get_meeting_state(meeting_id: str, user: dict = Depends(get_current_user)):
     """GET /api/meetings/{id}/state — 单场会议状态 / 事实 / 转写历史 / 指标"""
-    from ..storage import MeetingStorage
-
     try:
-        storage = MeetingStorage(DATA_DIR)
-        if not storage.exists(meeting_id):
-            raise HTTPException(status_code=404, detail=f"meeting {meeting_id} not found")
-        state = storage.load(meeting_id)
+        state = _require_meeting_owner(meeting_id, user)
         meta = _load_stream_meta(meeting_id)
         return {
             "state": _state_payload(state, include_items=True),
@@ -303,6 +311,7 @@ def get_meeting_state(meeting_id: str, user: dict = Depends(get_current_user)):
 @app.get("/api/meetings/{meeting_id}/chat/history")
 def get_meeting_chat_history(meeting_id: str, user: dict = Depends(get_current_user)):
     """GET /api/meetings/{id}/chat/history — VP Chat 历史"""
+    _require_meeting_owner(meeting_id, user)
     return {
         "meeting_id": meeting_id,
         "messages": _load_chat_history(meeting_id),
