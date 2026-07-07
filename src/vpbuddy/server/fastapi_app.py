@@ -39,7 +39,6 @@ from ..ui_server import (
     ASR_CLEAN_WINDOW_SIZE,
     ASR_CLEAN_WINDOW_TIMEOUT_S,
     ASR_CLEAN_MAX_CHARS,
-    ASR_CLEAN_DEFAULT_MODEL,
     # 元数据操作
     _load_stream_meta,
     _save_stream_meta,

@@ -175,14 +175,43 @@ def _gen_risk(state: dict[str, Any]) -> str:
 
 
 def _gen_demo(state: dict[str, Any]) -> str:
-    """demo 是 HTML 主文件,目录结构见 trigger_sub_session"""
+    """demo 是 HTML 主文件,目录结构见 trigger_sub_session
+
+    2026-07-07 ADR-0048: 无会议内容时不强行生成 demo 模板。
+    旧行为: 空会议也会渲染"VPBuddy 演示"泄露系统内部流程。
+    新行为: cleaned_text 为空且无 reqs → 返回占位 HTML, 不含系统信息。
+    """
     facts = state.get("facts", {})
     reqs = facts.get("REQ", [])
+    cleaned = state.get("cleaned_text", "")
+
+    # ADR-0048: 没有任何会议内容时不生成系统流程模板
+    if not reqs and not cleaned.strip():
+        return f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>会议 {state.get("title", "?")}</title>
+  <style>
+    body {{ font-family: -apple-system, sans-serif; max-width: 700px; margin: 40px auto; padding: 20px; color: #334155; }}
+    h1 {{ color: #2563eb; }}
+    .empty {{ text-align: center; color: #94a3b8; margin-top: 80px; font-size: 18px; }}
+    .meta {{ color: #94a3b8; font-size: 13px; margin-top: 60px; }}
+  </style>
+</head>
+<body>
+  <h1>会议记录演示</h1>
+  <p class="meta">会议:{state.get("title", "?")} · {state.get("created_at", "?")}</p>
+  <div class="empty">暂无会议内容, 等待音频采集与转写...</div>
+  <p class="meta">页面会在会议内容就绪后自动更新</p>
+</body>
+</html>
+"""
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>VPBuddy Demo - {state.get("title", "?")}</title>
+  <title>演示 - {state.get("title", "?")}</title>
   <style>
     body {{ font-family: -apple-system, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; }}
     h1 {{ color: #2563eb; }}
@@ -191,30 +220,16 @@ def _gen_demo(state: dict[str, Any]) -> str:
   </style>
 </head>
 <body>
-  <h1>VPBuddy 演示</h1>
+  <h1>会议演示</h1>
   <p class="meta">会议:{state.get("title", "?")} · 时间:{state.get("created_at", "?")}</p>
 
   <h2>核心需求</h2>
-  {''.join(f'<div class="req">{r}</div>' for r in reqs)}
+  {''.join(f'<div class="req">{r}</div>' for r in reqs) if reqs else '<p class="meta">等待需求讨论...</p>'}
 
-  <h2>工作流</h2>
-  <ol>
-    <li>VP 桌面客户端启动 → 音频 loopback 采集 → 上传服务端</li>
-    <li>服务端实时 ASR 转写(funasr paraformer-zh)</li>
-    <li>事实累积 → Meeting State JSON(实时更新)</li>
-    <li>6 文档实时生成(本页面是 demo 之一)</li>
-    <li>知识库入库,后续检索用 sqlite-vec</li>
-  </ol>
+  <h2>会议摘要</h2>
+  <pre style="white-space:pre-wrap;background:#f8fafc;padding:16px;border-radius:8px;">{cleaned[:3000]}</pre>
 
-  <h2>部署</h2>
-  <pre><code># 服务端一键安装
-curl -fsSL install.sh | bash
-
-# 启动服务端
-vpbuddy start
-# → 客户端连接服务端地址即可使用</code></pre>
-
-  <p class="meta">v1 · 最后更新:{datetime.now().isoformat()}</p>
+  <p class="meta">本页面根据会议内容实时生成 · 最后更新:{datetime.now().isoformat()}</p>
 </body>
 </html>
 """
@@ -263,6 +278,7 @@ def meeting_state_to_dict(state) -> dict[str, Any]:
         "title": getattr(state, "project_name", None) or getattr(state, "meeting_id", "?"),
         "created_at": getattr(state, "started_at", "?"),
         "platform": getattr(getattr(state, "platform", None), "value", "?"),
+        "cleaned_text": getattr(state, "cleaned_text", ""),  # 2026-07-07 ADR-0048: demo 用
         "facts": {
             "REQ": [r.text for r in getattr(state, "requirements", [])],
             "GOAL": [g.text for g in getattr(state, "goals", [])],

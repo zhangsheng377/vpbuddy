@@ -85,10 +85,6 @@ ASR_CLEAN_WINDOW_SIZE = 5
 ASR_CLEAN_WINDOW_TIMEOUT_S = 30.0
 # 2026-06-29: 截断保护 — LLM 整理超长时截断到 N 字 (防 8b num_predict 用尽丢原话)
 ASR_CLEAN_MAX_CHARS = 2000
-# 2026-06-29: 默认 LLM 模型 (本地 ollama qwen3:8b, 实测 6.58s/窗口, 4/5 术语修对)
-# 用 VPBUDDY_LLM_MODEL env 覆盖, 留 hermes 云端 fallback
-ASR_CLEAN_DEFAULT_MODEL = os.environ.get("VPBUDDY_LLM_MODEL", "qwen3:8b")
-
 
 def _stream_meta_path(meeting_id: str) -> Path:
     return DATA_DIR / f"{meeting_id}.stream.json"
@@ -298,9 +294,11 @@ def _get_chat_agent(meeting_id: str):
             max_iterations=20,
             # 2026-07-04 (ADR-0041): 跟 doc agent 统一用 OPENAI_BASE_URL, 不用 VPBUDDY_LLM_API_BASE.
             # 这样 chat 和 doc 走同一个 LLM endpoint, parent_session_id fork 时 provider 一致.
+            # ADR-0049: 模型从 .env MODEL=minimax-m3 (Hermes 统一配置)
+            model=os.environ.get("MODEL"),
             base_url=os.environ.get("OPENAI_BASE_URL") or os.environ.get("VPBUDDY_LLM_API_BASE", "http://localhost:11434/v1"),
             api_key=os.environ.get("OPENAI_API_KEY") or os.environ.get("MINIMAX_API_KEY"),
-            model=os.environ.get("VPBUDDY_LLM_MODEL", "MiniMax-M3"),
+            # ADR-0049: 不传 model — Hermes AIAgent 从 .env MODEL=minimax-m3 自己读
             ephemeral_system_prompt="\n".join([
                 "你是 VPBuddy 的 VP Chat 主控 agent。",
                 f"session_id 固定 = {session_id}。",
@@ -389,14 +387,12 @@ def _get_clean_agent(meeting_id: str):
 
         _CLEAN_AGENT_CACHE[session_id] = AIAgent(
             session_id=session_id,
-            enabled_toolsets=["file"],  # 只 file (写 doc), 不 terminal (YAGNI)
+            enabled_toolsets=["file"],
             platform="subagent",
             quiet_mode=True,
-            max_iterations=10,  # 整理任务不需要多轮
-            # 2026-07-05 fix(#8): 统一 base_url/ model/ api_key
-            # VPBUDDY_LLM_API_BASE 为 ASR clean 专用 (ollama /api/chat 协议),
-            # ASR clean 用较快的小模型 (qwen3:8b), 不影响文档生成等主要链路
-            model=os.environ.get("VPBUDDY_CLEAN_MODEL") or os.environ.get("VPBUDDY_LLM_MODEL", "qwen3:8b"),
+            max_iterations=10,
+            # ADR-0049: 模型从 .env MODEL=minimax-m3 (Hermes 统一配置)
+            model=os.environ.get("MODEL"),
             base_url=os.environ.get("OPENAI_BASE_URL") or os.environ.get("VPBUDDY_LLM_API_BASE", "http://localhost:11434/v1"),
             api_key=os.environ.get("OPENAI_API_KEY") or os.environ.get("MINIMAX_API_KEY"),
             ephemeral_system_prompt=prompt_template,
@@ -452,8 +448,9 @@ def _run_asr_clean(meeting_id: str, raw_segments: list[dict], previous_cleaned: 
 
     # 直接调 ollama /api/chat
     ollama_url = os.environ.get("VPBUDDY_OLLAMA_URL", "http://localhost:11434/api/chat")
-    model = os.environ.get("VPBUDDY_LLM_MODEL", "qwen3:8b")
-    timeout = int(os.environ.get("VPBUDDY_CLEAN_TIMEOUT", "60"))
+    model = os.environ.get("VPBUDDY_LLM_MODEL")  # ADR-0049: env 配置,不写死
+    if not model:
+        raise RuntimeError("VPBUDDY_LLM_MODEL not set in environment")
 
     payload = {
         "model": model,

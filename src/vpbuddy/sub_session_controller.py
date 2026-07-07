@@ -158,8 +158,8 @@ def _get_or_create_agent(meeting_id: str, doc_kind: str) -> Any:
                     platform="subagent",
                     quiet_mode=True,
                     max_iterations=30,
-                    # model 由 /etc/environment 的 VPBUDDY_LLM_MODEL 统一管理
-                    model=os.environ.get("VPBUDDY_LLM_MODEL") or "",
+                    # ADR-0049: 模型从 .env MODEL=minimax-m3 (Hermes 统一配置)
+                    model=os.environ.get("MODEL"),
                     base_url=os.environ.get("OPENAI_BASE_URL") or os.environ.get("VPBUDDY_LLM_API_BASE"),
                     api_key=os.environ.get("OPENAI_API_KEY") or os.environ.get("MINIMAX_API_KEY"),
                 )
