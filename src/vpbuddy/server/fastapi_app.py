@@ -1461,6 +1461,7 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
     session = None
     format_str = "pcm"
     sample_rate = 16000
+    _doc_running = [False]  # 文档自驱循环开关
 
     try:
         # Phase 1: handshake — 收 JSON "start" 消息
@@ -1480,25 +1481,27 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
                 pass
 
         # Phase 2: 启动百炼识别
-        import asyncio as _as
+        import asyncio as _asyncio
         session = start_session(
-            loop=_as.get_running_loop(),
+            loop=_asyncio.get_running_loop(),
             meeting_id=meeting_id,
             send_json=_send_json,
             sample_rate=sample_rate,
             fmt=format_str,
+            data_dir=DATA_DIR,
         )
 
         # 启动自驱动文档 generator: 做完一轮看 ASR 文本变化量，有变化就继续
         import threading as _threading
-        import time as _time2
 
         _doc_run_lock = _threading.Lock()
         _doc_last_text_len = [0]
-        _doc_running = [True]
+        _doc_running[0] = True
 
         def _doc_self_loop(gen_id: int, mid: str) -> dict:
             """自驱动文档 runner: 做完 -> 比文本长度 -> 有增长就 resubmit."""
+            from ..task_manager import get_task_manager
+            from ..storage import MeetingStorage
             try:
                 kinds = [BATCH_DOCS_KIND, DEMO_KIND]
                 results = {}
@@ -1531,12 +1534,15 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
         # 延迟 10s 给 ASR 一些初始文本，然后提交第一轮
         async def _kick_docs():
             await _asyncio.sleep(10)
-            get_task_manager().submit(meeting_id, _doc_self_loop)
+            try:
+                from ..task_manager import get_task_manager
+                get_task_manager().submit(meeting_id, _doc_self_loop)
+            except Exception as _e:
+                _log.warning("[ws_realtime_asr] kick_docs failed: %s", _e)
 
         _asyncio.create_task(_kick_docs())
 
         # Phase 3: relay — 音频帧 → 百炼, 同时监听 stop
-        import asyncio as _asyncio
         from starlette.websockets import WebSocketState
 
         while session.running:
@@ -1574,7 +1580,7 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
         except Exception:
             pass
 
-        # WS 断开后最后一次文档生成兜底
+        # WS 断开: 触发文档生成 (文本已由 BailianCallback 实时写入 state)
         try:
             from ..ui_server import _close_meeting
             _log.info("[ws_realtime_asr] final close_meeting, meeting=%s", meeting_id)

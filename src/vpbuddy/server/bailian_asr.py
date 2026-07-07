@@ -17,6 +17,7 @@ import threading
 import time
 import json
 import logging
+from datetime import datetime
 from typing import Callable, Optional
 from dataclasses import dataclass, field
 
@@ -65,12 +66,15 @@ class BailianCallback:
 
     回调在 dashscope 内部线程触发 (非 asyncio event loop),
     用 call_soon_threadsafe 桥接到 asyncio 发送.
+
+    每完成一句, 同时写入 MeetingStorage 以便文档生成 agent 读取.
     """
 
-    def __init__(self, loop, send_json: Callable, session: _ASRSession):
+    def __init__(self, loop, send_json: Callable, session: _ASRSession, data_dir: str = ""):
         self._loop = loop
         self._send = send_json
         self._session = session
+        self._data_dir = data_dir
 
     def _safe_send(self, msg: dict) -> None:
         try:
@@ -127,7 +131,25 @@ class BailianCallback:
 
         if is_end and text.strip():
             self._session.add_sentence(text.strip())
+            # 同步写入 MeetingStorage, 让文档 agent 能实时读到文本
+            self._write_state(text, self._session.sentence_count)
             logger.info("[bailian_asr] sentence #%d: %s", self._session.sentence_count, text[:80])
+
+    def _write_state(self, text: str, idx: int) -> None:
+        """追加最新句子到 MeetingStorage (线程安全, 简单文件 I/O)."""
+        if not self._data_dir or not self._session.meeting_id:
+            return
+        try:
+            from ..storage import MeetingStorage
+            st = MeetingStorage(self._data_dir)
+            mid = self._session.meeting_id
+            if st.exists(mid):
+                state = st.load(mid)
+                state.cleaned_text = self._session.accumulated_text or text
+                state.last_updated = datetime.now().isoformat()
+                st.save(state)
+        except Exception as e:
+            logger.error("[bailian_asr] _write_state failed: %s", e)
 
 
 def _ensure_dashscope() -> None:
@@ -142,6 +164,7 @@ def start_session(
     sample_rate: int = 16000,
     fmt: str = "pcm",
     context_text: str = "",
+    data_dir: str = "",
 ) -> _ASRSession:
     """启动一个百炼实时 ASR 会话."""
     _ensure_dashscope()
@@ -151,7 +174,7 @@ def start_session(
 
     from dashscope.audio.asr import Recognition
 
-    callback = BailianCallback(loop, send_json, session)
+    callback = BailianCallback(loop, send_json, session, data_dir=data_dir)
     session.callback = callback
 
     recognition = Recognition(
