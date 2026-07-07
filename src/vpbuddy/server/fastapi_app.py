@@ -1491,70 +1491,46 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
             data_dir=DATA_DIR,
         )
 
-        # 启动自驱动文档 generator: 做完一轮看 ASR 文本变化量，有变化就继续
-        import threading as _threading
+        # 启动自驱动文档 generator: asyncio 定时轮询 ASR 文本, 有增量就提交
 
-        _doc_run_lock = _threading.Lock()
         _doc_last_text_len = [0]
         _doc_running[0] = True
 
-        def _doc_self_loop(gen_id: int, mid: str) -> dict:
-            """自驱动文档 runner: 做完 -> 比文本长度 -> 有增长就 resubmit."""
-            print(f"[ws_realtime_asr] _doc_self_loop gen={gen_id}, mid={mid}", flush=True)
-            from ..task_manager import get_task_manager
+        def _doc_runner(gen_id: int, mid: str) -> dict:
+            """一次性文档 runner (被 task_manager 调度)."""
             from ..sub_session_controller import _dispatch_kind, BATCH_DOCS_KIND, DEMO_KIND
-            from ..storage import MeetingStorage
-            try:
-                kinds = [BATCH_DOCS_KIND, DEMO_KIND]
-                results = {}
-                for kind in kinds:
-                    try:
-                        r = _dispatch_kind(mid, kind, dry_run=False)
-                        results[kind] = {"triggered": r.get("triggered"), "error": r.get("error")}
-                    except Exception as e:
-                        results[kind] = {"triggered": False, "error": str(e)}
-            finally:
-                # 检查 ASR 文本是否有新内容
-                if not _doc_running[0]:
-                    return results
+            kinds = [BATCH_DOCS_KIND, DEMO_KIND]
+            results = {}
+            for kind in kinds:
                 try:
-                    from ..storage import MeetingStorage
-                    st = MeetingStorage(DATA_DIR)
-                    if st.exists(mid):
-                        state = st.load(mid)
-                        cur_len = len(state.cleaned_text) if state.cleaned_text else 0
-                        with _doc_run_lock:
-                            prev = _doc_last_text_len[0]
-                            _log.info("[ws_realtime_asr] doc_loop: prev=%d cur=%d", prev, cur_len)
-                            if cur_len > prev + 100:  # 新内容 >100 字
-                                _doc_last_text_len[0] = cur_len
-                            # 总是重投: 文本有增长就立即, 否则 30s 后再试
-                            from ..task_manager import get_task_manager as _gtm
-                            if cur_len > prev:
-                                _gtm().submit(mid, _doc_self_loop)
-                            else:
-                                # 文本还没到, 等一等
-                                import time as _time3
-                                _time3.sleep(30)
-                                _gtm().submit(mid, _doc_self_loop)
-                except Exception:
-                    pass
+                    r = _dispatch_kind(mid, kind, dry_run=False)
+                    results[kind] = {"triggered": r.get("triggered"), "error": r.get("error")}
+                except Exception as e:
+                    results[kind] = {"triggered": False, "error": str(e)}
             return results
 
-        # 延迟 10s 给 ASR 一些初始文本，然后提交第一轮
+        # 自驱动文档: 15s 无条件第一轮, 之后每 30s 检查增量, 直到 WS 断开
         async def _kick_docs():
-            print(f"[ws_realtime_asr] _kick_docs starting (sleep 10s), meeting={meeting_id}", flush=True)
-            await _asyncio.sleep(10)
             try:
                 from ..task_manager import get_task_manager
-                print(f"[ws_realtime_asr] _kick_docs submitting, meeting={meeting_id}", flush=True)
-                get_task_manager().submit(meeting_id, _doc_self_loop)
-                print(f"[ws_realtime_asr] _kick_docs submitted OK, meeting={meeting_id}", flush=True)
-            except Exception as _e:
-                print(f"[ws_realtime_asr] _kick_docs FAILED: {_e}", flush=True)
-                _log.warning("[ws_realtime_asr] kick_docs failed: %s", _e)
+                from ..storage import MeetingStorage
+                st = MeetingStorage(DATA_DIR)
+                interval = 30
+                await _asyncio.sleep(15)
+                # 第 1 轮: 无条件提交 (文本已开始累积, close 可能还未来)
+                get_task_manager().submit(meeting_id, _doc_runner)
+                while _doc_running[0]:
+                    await _asyncio.sleep(interval)
+                    if st.exists(meeting_id):
+                        state = st.load(meeting_id)
+                        cur_len = len(state.cleaned_text) if state.cleaned_text else 0
+                        prev = _doc_last_text_len[0]
+                        if cur_len > prev + 50:
+                            _doc_last_text_len[0] = cur_len
+                            get_task_manager().submit(meeting_id, _doc_runner)
+            except Exception:
+                pass
 
-        print(f"[ws_realtime_asr] creating task for meeting={meeting_id}", flush=True)
         _asyncio.create_task(_kick_docs())
 
         # Phase 3: relay — 音频帧 → 百炼, 同时监听 stop
