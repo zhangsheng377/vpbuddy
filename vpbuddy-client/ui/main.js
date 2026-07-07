@@ -118,8 +118,8 @@ async function handleLogin(e) {
 
 async function handleRegister(e) {
   e.preventDefault();
-  const email = document.getElementById("auth-email").value.trim();
-  const password = document.getElementById("auth-password").value;
+  const email = document.getElementById("auth-reg-email").value.trim();
+  const password = document.getElementById("auth-reg-password").value;
   const errEl = document.getElementById("auth-error"); errEl.textContent = "";
   if (!email || !password) { errEl.textContent = "请填写邮箱和密码"; return; }
   if (password.length < 6) { errEl.textContent = "密码至少 6 位"; return; }
