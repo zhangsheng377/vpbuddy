@@ -7,8 +7,8 @@
   JSON 控制消息 ← → 回调 on_event() → JSON 推客户端
 
 上下文增强:
-  句子结束后累加 text, 作为下一次 start 的 context 传入,
-  帮助模型识别后续句子中的专有名词、人名等.
+  fun‑asr‑realtime 在同一 WebSocket 双工流内自动利用上文,
+  不需要外部注入. 单次 start()→stop() 即覆盖整场会议.
 """
 
 from __future__ import annotations
@@ -29,7 +29,11 @@ API_KEY = "sk-your-key-here"
 
 @dataclass
 class _ASRSession:
-    """单个识别会话的状态."""
+    """单个识别会话的状态.
+
+    fun-asr-realtime 全程同一条 WebSocket 双工流,
+    模型内部自然利用上文语音特征, 无需外部注入上下文.
+    """
 
     meeting_id: str
     recognition = None
@@ -40,25 +44,9 @@ class _ASRSession:
     running: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
 
-    # 上下文增强: 每 N 句更新一次 (实时模式下通过 restart 实现)
-    _context_buffer: list[str] = field(default_factory=list)
-
     def add_sentence(self, text: str) -> None:
         self.sentence_count += 1
-        self._context_buffer.append(text)
         self.accumulated_text += text
-
-    def get_context(self) -> list[dict]:
-        """生成上下文消息 (最多保留最近 5 句)."""
-        ctx = list(self._context_buffer[-5:])
-        if not ctx:
-            return []
-        return [{
-            "context": [{
-                "role": "user",
-                "content": [{"type": "input_text", "text": " ".join(ctx)}],
-            }],
-        }]
 
 
 class BailianCallback:
@@ -163,7 +151,6 @@ def start_session(
     send_json: Callable,
     sample_rate: int = 16000,
     fmt: str = "pcm",
-    context_text: str = "",
     data_dir: str = "",
 ) -> _ASRSession:
     """启动一个百炼实时 ASR 会话."""
