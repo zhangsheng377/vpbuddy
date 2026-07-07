@@ -1,11 +1,12 @@
 # VPBuddy HTTP API 参考
 
-> **版本**: v0.18.0 · `@ 2026-07-07`
+> **版本**: v0.18.3 · `@ 2026-07-08`
 > **Base URL**: `http://47.100.182.3:28765`（公网 GPU 服务器）
 > **协议**: HTTP/1.1 · WebSocket 实时 ASR · SSE 实时推送 · Multipart 上传
 > **编码**: 所有请求/响应使用 UTF-8
 > **CORS**: 所有端点返回 `Access-Control-Allow-Origin: *`
-> **认证**: 除 `/api/auth/*` 外所有端点要求 `Authorization: Bearer <token>`
+> **认证 (ADR-0047)**: 除 `/api/auth/*` 外所有端点要求 `Authorization: Bearer <token>`
+> **会议隔离 (ADR-0050)**: 会议单端点 (state/chat history) 仅 owner 可访问, 非 owner 返回 `403`
 
 ---
 
@@ -47,8 +48,7 @@
    - [GET /api/kb/list](#94-kb统计)
    - [DELETE /api/kb/{doc_id}](#95-删除kb文档)
 10. [系统](#10-系统)
-   - [GET /api/status](#101-系统状态)
-   - [GET /api/timeline](#102-时间线)
+   - [GET /api/timeline](#101-时间线)
 
 ---
 
@@ -100,16 +100,20 @@ curl -X POST http://47.100.182.3:28765/api/meetings/upload \
 ### 响应格式
 
 - **成功**: JSON，根对象包含请求数据
-- **错误**: 返回 HTTP 4xx/5xx，body 为 `{"error": "描述", "status": 400}`
+- **错误**: 返回 HTTP 4xx/5xx，body 为 `{"detail": {"error": "描述", "status": 4xx}}` 或旧格式 `{"error": "描述", "status": 4xx}`
 - **纯文本端点**: 静态文件服务返回对应 Content-Type
 
 ### 认证
 
 所有 API 端点（除 `/api/auth/*`）要求 `Authorization: Bearer <token>` header。无 token 返回 `401 Unauthorized`。token 通过注册或登录获取，JWT 72 小时过期。参见 [§3 认证](#3-认证)。
 
-### 知识库隔离
+### 知识库隔离 (ADR-0047)
 
-知识库按 `user_id` 隔离——每个用户上传的文件只会被自己的检索结果命中。会议仍然按 `meeting_id` 隔离，但 `GET /api/meetings` 只返回当前用户的会议。参见 [ADR-0047](decisions/0047-user-auth-kb-isolation.md)。
+知识库按 `user_id` 隔离——每个用户上传的文件只会被自己的检索结果命中。`POST /api/kb/search` 在 Chroma metadata 中按 `user_id` 过滤。
+
+### 会议所有权隔离 (ADR-0050)
+
+`GET /api/meetings` 只返回当前用户的会议。单会议端点（`/state`、`/chat/history`）仅 owner 可访问，非 owner 认证用户返回 `403 Forbidden`。参见 [ADR-0050](decisions/0050-meeting-owner-isolation.md)。
 
 ### 会议名规则
 
@@ -234,9 +238,10 @@ GET /api/meetings
 {
   "meetings": [
     {
-      "meeting_id": "UPLOAD_20260704_174209_71171a80",
-      "platform": "e2e",
-      "audio_source": null,
+      "meeting_id": "api_908de970",
+      "owner_id": "f34bd8df1dc94d10",
+      "platform": "local",
+      "audio_source": "microphone",
       "project_name": "产品评审会",
       "started_at": "2026-07-04T17:42:09",
       "last_updated": "2026-07-04T17:43:00",
@@ -247,6 +252,8 @@ GET /api/meetings
 }
 ```
 
+`owner_id` 为会议创建者的 user_id (ADR-0047)。
+
 ---
 
 ### 4.2 获取会议状态
@@ -255,7 +262,9 @@ GET /api/meetings
 GET /api/meetings/{id}/state
 ```
 
-返回 `MeetingState` JSON，包含 `cleaned_text`（累积 ASR 文本）、`meeting_id`、`platform`、`audio_source`、`last_updated` 等字段。文档生成 agent 实时读取此文本作为输入。
+返回 `MeetingState` JSON，包含 `state.owner_id`、`state.cleaned_text`（累积 ASR 文本）、`meeting_id`、`platform`、`audio_source`、`last_updated` 等字段。
+
+**权限 (ADR-0050)**: 仅会议 owner 可访问。非 owner 返回 `403 Forbidden`。
 
 ---
 
@@ -290,9 +299,11 @@ POST /api/meetings/stream_start
 **响应**:
 ```json
 {
-  "meeting_id": "auto_generated_id",
+  "meeting_id": "api_908de970",
+  "chunk_interval_sec": 30,
   "audio_source": "microphone",
-  "message": "Stream started. Connect to WS /api/meetings/{id}/realtime_asr for realtime ASR."
+  "reused": false,
+  "message": "Stream started, send 30s WAV chunks to /api/meetings/{id}/stream_chunk"
 }
 ```
 
@@ -560,13 +571,7 @@ GET /api/meetings/{id}/events
 
 ## 10. 系统
 
-### 10.1 系统状态
-
-```
-GET /api/status
-```
-
-### 10.2 时间线
+### 10.1 时间线
 
 ```
 GET /api/timeline
@@ -582,7 +587,10 @@ GET /api/timeline
 |--------|------|
 | 200 | 成功 |
 | 400 | 请求参数错误 |
+| 401 | 未认证 — token 缺失/无效/过期 |
+| 403 | 无权限 — 非会议 owner (ADR-0050) |
 | 404 | 资源不存在 |
+| 409 | 冲突 — 邮箱已注册 |
 | 500 | 服务端处理错误 |
 
 ### 数据目录
