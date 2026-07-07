@@ -48,6 +48,7 @@ def _state_payload(state, include_items: bool = True) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "meeting_id": getattr(state, "meeting_id", "?"),
         "platform": getattr(state, "platform", ""),
+        "owner_id": getattr(state, "owner_id", ""),
         "project_name": getattr(state, "project_name", ""),
         "speaker_map": getattr(state, "speaker_map", {}) or {},
         "summary": getattr(state, "summary", "") or "",

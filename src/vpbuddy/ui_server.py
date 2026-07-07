@@ -519,6 +519,7 @@ def _state_payload(state, include_items: bool = True) -> dict[str, Any]:
 
     payload = {
         "meeting_id": state.meeting_id,
+        "owner_id": getattr(state, "owner_id", ""),  # 2026-07-07 ADR-0047
         "cleaned_text_length": len(state.cleaned_text),
         "last_updated": state.last_updated,
     }
