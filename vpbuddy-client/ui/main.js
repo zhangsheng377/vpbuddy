@@ -401,7 +401,7 @@ async function loadDemoVersions() {
   if (!currentMeetingId) return;
   const gpu = await getGpuUrl();
   try {
-    const r = await fetch(`${gpu}/api/meetings/${currentMeetingId}/demo/versions`);
+    const r = await fetchWithAuth(`${gpu}/api/meetings/${currentMeetingId}/demo/versions`);
     if (!r.ok) return;
     const data = await r.json();
     demoVersions = data.versions || [];
@@ -448,7 +448,7 @@ async function loadDemoVersion(version) {
   // 直接 fetch HTML 内容 (绕开 SSE 自动路径), 写到 iframe.srcdoc
   const url = `${gpu}/docs/${currentMeetingId}/demo_v${version}.html`;
   try {
-    const r = await fetch(url, { cache: "no-store" });
+    const r = await fetchWithAuth(url, { cache: "no-store" });
     if (!r.ok) {
       console.warn("loadDemoVersion HTTP", r.status, url);
       return;
@@ -853,7 +853,7 @@ async function submitAnswer(qid) {
   try {
     const gpuUrlLocal = await getGpuUrl();
     const url = `${gpuUrlLocal}/api/meetings/${encodeURIComponent(currentMeetingId)}/answer_question?qid=${encodeURIComponent(qid)}&answer=${encodeURIComponent(answer)}&answerer=VP`;
-    const resp = await fetch(url, { method: "POST" });
+    const resp = await fetchWithAuth(url, { method: "POST" });
     const result = await resp.json();
     if (!resp.ok || !result.ok) throw new Error(result.error || "提交失败");
     // SSE 会推 collab-update, 不必本地立即改 — 但清空输入框 + 隐藏表单
@@ -869,7 +869,7 @@ async function refreshCollab() {
   try {
     const gpuUrlLocal = await getGpuUrl();
     const url = `${gpuUrlLocal}/api/meetings/${encodeURIComponent(currentMeetingId)}/collab`;
-    const resp = await fetch(url);
+    const resp = await fetchWithAuth(url);
     if (!resp.ok) return;
     const data = await resp.json();
     pendingQuestions = new Map((data.pending || []).map((q) => [q.qid, q]));
@@ -893,7 +893,7 @@ document.getElementById("collab-ask-btn").addEventListener("click", async () => 
   try {
     const gpuUrlLocal = await getGpuUrl();
     const url = `${gpuUrlLocal}/api/meetings/${encodeURIComponent(currentMeetingId)}/ask_question?section=${encodeURIComponent(section)}&question=${encodeURIComponent(question)}&asker=VP`;
-    const resp = await fetch(url, { method: "POST" });
+    const resp = await fetchWithAuth(url, { method: "POST" });
     const result = await resp.json();
     if (!resp.ok || !result.ok) throw new Error(result.error || "提问失败");
     qInput.value = "";
@@ -962,7 +962,7 @@ async function kbSearch() {
   const gpuUrlLocal = await getGpuUrl();
   let results;
   try {
-    const r = await fetch(`${gpuUrlLocal}/api/kb/search`, {
+    const r = await fetchWithAuth(`${gpuUrlLocal}/api/kb/search`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query: q, top_k: 5, meeting_id: currentMeetingId || null, scope: currentMeetingId ? "current" : "all" }),
@@ -1020,7 +1020,7 @@ async function kbUpload() {
     const fd = new FormData();
     fd.append("meeting_id", currentMeetingId);
     fd.append("file", f, f.name);
-    const r = await fetch(`${gpuUrlLocal}/api/kb/upload`, { method: "POST", body: fd });
+    const r = await fetchWithAuth(`${gpuUrlLocal}/api/kb/upload`, { method: "POST", body: fd });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || "upload kb 失败");
     statusEl.textContent = `✓ 上传成功: ${data.filename || f.name} → doc_id=${data.doc_id || "?"} (${data.chars || data.char_count || 0} chars)`;
@@ -1123,7 +1123,7 @@ async function sendChat() {
       fd.append("text", message);
       for (const a of filesSnapshot) fd.append("files", a.file, a.file.name);
       const url = gpuUrlLocal + "/api/meetings/" + encodeURIComponent(currentMeetingId) + "/chat";
-      const resp = await fetch(url, { method: "POST", body: fd });
+      const resp = await fetchWithAuth(url, { method: "POST", body: fd });
       result = await resp.json();
       if (!resp.ok) throw new Error(result.error || "upload chat 失败");
     } else {
@@ -1131,6 +1131,7 @@ async function sendChat() {
       result = await invoke("post_meeting_chat", {
         meetingId: currentMeetingId,
         message,
+        authToken: getAuthToken(),
         context: {
           active_panel: document.querySelector(".bottom-nav button.active")?.dataset.panel || "chat",
           selected_doc_kind: document.querySelector(".doc-block.stored")?.dataset.kind || null,
@@ -1161,7 +1162,7 @@ async function refreshChatHistory() {
   if (!currentMeetingId) return;
   try {
     // 2026-06-26: 走 invoke (Rust reqwest), 不再 webview fetch
-    const result = await invoke("fetch_meeting_chat_history", { meetingId: currentMeetingId });
+    const result = await invoke("fetch_meeting_chat_history", { meetingId: currentMeetingId, authToken: getAuthToken() });
     for (const msg of (result.messages || [])) renderChatMessage(msg);
   } catch (e) {
     console.warn("读取 Chat 历史失败", e);

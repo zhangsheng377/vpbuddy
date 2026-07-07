@@ -217,7 +217,7 @@ async fn start_capture(
 
     // 1. 在 GPU 端 init 会议 (复用 UI 选的 meeting_id)
     let gpu_url = state.gpu_url.lock().await.clone();
-    let meeting_id = upload::init_meeting(&gpu_url, &mid_in, &audio_source_norm, auth_token)
+    let meeting_id = upload::init_meeting(&gpu_url, &mid_in, &audio_source_norm, auth_token.clone())
         .await
         .map_err(|e| {
             log::error!("init 会议失败: {e}");
@@ -257,17 +257,17 @@ async fn start_capture(
     let gpu_url_sse = gpu_url.clone();
     let mid_sse = mid.clone();
     let capturing_sse = capturing.clone();
+    let auth_tok_sse = auth_token.clone();
 
-    // 2026-06-27: SSE task 提到 outer scope, 让 start_capture 能拿 JoinHandle 存进 state
-    // (JoinHandle 不 Clone, 必须在 spawn caller 范围内)
+    // 2026-06-27: SSE task 提到 outer scope
     let sse_handle = tokio::spawn(async move {
-        run_sse_loop(app_clone_sse, gpu_url_sse, mid_sse, capturing_sse).await;
+        run_sse_loop(app_clone_sse, gpu_url_sse, mid_sse, capturing_sse, auth_tok_sse).await;
     });
     *state.sse_handle.lock().await = Some(sse_handle);
 
+    let auth_tok_cap = auth_token.clone();
+
     let handle = tokio::spawn(async move {
-        // 音频采集 + 上传任务 (Phase B spawn_blocking, 保留我们之前的修复)
-        // 2026-07-02 Phase 7: audio_source 已在 start_capture outer scope 读完 clone 进 audio_source_for_capture
         if let Err(e) = run_capture_loop(
             app_clone_cap,
             gpu_url,
@@ -279,6 +279,7 @@ async fn start_capture(
             audio_device,
             native_rate,
             audio_source_for_capture,
+            auth_tok_cap,
         )
         .await
         {
@@ -357,7 +358,7 @@ async fn start_realtime_capture(
     log::info!("  meeting_id: {mid_in}, audio_source: {audio_source_norm}");
 
     let gpu_url = state.gpu_url.lock().await.clone();
-    let meeting_id = upload::init_meeting(&gpu_url, &mid_in, &audio_source_norm, auth_token)
+    let meeting_id = upload::init_meeting(&gpu_url, &mid_in, &audio_source_norm, auth_token.clone())
         .await.map_err(|e| format!("init 会议失败: {e}"))?;
     log::info!("  ✓ meeting_id: {meeting_id}");
     *state.meeting_id.lock().await = Some(meeting_id.clone());
@@ -372,8 +373,9 @@ async fn start_realtime_capture(
     let gpu_url_sse = gpu_url.clone();
     let mid_sse = meeting_id.clone();
     let capturing_sse = state.capturing.clone();
+    let auth_tok_sse2 = auth_token.clone();
     let sse_handle = tokio::spawn(async move {
-        run_sse_loop(app_sse, gpu_url_sse, mid_sse, capturing_sse).await;
+        run_sse_loop(app_sse, gpu_url_sse, mid_sse, capturing_sse, auth_tok_sse2).await;
     });
     *state.sse_handle.lock().await = Some(sse_handle);
 
@@ -602,13 +604,19 @@ async fn kb_search(
     state: State<'_, AppState>,
     query: String,
     top_k: u32,
+    auth_token: Option<String>,
 ) -> Result<Vec<serde_json::Value>, String> {
     log::info!("kb_search: query={:?} top_k={}", query, top_k);
     let url = format!("{}/api/kb/search?q={}&top_k={}",
         state.gpu_url.lock().await,
         urlencoding::encode(&query),
         top_k);
-    let resp = reqwest::get(&url)
+    let client = reqwest::Client::new();
+    let mut req = client.get(&url);
+    if let Some(tok) = &auth_token {
+        req = req.header("Authorization", format!("Bearer {tok}"));
+    }
+    let resp = req.send()
         .await
         .map_err(|e| { log::warn!("kb_search 请求失败: {e}"); format!("KB 请求失败: {e}") })?;
     let body: serde_json::Value = resp.json()
@@ -623,16 +631,20 @@ async fn kb_search(
 async fn fetch_meeting_chat_history(
     state: State<'_, AppState>,
     meeting_id: String,
+    auth_token: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    // 2026-06-27 修: GET /api/meetings/{id}/chat 在 ui_server.py 返回 404
-    // (do_GET 只匹配 endswith("/chat/history")), 改成 history 路径
     log::info!("fetch_meeting_chat_history: meeting_id={:?}", meeting_id);
     let url = format!(
         "{}/api/meetings/{}/chat/history",
         state.gpu_url.lock().await,
         urlencoding::encode(&meeting_id)
     );
-    let resp = reqwest::get(&url)
+    let client = reqwest::Client::new();
+    let mut req = client.get(&url);
+    if let Some(tok) = &auth_token {
+        req = req.header("Authorization", format!("Bearer {tok}"));
+    }
+    let resp = req.send()
         .await
         .map_err(|e| { log::warn!("fetch_meeting_chat_history 请求失败: {e}"); format!("Chat 历史请求失败: {e}") })?;
     let body: serde_json::Value = resp.json()
@@ -648,6 +660,7 @@ async fn post_meeting_chat(
     meeting_id: String,
     message: String,
     context: serde_json::Value,
+    auth_token: Option<String>,
 ) -> Result<serde_json::Value, String> {
     log::info!("post_meeting_chat: meeting_id={:?} message={:?}", meeting_id, message);
     let url = format!(
@@ -659,13 +672,16 @@ async fn post_meeting_chat(
         .timeout(std::time::Duration::from_secs(150))
         .build()
         .map_err(|e| { log::warn!("post_meeting_chat Client 构建失败: {e}"); format!("Client 构建失败: {e}") })?;
-    let resp = client
+    let mut req = client
         .post(&url)
         .json(&serde_json::json!({
             "message": message,
             "context": context,
-        }))
-        .send()
+        }));
+    if let Some(tok) = &auth_token {
+        req = req.header("Authorization", format!("Bearer {tok}"));
+    }
+    let resp = req.send()
         .await
         .map_err(|e| { log::warn!("post_meeting_chat 发送失败: {e}"); format!("Chat 发送失败: {e}") })?;
     let body: serde_json::Value = resp.json()
@@ -684,10 +700,9 @@ pub async fn run_capture_loop(
     ups: Arc<AtomicU64>,
     auto_upload: bool,
     audio_device: Option<String>,
-    // 2026-06-27: 共享 capture 设备原生采样率, 主循环 resample 用
     native_rate: Arc<AtomicU32>,
-    // 2026-07-02 Phase 7: audio_source (microphone/loopback/both), 传给 AudioCapture new_with_source
     audio_source: String,
+    auth_token: Option<String>,
 ) -> anyhow::Result<()> {
     use tokio::sync::mpsc as tmpsc;
     let (tx, mut rx) = tmpsc::channel::<Vec<i16>>(64);
@@ -852,6 +867,7 @@ pub async fn run_capture_loop(
                 chunk_index,
                 total_elapsed_sec,
                 overlap_sec,
+                auth_token.clone(),
             )
             .await
             {
@@ -885,6 +901,7 @@ pub async fn run_sse_loop(
     gpu_url: String,
     meeting_id: String,
     capturing: Arc<AtomicBool>,
+    auth_token: Option<String>,
 ) {
     let url = format!("{}/api/meetings/{}/events", gpu_url, meeting_id);
     let mut retry_count = 0u32;
@@ -900,7 +917,7 @@ pub async fn run_sse_loop(
 
         // 2026-06-27: 用 tokio::select! 让 capturing=false 立即退出 (不等到 reqwest close)
         tokio::select! {
-            r = connect_and_read_sse(&app, &connect_url, capturing.clone(), &mut last_event_id) => {
+            r = connect_and_read_sse(&app, &connect_url, capturing.clone(), &mut last_event_id, auth_token.clone()) => {
                 match r {
                     Ok(()) => {
                         log::info!("SSE 正常断开");
@@ -939,14 +956,17 @@ async fn connect_and_read_sse(
     url: &str,
     capturing: Arc<AtomicBool>,
     last_event_id: &mut Option<String>,
+    auth_token: Option<String>,
 ) -> anyhow::Result<()> {
     // 2026-06-28: 关闭 reqwest 全局 timeout — SSE 是长连接, 30s 必报
-    // "error decoding response body" 然后断开。原 timeout(30) 是 bug。
-    // 我们用 tokio::select! + wait_capturing_false 自己控退出。
     let client = reqwest::Client::builder()
         .build()?;
 
-    let resp = client.get(url).send().await?;
+    let mut req = client.get(url);
+    if let Some(tok) = &auth_token {
+        req = req.header("Authorization", format!("Bearer {tok}"));
+    }
+    let resp = req.send().await?;
     if !resp.status().is_success() {
         anyhow::bail!("HTTP {}", resp.status());
     }

@@ -199,6 +199,7 @@ pub async fn upload_chunk(
     chunk_index: u64,
     chunk_start_sec: f32,
     overlap_sec: f32,
+    auth_token: Option<String>,
 ) -> Result<Vec<TranscriptSegment>> {
     // 2026-06-25: 加 ?sync=false 让 server 立即返回 (不阻塞等 funasr + 6 docs)
     // 客户端通过 SSE /api/meetings/{id}/events 收 transcript-segment / state-update / doc-update
@@ -220,7 +221,13 @@ pub async fn upload_chunk(
             .text("chunk_start_sec", format!("{chunk_start_sec:.3}"))
             .text("overlap_sec", format!("{overlap_sec:.3}"))
             .text("client_sent_at", format!("{:.3}", unix_now_secs()));
-        match client.post(&url).multipart(form).send().await {
+        match {
+            let mut req = client.post(&url);
+            if let Some(tok) = &auth_token {
+                req = req.header("Authorization", format!("Bearer {tok}"));
+            }
+            req.multipart(form).send().await
+        } {
             Ok(resp) if resp.status().is_success() => {
                 body = Some(resp.json().await?);
                 break;
