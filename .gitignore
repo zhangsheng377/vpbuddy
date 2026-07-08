@@ -8,6 +8,10 @@ $RECYCLE.BIN/
 .idea/
 .vscode/
 *.swp
+
+# ===== 凭证文件 (包含密码, 不能提交) =====
+CREDENTIALS.md
+vpbuddy-handover/
 *.swo
 *~
 *.bak
