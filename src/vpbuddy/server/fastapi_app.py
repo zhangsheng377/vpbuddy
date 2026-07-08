@@ -495,8 +495,8 @@ def get_kb_doc_file(doc_id: str, user: dict = Depends(get_current_user)):
 
 
 @app.get("/api/status")
-def get_status_api(user: dict = Depends(get_current_user)):
-    """GET /api/status — Controller + 数据状态"""
+def get_status_api():
+    """GET /api/status — Controller + 数据状态 (公开端点, 健康检查用)"""
     return get_status()
 
 
