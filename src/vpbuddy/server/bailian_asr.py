@@ -24,7 +24,8 @@ from dataclasses import dataclass, field
 logger = logging.getLogger(__name__)
 
 MODEL = "fun-asr-realtime"
-API_KEY = "sk-your-key-here"
+# 2026-07-07 ADR-0051: API Key 从 Hermes .env 读取, 不硬编码
+API_KEY = os.environ.get("DASHSCOPE_API_KEY") or os.environ.get("BAILIAN_API_KEY", "")
 
 
 @dataclass
