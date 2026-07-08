@@ -46,16 +46,26 @@
    - [GET /api/kb/list](#94-kb统计)
    - [DELETE /api/kb/{doc_id}](#95-删除kb文档)
    - [GET /api/kb/{doc_id}/file](#96-下载kb原文件)
-10. [文件下载](#10-文件下载)
-   - [GET /api/meetings/{id}/docs/{kind}/download](#101-下载交付物文件)
-   - [GET /api/materials/{id}/file](#102-下载会议材料文件)
-   - [GET /api/kb/{doc_id}/file](#103-下载知识库文件)
-11. [AI 设置 (v0.19.0)](#11-ai-设置)
-   - [GET /api/settings/ai](#111-获取ai配置)
-   - [PUT /api/settings/ai](#112-保存ai配置)
-   - [POST /api/settings/ai/test](#113-测试ai连接)
-12. [系统](#12-系统)
-   - [GET /api/timeline](#121-时间线)
+10. [会议材料 (v0.19.0)](#10-会议材料)
+   - [GET /api/meetings/{id}/materials](#101-列出会议材料)
+   - [POST /api/meetings/{id}/materials](#102-上传会议材料)
+   - [GET /api/materials/{id}](#103-材料详情)
+   - [DELETE /api/materials/{id}](#104-删除材料)
+11. [文件下载](#11-文件下载)
+   - [GET /api/meetings/{id}/docs/{kind}/download](#111-下载交付物文件)
+   - [GET /api/materials/{id}/file](#112-下载会议材料文件)
+   - [GET /api/kb/{doc_id}/file](#113-下载知识库文件)
+12. [AI 设置 (v0.19.0)](#12-ai-设置)
+   - [GET /api/settings/ai](#121-获取ai配置)
+   - [PUT /api/settings/ai](#122-保存ai配置)
+   - [POST /api/settings/ai/test](#123-测试ai连接)
+13. [经验蒸馏 (v0.19.0)](#13-经验蒸馏)
+   - [GET /api/experiences](#131-已确认经验列表)
+   - [GET /api/experiences/candidates](#132-会议经验候选)
+   - [POST /api/experiences/{id}/approve](#133-确认经验)
+   - [POST /api/experiences/{id}/reject](#134-拒绝经验)
+14. [系统](#14-系统)
+   - [GET /api/timeline](#141-时间线)
 
 ---
 
@@ -599,23 +609,82 @@ GET /api/meetings/{id}/events
 
 ---
 
-## 10. 文件下载 (v0.19.0)
+## 10. 会议材料 (v0.19.0)
+
+所有材料端点均需认证 + owner 校验 (ADR-0050)。
+
+### 10.1 列出会议材料
+
+```
+GET /api/meetings/{id}/materials
+```
+
+**响应**:
+```json
+{
+  "meeting_id": "api_xxxx",
+  "materials": [
+    {
+      "id": "mat_abc123",
+      "meeting_id": "api_xxxx",
+      "filename": "方案.pptx",
+      "content_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "size": 18600000,
+      "created_at": "2026-07-08T12:00:00+00:00",
+      "status": "stored"
+    }
+  ],
+  "count": 1
+}
+```
+
+### 10.2 上传会议材料
+
+```
+POST /api/meetings/{id}/materials
+```
+
+`multipart/form-data`:
+- `file`: 原始文件（必需）
+- 支持格式: `.txt .md .pdf .png .jpg .pptx .docx .xlsx .csv .json .mp3 .wav .mp4` 等
+
+上传后自动：保存 Material 实体 → 文本类喂给 Hermes → 异步入 KB。
+
+### 10.3 材料详情
+
+```
+GET /api/materials/{id}
+```
+
+返回 Material 元数据（文件名、大小、类型、状态等），不含文件原始内容。
+
+### 10.4 删除材料
+
+```
+DELETE /api/materials/{id}
+```
+
+删除材料文件目录 + 从会议 index 中移除。返回 `{"deleted": true}`。
+
+---
+
+## 11. 文件下载 (v0.19.0)
 
 三种文件下载接口, 均需认证 + owner 校验, 返回 `Content-Disposition: attachment`:
 
-### 10.1 下载交付物文件
+### 11.1 下载交付物文件
 
 ```
 GET /api/meetings/{id}/docs/{kind}/download
 ```
 
-### 10.2 下载会议材料文件
+### 11.2 下载会议材料文件
 
 ```
 GET /api/materials/{id}/file
 ```
 
-### 10.3 下载知识库文件
+### 11.3 下载知识库文件
 
 ```
 GET /api/kb/{doc_id}/file
@@ -625,11 +694,11 @@ GET /api/kb/{doc_id}/file
 
 ---
 
-## 11. AI 设置 (v0.19.0)
+## 12. AI 设置 (v0.19.0)
 
 每用户独立配置, 存储在 `data/settings/ai/{user_id}.json`. API Key 明文存储但 GET 返回时脱敏。
 
-### 11.1 获取 AI 配置
+### 12.1 获取 AI 配置
 
 ```
 GET /api/settings/ai
@@ -649,7 +718,7 @@ GET /api/settings/ai
 
 未配置时返回 `{"api_key_configured": false, "status": "not_configured"}`.
 
-### 11.2 保存 AI 配置
+### 12.2 保存 AI 配置
 
 ```
 PUT /api/settings/ai
@@ -667,7 +736,7 @@ PUT /api/settings/ai
 
 所有字段可选, 空字符串表示清空对应值. 返回 `{"status": "saved", "updated_at": "..."}`.
 
-### 11.3 测试 AI 连接
+### 12.3 测试 AI 连接
 
 ```
 POST /api/settings/ai/test
@@ -699,9 +768,69 @@ POST /api/settings/ai/test
 
 ---
 
-## 12. 系统
+## 13. 经验蒸馏 (v0.19.0)
 
-### 12.1 时间线
+会议结束后自动从 MeetingState 提取经验候选，用户可确认/拒绝。
+已确认经验存入聚合索引 `data/experiences/_all.json`，后续会议自动注入上下文。
+
+### 13.1 已确认经验列表
+
+```
+GET /api/experiences
+```
+
+**响应**:
+```json
+{
+  "experiences": [
+    {
+      "id": "exp-abc123",
+      "kind": "domain_fact",
+      "text": "REQ: 实验平台需支持实时数据采集",
+      "domain": "物理实验",
+      "confidence": 0.6,
+      "approved": true,
+      "source_meeting_id": "meeting-001",
+      "created_at": "2026-07-08T12:00:00+00:00"
+    }
+  ],
+  "count": 1
+}
+```
+
+### 13.2 会议经验候选
+
+```
+GET /api/experiences/candidates?meeting_id={meeting_id}
+```
+
+需 owner 校验。返回该会议提取的所有经验候选（含未确认项）。
+
+### 13.3 确认经验
+
+```
+POST /api/experiences/{item_id}/approve
+```
+
+**请求 JSON**: `{"meeting_id": "..."}`
+
+需 owner 校验。将经验标记为 approved=true，同步入聚合索引。
+
+### 13.4 拒绝经验
+
+```
+POST /api/experiences/{item_id}/reject
+```
+
+**请求 JSON**: `{"meeting_id": "..."}`
+
+需 owner 校验。从会议文件 + 聚合索引中永久移除该条候选。
+
+---
+
+## 14. 系统
+
+### 14.1 时间线
 
 ```
 GET /api/timeline
