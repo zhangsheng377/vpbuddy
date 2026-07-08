@@ -5,6 +5,7 @@ All functions below are the canonical implementations, originally from ui_server
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import threading
@@ -31,9 +32,9 @@ from .config import (
 _CHAT_AGENT_CACHE: dict[str, Any] = {}
 
 # 2026-07-05 fix(#4): per-meeting 文件锁 for stream_meta + chat_history
-# FIXME: 锁字典无限增长 — 每个 meeting_id 创建后永不释放,
-# 长期运行会累积内存。重启清空,当前可接受;后续可加 LRU 淘汰或
-# 定期清扫 (每 100 次访问清理超过 1 小时未用的锁).
+# 带 LRU 淘汰: 超过 _MAX_LOCKS 时清理最久未访问的锁, 防止内存泄漏
+_MAX_LOCKS = 500
+_LOCK_ACCESS_ORDER: list[str] = []  # 最近访问的 meeting_id 有序列表
 _meta_locks: dict[str, threading.Lock] = {}
 _chat_locks: dict[str, threading.Lock] = {}
 _file_lock_global = threading.Lock()
@@ -43,10 +44,32 @@ _CLEAN_AGENT_CACHE: dict[str, Any] = {}
 _CLEAN_AGENT_LOCK = threading.Lock()
 
 
+def _evict_locks_if_needed() -> None:
+    """当锁数量超过 _MAX_LOCKS 时, 淘汰最久未访问的一半."""
+    if len(_meta_locks) + len(_chat_locks) < _MAX_LOCKS * 2:
+        return
+    # 淘汰最近未访问的 50%
+    evict_count = _MAX_LOCKS // 2
+    to_evict = _LOCK_ACCESS_ORDER[:evict_count]
+    for mid in to_evict:
+        _meta_locks.pop(mid, None)
+        _chat_locks.pop(mid, None)
+    del _LOCK_ACCESS_ORDER[:evict_count]
+
+
+def _touch_lock_order(meeting_id: str) -> None:
+    """更新锁访问顺序 (移到末尾)."""
+    if meeting_id in _LOCK_ACCESS_ORDER:
+        _LOCK_ACCESS_ORDER.remove(meeting_id)
+    _LOCK_ACCESS_ORDER.append(meeting_id)
+
+
 def _get_meta_lock(meeting_id: str) -> threading.Lock:
     with _file_lock_global:
         if meeting_id not in _meta_locks:
             _meta_locks[meeting_id] = threading.RLock()
+        _touch_lock_order(meeting_id)
+        _evict_locks_if_needed()
         return _meta_locks[meeting_id]
 
 
@@ -54,7 +77,26 @@ def _get_chat_lock(meeting_id: str) -> threading.Lock:
     with _file_lock_global:
         if meeting_id not in _chat_locks:
             _chat_locks[meeting_id] = threading.Lock()
+        _touch_lock_order(meeting_id)
+        _evict_locks_if_needed()
         return _chat_locks[meeting_id]
+
+
+# ── Safe SSE push ──
+
+_log = logging.getLogger(__name__)
+
+
+def safe_push_event(meeting_id: str, event_type: str, data: Any) -> None:
+    """安全推送 SSE 事件, 失败时仅 log warning 不抛异常.
+
+    替代散落在各路由中的 try/except push_event 模式.
+    """
+    try:
+        from ..realtime_server import push_event
+        push_event(meeting_id, event_type, data)
+    except Exception:
+        _log.warning("non-critical error pushing %s event", event_type, exc_info=True)
 
 
 # ── Stream metadata ──

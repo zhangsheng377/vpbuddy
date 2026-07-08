@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 import tempfile
@@ -73,6 +74,13 @@ from ..server.api_utils import (
     list_meetings,
     get_timeline,
     get_status,
+    # 安全推送
+    safe_push_event,
+)
+from .config import (
+    MAX_CHAT_MESSAGE_LENGTH,
+    MAX_MEETING_ID_LENGTH,
+    MAX_UPLOAD_SIZE,
 )
 
 # ── 材料存储 ──
@@ -99,6 +107,39 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"],
 )
+
+# ── 速率限制中间件 (轻量级令牌桶, 无外部依赖) ──
+from .rate_limit import RateLimitMiddleware
+app.add_middleware(RateLimitMiddleware)
+
+
+# ── 统一异常处理器 ──
+_fastapi_logger = logging.getLogger("vpbuddy.fastapi")
+
+
+@app.exception_handler(HTTPException)
+async def _http_exception_handler(request: Request, exc: HTTPException):
+    """统一 HTTPException 响应格式: {"error": str, "status": int}"""
+    detail = exc.detail
+    if isinstance(detail, dict):
+        # 已是 dict 格式, 确保有 status 字段
+        detail.setdefault("status", exc.status_code)
+        return JSONResponse(status_code=exc.status_code, content=detail)
+    # str 格式 (legacy), 包装成统一 dict
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": str(detail), "status": exc.status_code},
+    )
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+    """未捕获异常: 统一返回 500, 不泄露 traceback."""
+    _fastapi_logger.error("Unhandled exception on %s %s: %s", request.method, request.url.path, exc, exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"error": "服务器内部错误", "status": 500},
+    )
 
 
 # ── uvicorn startup event: warmup 日志 ──
@@ -377,7 +418,7 @@ async def post_reject_experience(item_id: str, request: Request, user: dict = De
 
 
 @app.get("/api/meetings/check_id")
-def get_meetings_check_id(id: str = Query(..., description="meeting_id")):
+def get_meetings_check_id(id: str = Query(..., description="meeting_id"), user: dict = Depends(get_current_user)):
     """GET /api/meetings/check_id — 校验 meeting_id 是否可用 (ADR-0022)"""
     mid = id.strip()
     if not mid:
@@ -556,7 +597,7 @@ def get_meeting_aggregate(meeting_id: str, user: dict = Depends(get_current_user
 
 
 @app.get("/api/client/device-status")
-def get_client_device_status():
+def get_client_device_status(user: dict = Depends(get_current_user)):
     """GET /api/client/device-status — 设备状态"""
     try:
         from .._version import __version__
@@ -615,7 +656,7 @@ def get_meeting_doc_download(meeting_id: str, kind: str, user: dict = Depends(ge
 
 
 @app.get("/api/meetings/{meeting_id}/demo/versions")
-def get_demo_versions(meeting_id: str):
+def get_demo_versions(meeting_id: str, user: dict = Depends(get_current_user)):
     """GET /api/meetings/{id}/demo/versions — demo 版本列表 (ADR-0024)"""
     from ..demo_version import list_versions
 
@@ -693,6 +734,13 @@ async def post_meeting_material(meeting_id: str, request: Request, user: dict = 
     if not file_data:
         raise HTTPException(status_code=400, detail="No file in upload")
 
+    # 上传大小限制
+    if len(file_data) > MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail={"error": f"文件过大 ({len(file_data)} bytes, 上限 {MAX_UPLOAD_SIZE} bytes)", "status": 413},
+        )
+
     # 提取文件名和 Content-Type
     filename = fields.get("_filename") or "material.bin"
     file_ct = fields.get("_content_type") or "application/octet-stream"
@@ -724,47 +772,44 @@ async def post_meeting_material(meeting_id: str, request: Request, user: dict = 
         else:
             chat_message = f"用户上传了会议材料：{filename}，已存入知识库。"
     elif file_type == "image":
-        # 图片: 两条路并行
-        # ① 告诉 Hermes 文件路径 + 已入 KB，让模型自己决定怎么用
-        # ② 同步调 MiniMax vision 提取文字描述，追加到消息中
+        # 图片: 先返回基础消息, vision 分析移到后台线程异步执行
         import base64 as _base64
         file_path_on_disk = material_storage.get_file_path(meta.material_id)
         disk_path = str(file_path_on_disk) if file_path_on_disk else "(unknown)"
-        
+
         chat_message = (
             f"用户上传了截图/图片：{filename}\n"
             f"服务器文件路径：{disk_path}\n"
             f"已存入知识库（可搜索 KB 获取内容）。"
         )
-        
-        # 尝试 vision 分析
-        try:
-            import os as _os
-            from openai import OpenAI as _OpenAI
-            
-            base_url = _os.environ.get("OPENAI_BASE_URL", "https://api.minimax.chat/v1")
-            api_key = _os.environ.get("OPENAI_API_KEY") or _os.environ.get("MINIMAX_API_KEY") or ""
-            if not api_key:
-                # 从 ~/.hermes/.env 读 key
-                try:
-                    with open(os.environ.get("HERMES_ENV_PATH", os.path.expanduser("~/.hermes/.env"))) as _f:
-                        for _line in _f:
-                            if "=" in _line and not _line.strip().startswith("#"):
-                                _k, _v = _line.strip().split("=", 1)
-                                if _k in ("OPENAI_API_KEY", "MINIMAX_API_KEY"):
-                                    api_key = _v.strip()
-                                    break
-                except Exception:
-                    import logging
-                    logging.getLogger(__name__).warning("non-critical error reading env file", exc_info=True)
-            
-            if api_key:
+
+        # 异步 vision 分析: 后台线程处理, 完成后追加到 chat
+        def _run_vision_async():
+            try:
+                base_url = os.environ.get("OPENAI_BASE_URL", "https://api.minimax.chat/v1")
+                api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("MINIMAX_API_KEY") or ""
+                if not api_key:
+                    try:
+                        with open(os.environ.get("HERMES_ENV_PATH", os.path.expanduser("~/.hermes/.env"))) as _f:
+                            for _line in _f:
+                                if "=" in _line and not _line.strip().startswith("#"):
+                                    _k, _v = _line.strip().split("=", 1)
+                                    if _k in ("OPENAI_API_KEY", "MINIMAX_API_KEY"):
+                                        api_key = _v.strip()
+                                        break
+                    except Exception:
+                        pass
+
+                if not api_key:
+                    print(f"[materials] Vision 跳过: 无 API key")
+                    return
+
                 import requests as _requests
                 _vresp = _requests.post(
                     f"{base_url}/chat/completions",
                     headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                     json={
-                        "model": _os.environ.get("MODEL", "minimax-m3"),
+                        "model": os.environ.get("MODEL", "minimax-m3"),
                         "messages": [{
                             "role": "user",
                             "content": [
@@ -779,14 +824,23 @@ async def post_meeting_material(meeting_id: str, request: Request, user: dict = 
                     timeout=60,
                 )
                 vision_text = _vresp.json().get("choices", [{}])[0].get("message", {}).get("content", "") or ""
-                print(f"[materials] Vision 分析完成: {filename} ({len(vision_text)} chars)")
-                chat_message += f"\n\n---图片 AI 分析结果---\n{vision_text}\n---分析结果结束---"
-            else:
-                print(f"[materials] Vision 跳过: 无 API key")
-        except Exception as e:
-            print(f"[materials] Vision 分析失败: {str(e)[:200]}")
+                if vision_text:
+                    print(f"[materials] Vision 异步分析完成: {filename} ({len(vision_text)} chars)")
+                    # 追加 vision 结果到 chat
+                    vision_msg = _append_chat_message(
+                        meeting_id, "assistant",
+                        f"---图片 AI 分析结果 ({filename})---\n{vision_text}\n---分析结果结束---",
+                        source="vision-analysis",
+                    )
+                    safe_push_event(meeting_id, "chat-message", vision_msg)
+                else:
+                    print(f"[materials] Vision 异步分析返回空: {filename}")
+            except Exception as e:
+                print(f"[materials] Vision 异步分析失败: {str(e)[:200]}")
 
-        chat_message += "\n\n请将以上内容纳入会议上下文。"
+        threading.Thread(target=_run_vision_async, daemon=True).start()
+
+        chat_message += "\n\n请将以上内容纳入会议上下文。图片正在异步分析中，结果稍后推送。"
     else:
         # binary (pdf/pptx/docx 等): 告诉 Hermes 去 KB 搜
         chat_message = (
@@ -801,8 +855,7 @@ async def post_meeting_material(meeting_id: str, request: Request, user: dict = 
                 meeting_id, "user", f"[上传了材料: {filename}]",
                 source="material-upload", extra=chat_extra,
             )
-            from ..realtime_server import push_event
-            push_event(meeting_id, "chat-message", user_msg)
+            safe_push_event(meeting_id, "chat-message", user_msg)
 
             result = _run_vp_chat(meeting_id, chat_message)
             if result.get("status") != "fallback" and result.get("content"):
@@ -810,7 +863,7 @@ async def post_meeting_material(meeting_id: str, request: Request, user: dict = 
                     meeting_id, "assistant", result["content"],
                     source=result["source"], status=result["status"],
                 )
-                push_event(meeting_id, "chat-message", assistant_msg)
+                safe_push_event(meeting_id, "chat-message", assistant_msg)
         except Exception as e:
             print(f"[materials] Hermes 处理失败: {e}")
 
@@ -1454,7 +1507,7 @@ async def post_upload_audio(
 
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Processing failed: {e}", "trace": traceback.format_exc()},
+            detail={"error": f"Processing failed: {e}", "status": 500},
         )
     finally:
         try:
@@ -1516,13 +1569,7 @@ async def post_chat(meeting_id: str, request: Request, user: dict = Depends(get_
             source="client-upload",
             extra={"attachments": files_meta},
         )
-        try:
-            from ..realtime_server import push_event
-
-            push_event(meeting_id, "chat-message", user_msg)
-        except Exception:
-            import logging
-            logging.getLogger(__name__).warning("non-critical error pushing chat-message user_msg (upload)", exc_info=True)
+        safe_push_event(meeting_id, "chat-message", user_msg)
 
         result = _run_vp_chat(meeting_id, text or "(用户只上传了文件, 没问文本)")
         assistant_msg = _append_chat_message(
@@ -1533,13 +1580,7 @@ async def post_chat(meeting_id: str, request: Request, user: dict = Depends(get_
             status=result["status"],
             extra={"error": result.get("error"), "attachment_count": len(files_meta)},
         )
-        try:
-            from ..realtime_server import push_event
-
-            push_event(meeting_id, "chat-message", assistant_msg)
-        except Exception:
-            import logging
-            logging.getLogger(__name__).warning("non-critical error pushing chat-message assistant_msg", exc_info=True)
+        safe_push_event(meeting_id, "chat-message", assistant_msg)
 
         return {
             "meeting_id": meeting_id,
@@ -1561,6 +1602,11 @@ async def post_chat(meeting_id: str, request: Request, user: dict = Depends(get_
     message = str(payload.get("message", "")).strip()
     if not message:
         raise HTTPException(status_code=400, detail="message is required")
+    if len(message) > MAX_CHAT_MESSAGE_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"消息过长 ({len(message)} 字, 上限 {MAX_CHAT_MESSAGE_LENGTH})", "status": 400},
+        )
 
     client_context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
     user_msg = _append_chat_message(
@@ -1570,13 +1616,7 @@ async def post_chat(meeting_id: str, request: Request, user: dict = Depends(get_
         source="client",
         extra={"context": client_context},
     )
-    try:
-        from ..realtime_server import push_event
-
-        push_event(meeting_id, "chat-message", user_msg)
-    except Exception:
-        import logging
-        logging.getLogger(__name__).warning("non-critical error pushing chat-message user_msg (client)", exc_info=True)
+    safe_push_event(meeting_id, "chat-message", user_msg)
 
     result = _run_vp_chat(meeting_id, message, client_context)
     assistant_msg = _append_chat_message(
@@ -1587,13 +1627,7 @@ async def post_chat(meeting_id: str, request: Request, user: dict = Depends(get_
         status=result["status"],
         extra={"error": result.get("error")},
     )
-    try:
-        from ..realtime_server import push_event
-
-        push_event(meeting_id, "chat-message", assistant_msg)
-    except Exception:
-        import logging
-        logging.getLogger(__name__).warning("non-critical error pushing chat-message assistant_msg", exc_info=True)
+    safe_push_event(meeting_id, "chat-message", assistant_msg)
 
     return {
         "meeting_id": meeting_id,
@@ -1649,20 +1683,14 @@ def post_collab_ask(
             status_code = 200
         raise HTTPException(status_code=status_code, detail=result)
 
-    try:
-        from ..realtime_server import push_event
-
-        push_event(meeting_id, "collab-update", {
-            "action": "ask",
-            "qid": result.get("qid"),
-            "section": section,
-            "status": result["status"],
-            "question": question,
-            "asker": asker,
-        })
-    except Exception:
-        import logging
-        logging.getLogger(__name__).warning("non-critical error pushing collab-update (ask)", exc_info=True)
+    safe_push_event(meeting_id, "collab-update", {
+        "action": "ask",
+        "qid": result.get("qid"),
+        "section": section,
+        "status": result["status"],
+        "question": question,
+        "asker": asker,
+    })
 
     return result
 
@@ -1686,19 +1714,13 @@ def post_collab_answer(
         status_code = 404 if result.get("status") == "not_found" else 400
         raise HTTPException(status_code=status_code, detail=result)
 
-    try:
-        from ..realtime_server import push_event
-
-        push_event(meeting_id, "collab-update", {
-            "action": "answer",
-            "qid": qid,
-            "answer": answer,
-            "answerer": answerer,
-            "status": "answered",
-        })
-    except Exception:
-        import logging
-        logging.getLogger(__name__).warning("non-critical error pushing collab-update (answer)", exc_info=True)
+    safe_push_event(meeting_id, "collab-update", {
+        "action": "answer",
+        "qid": qid,
+        "answer": answer,
+        "answerer": answerer,
+        "status": "answered",
+    })
 
     return result
 

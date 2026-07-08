@@ -19,7 +19,18 @@ UTC = timezone.utc
 logger = logging.getLogger(__name__)
 
 # ── JWT 配置 ──
-JWT_SECRET = os.environ.get("VPBUDDY_JWT_SECRET", "vpbuddy-dev-secret-change-in-prod")
+# 安全要求: 生产环境必须设置 VPBUDDY_JWT_SECRET 环境变量
+# 未设置时自动生成随机密钥 (每次重启后旧 token 失效, 适合开发)
+_JWT_SECRET_ENV = os.environ.get("VPBUDDY_JWT_SECRET", "")
+if _JWT_SECRET_ENV:
+    JWT_SECRET = _JWT_SECRET_ENV
+else:
+    import secrets as _secrets
+    JWT_SECRET = _secrets.token_hex(32)
+    logger.warning(
+        "VPBUDDY_JWT_SECRET 未设置, 已自动生成随机密钥 (重启后旧 token 将失效). "
+        "生产环境请设置此环境变量!"
+    )
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = 72
 

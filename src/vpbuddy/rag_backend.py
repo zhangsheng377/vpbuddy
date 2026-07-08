@@ -20,6 +20,24 @@ Metadata = dict[str, Any]
 SearchResult = list[dict[str, Any]]
 
 
+def _detect_device() -> str:
+    """检测最佳 embedding 设备: 优先 GPU, fallback CPU.
+
+    可通过 VPBUDDY_EMBEDDING_DEVICE 环境变量强制指定.
+    """
+    forced = os.environ.get("VPBUDDY_EMBEDDING_DEVICE", "")
+    if forced:
+        return forced
+    try:
+        import torch
+        if torch.cuda.is_available():
+            logger.info("ChromaRAG: CUDA 可用, 使用 GPU 进行 embedding")
+            return "cuda"
+    except ImportError:
+        pass
+    return "cpu"
+
+
 class RAGBackend:
     """RAG 后端抽象接口 (Protocol)."""
 
@@ -75,7 +93,7 @@ class ChromaRAG(RAGBackend):
         _client = chromadb.PersistentClient(path=str(persist_dir))
         _ef = embedding_functions.SentenceTransformerEmbeddingFunction(
             model_name=model_name,
-            device="cpu",
+            device=_detect_device(),
         )
         self._collection = _client.get_or_create_collection(
             name=collection_name,

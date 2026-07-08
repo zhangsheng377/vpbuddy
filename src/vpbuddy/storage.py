@@ -22,15 +22,38 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 # 2026-07-05 fix(#4): per-meeting 文件锁, 防止并发写丢更新
+# 带 LRU 淘汰: 超过 _MAX_LOCKS 时清理最久未访问的锁
+_MAX_LOCKS = 500
+_LOCK_ACCESS_ORDER: list[str] = []
 _meeting_locks: dict[str, threading.Lock] = {}
 _global_lock = threading.Lock()
 
 
+def _evict_locks_if_needed() -> None:
+    """当锁数量超过 _MAX_LOCKS 时, 淘汰最久未访问的一半."""
+    if len(_meeting_locks) < _MAX_LOCKS:
+        return
+    evict_count = _MAX_LOCKS // 2
+    to_evict = _LOCK_ACCESS_ORDER[:evict_count]
+    for mid in to_evict:
+        _meeting_locks.pop(mid, None)
+    del _LOCK_ACCESS_ORDER[:evict_count]
+
+
+def _touch_lock_order(meeting_id: str) -> None:
+    """更新锁访问顺序 (移到末尾)."""
+    if meeting_id in _LOCK_ACCESS_ORDER:
+        _LOCK_ACCESS_ORDER.remove(meeting_id)
+    _LOCK_ACCESS_ORDER.append(meeting_id)
+
+
 def _get_lock(meeting_id: str) -> threading.Lock:
-    """获取 per-meeting 锁 (线程安全创建)"""
+    """获取 per-meeting 锁 (线程安全创建, 带 LRU 淘汰)"""
     with _global_lock:
         if meeting_id not in _meeting_locks:
             _meeting_locks[meeting_id] = threading.Lock()
+        _touch_lock_order(meeting_id)
+        _evict_locks_if_needed()
         return _meeting_locks[meeting_id]
 
 
