@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 from datetime import datetime, timezone
 
 UTC = timezone.utc
@@ -292,3 +293,71 @@ def get_version_file(meeting_id: str, kind: str, docs_dir: Path | None = None) -
     if vp.exists():
         return vp.read_text(encoding="utf-8").strip() or "1"
     return "1"
+
+
+# ── #11 交付物元数据存储 (v0.19.0) ──
+
+_DELIVERABLE_META_FILE = ".deliverables.json"
+
+
+def _deliverables_meta_path(meeting_id: str, docs_dir: Path | None = None) -> Path:
+    return _meeting_dir(meeting_id, docs_dir) / _DELIVERABLE_META_FILE
+
+
+def load_deliverable_meta(meeting_id: str, docs_dir: Path | None = None) -> dict:
+    """读取交付物元数据, 不存在返回空 dict."""
+    mp = _deliverables_meta_path(meeting_id, docs_dir)
+    if mp.exists():
+        try:
+            return json.loads(mp.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+def save_deliverable_meta(meeting_id: str, meta: dict, docs_dir: Path | None = None):
+    """写入交付物元数据 (atomic write)."""
+    mp = _deliverables_meta_path(meeting_id, docs_dir)
+    mp.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = -1, ""
+    try:
+        fd, tmp = tempfile.mkstemp(suffix=".json", dir=str(mp.parent))
+        os.write(fd, json.dumps(meta, ensure_ascii=False, indent=2).encode())
+        os.fsync(fd)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    os.replace(tmp, str(mp))
+
+
+def get_deliverable_version(meeting_id: str, kind: str, docs_dir: Path | None = None) -> str:
+    """获取交付物版本号, demo 用 manifest, 其它用 .deliverables.json."""
+    if kind == "demo":
+        vs = list_versions(meeting_id, docs_dir)
+        return str(len(vs)) if vs else "1"
+    meta = load_deliverable_meta(meeting_id, docs_dir)
+    return str(meta.get(kind, {}).get("version", 1))
+
+
+def bump_deliverable_version(meeting_id: str, kind: str, docs_dir: Path | None = None) -> int:
+    """交付物版本号 +1, 返回新版本号. demo 由 manifest 管理不在此处理."""
+    if kind == "demo":
+        return len(list_versions(meeting_id, docs_dir)) + 1
+    meta = load_deliverable_meta(meeting_id, docs_dir)
+    entry = meta.get(kind, {})
+    new_ver = entry.get("version", 0) + 1
+    entry["version"] = new_ver
+    entry["updated_at"] = datetime.now(UTC).isoformat()
+    meta[kind] = entry
+    save_deliverable_meta(meeting_id, meta, docs_dir)
+    return new_ver
+
+
+def set_deliverable_status(meeting_id: str, kind: str, status: str, docs_dir: Path | None = None):
+    """更新交付物状态: draft / stored / generating / failed."""
+    meta = load_deliverable_meta(meeting_id, docs_dir)
+    entry = meta.get(kind, {"version": 1})
+    entry["status"] = status
+    entry["updated_at"] = datetime.now(UTC).isoformat()
+    meta[kind] = entry
+    save_deliverable_meta(meeting_id, meta, docs_dir)

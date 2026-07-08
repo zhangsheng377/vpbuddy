@@ -223,6 +223,95 @@ def get_meetings(user: dict = Depends(get_current_user)):
     return {"meetings": own, "count": len(own)}
 
 
+# ══════════════════════════════════════════════════════════════════
+# AI Settings (#21) — 每用户模型配置
+# ══════════════════════════════════════════════════════════════════
+
+@app.get("/api/settings/ai")
+def get_ai_settings(user: dict = Depends(get_current_user)):
+    """GET /api/settings/ai — 获取当前用户 AI 配置 (api_key 脱敏)."""
+    from .ai_settings import load_settings, mask_key
+
+    s = load_settings(user["user_id"])
+    if s is None:
+        return {
+            "provider": "",
+            "model": "",
+            "base_url": "",
+            "api_key_configured": False,
+            "status": "not_configured",
+        }
+    return {
+        "provider": s.get("provider", ""),
+        "model": s.get("model", ""),
+        "base_url": s.get("base_url", ""),
+        "api_key_masked": mask_key(s.get("api_key", "")),
+        "api_key_configured": bool(s.get("api_key")),
+        "updated_at": s.get("updated_at"),
+    }
+
+
+@app.put("/api/settings/ai")
+async def put_ai_settings(request: Request, user: dict = Depends(get_current_user)):
+    """PUT /api/settings/ai — 保存当前用户 AI 配置."""
+    from datetime import datetime, timezone
+    from .ai_settings import save_settings
+
+    body = await request.json()
+    data = {
+        "provider": str(body.get("provider", "")).strip(),
+        "model": str(body.get("model", "")).strip(),
+        "base_url": str(body.get("base_url", "")).strip().rstrip("/"),
+        "api_key": str(body.get("api_key", "")).strip(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    save_settings(user["user_id"], data)
+    return {"status": "saved", "updated_at": data["updated_at"]}
+
+
+@app.post("/api/settings/ai/test")
+async def post_ai_settings_test(user: dict = Depends(get_current_user)):
+    """POST /api/settings/ai/test — 测试当前 AI 配置连接是否可用."""
+    from .ai_settings import load_settings, mask_key
+
+    s = load_settings(user["user_id"])
+    if not s or not s.get("model"):
+        return {"status": "failed", "error": "请先保存 AI 配置", "connected": False}
+
+    t0 = __import__("time").time()
+    try:
+        from run_agent import AIAgent
+        agent = AIAgent(
+            session_id=f"ai-test-{user['user_id'][:12]}",
+            model=s["model"],
+            base_url=s.get("base_url") or None,
+            api_key=s.get("api_key") or None,
+            provider=s.get("provider") or None,
+            quiet_mode=True,
+            max_iterations=2,
+            enabled_toolsets=[],
+            ephemeral_system_prompt="只回复 OK。不要做任何其他事。不要调用工具。",
+        )
+        reply = agent.chat("回复 OK")
+        elapsed = round(__import__("time").time() - t0, 2)
+        return {
+            "status": "connected",
+            "connected": True,
+            "model": s["model"],
+            "provider": s.get("provider", ""),
+            "elapsed_ms": int(elapsed * 1000),
+        }
+    except Exception as e:
+        elapsed = round(__import__("time").time() - t0, 2)
+        return {
+            "status": "failed",
+            "connected": False,
+            "error": str(e)[:500],
+            "model": s.get("model", ""),
+            "elapsed_ms": int(elapsed * 1000),
+        }
+
+
 @app.get("/api/meetings/check_id")
 def get_meetings_check_id(id: str = Query(..., description="meeting_id")):
     """GET /api/meetings/check_id — 校验 meeting_id 是否可用 (ADR-0022)"""

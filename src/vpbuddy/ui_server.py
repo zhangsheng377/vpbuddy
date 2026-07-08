@@ -168,32 +168,39 @@ def _doc_path(meeting_id: str, kind: str) -> Path:
     return DOCS_DIR / meeting_id / f"{kind}.md"
 
 
-def _doc_payload(meeting_id: str, kind: str) -> dict[str, Any]:
+def _doc_payload(meeting_id: str, kind: str) -> dict[str, object]:
+    """返回单文档 DTO.
+
+    v0.19.0: version 字段从 demo_version.get_deliverable_version 读取,
+    替代旧的 per-kind .version 文件方式。元数据统一存储在 .deliverables.json.
+    """
+    import time as _time
+    from .demo_version import get_deliverable_version
+
+    status = "stored"
     path = _doc_path(meeting_id, kind)
     exists = path.exists()
-    content = ""
-    updated_at = None
-    if exists:
-        content = path.read_text(encoding="utf-8", errors="replace")
-        updated_at = datetime.fromtimestamp(path.stat().st_mtime).isoformat()
-    # 版本号: demo 走 list_versions 计数, 其他文档走 get_version_file 或默认 "1"
     if kind == "demo":
-        from .demo_version import list_versions
-        versions = list_versions(meeting_id)
-        version = str(len(versions)) if versions else "1"
+        status = "stored" if exists else "pending"
     else:
-        from .demo_version import get_version_file
-        version = get_version_file(meeting_id, kind)
+        status = "stored" if exists else "pending"
+
+    raw = path.read_text(encoding="utf-8") if exists else ""
+    content = raw[:2000] if kind != "demo" else ""
+    version = get_deliverable_version(meeting_id, kind)
+
     return {
         "meeting_id": meeting_id,
         "kind": kind,
         "label": DOC_LABELS.get(kind, kind),
-        "status": "stored" if exists else "pending",
-        "path": str(path),
         "content": content,
-        "updated_at": updated_at,
-        "doc_size": path.stat().st_size if exists else 0,
         "version": version,
+        "doc_size": len(raw),
+        "status": status,
+        "updated_at": _time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ",
+            _time.gmtime(path.stat().st_mtime if exists else _time.time()),
+        ),
     }
 
 

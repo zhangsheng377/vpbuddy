@@ -50,8 +50,12 @@
    - [GET /api/meetings/{id}/docs/{kind}/download](#101-下载交付物文件)
    - [GET /api/materials/{id}/file](#102-下载会议材料文件)
    - [GET /api/kb/{doc_id}/file](#103-下载知识库文件)
-11. [系统](#10-系统)
-   - [GET /api/timeline](#111-时间线)
+11. [AI 设置 (v0.19.0)](#11-ai-设置)
+   - [GET /api/settings/ai](#111-获取ai配置)
+   - [PUT /api/settings/ai](#112-保存ai配置)
+   - [POST /api/settings/ai/test](#113-测试ai连接)
+12. [系统](#12-系统)
+   - [GET /api/timeline](#121-时间线)
 
 ---
 
@@ -621,9 +625,83 @@ GET /api/kb/{doc_id}/file
 
 ---
 
-## 11. 系统
+## 11. AI 设置 (v0.19.0)
 
-### 11.1 时间线
+每用户独立配置, 存储在 `data/settings/ai/{user_id}.json`. API Key 明文存储但 GET 返回时脱敏。
+
+### 11.1 获取 AI 配置
+
+```
+GET /api/settings/ai
+```
+
+**响应示例**:
+```json
+{
+  "provider": "openai-compatible",
+  "model": "minimax-m3",
+  "base_url": "https://api.minimax.chat/v1",
+  "api_key_masked": "sk-****abcd",
+  "api_key_configured": true,
+  "updated_at": "2026-07-08T05:06:32+00:00"
+}
+```
+
+未配置时返回 `{"api_key_configured": false, "status": "not_configured"}`.
+
+### 11.2 保存 AI 配置
+
+```
+PUT /api/settings/ai
+```
+
+**请求 JSON**:
+```json
+{
+  "provider": "openai-compatible",
+  "model": "minimax-m3",
+  "base_url": "https://api.minimax.chat/v1",
+  "api_key": "sk-your-key-here"
+}
+```
+
+所有字段可选, 空字符串表示清空对应值. 返回 `{"status": "saved", "updated_at": "..."}`.
+
+### 11.3 测试 AI 连接
+
+```
+POST /api/settings/ai/test
+```
+
+用当前保存的配置创建临时 AIAgent → 发送 "回复 OK" → 验证连通性. **不修改任何文件、不调用任何工具。**
+
+**成功响应**:
+```json
+{
+  "status": "connected",
+  "connected": true,
+  "model": "minimax-m3",
+  "provider": "openai-compatible",
+  "elapsed_ms": 6020
+}
+```
+
+**失败响应**:
+```json
+{
+  "status": "failed",
+  "connected": false,
+  "error": "LLM returned error: 401 Unauthorized",
+  "model": "minimax-m3",
+  "elapsed_ms": 1234
+}
+```
+
+---
+
+## 12. 系统
+
+### 12.1 时间线
 
 ```
 GET /api/timeline
