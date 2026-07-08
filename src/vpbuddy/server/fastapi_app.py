@@ -28,9 +28,9 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-# ── 从 ui_server 导入业务函数和常量 ──
-from ..ui_server import (
-    # 常量
+# ── 从 api_utils 导入业务函数和常量 (service layer extracted from ui_server) ──
+from ..server.api_utils import (
+    # 常量 (via config)
     DOC_KINDS,
     DOC_LABELS,
     DOCS_DIR,
@@ -593,14 +593,15 @@ async def get_meeting_events(meeting_id: str, request: Request, user: dict = Dep
 
 
 @app.get("/api/meetings/{meeting_id}/materials")
-async def get_meeting_materials(meeting_id: str):
-    """GET /api/meetings/{id}/materials — 列出会议材料"""
+async def get_meeting_materials(meeting_id: str, user: dict = Depends(get_current_user)):
+    """GET /api/meetings/{id}/materials — 列出会议材料 (ADR-0050: 需 owner)"""
+    _require_meeting_owner(meeting_id, user)
     items = material_storage.list_materials(meeting_id)
     return {"meeting_id": meeting_id, "materials": items, "count": len(items)}
 
 
 @app.post("/api/meetings/{meeting_id}/materials")
-async def post_meeting_material(meeting_id: str, request: Request):
+async def post_meeting_material(meeting_id: str, request: Request, user: dict = Depends(get_current_user)):
     """POST /api/meetings/{id}/materials — 上传会议材料
 
     multipart/form-data:
@@ -620,6 +621,9 @@ async def post_meeting_material(meeting_id: str, request: Request):
 
     body = await request.body()
     fields, file_data = _parse_multipart(body, content_type)
+
+    # ADR-0050: 仅 meeting owner 可上传
+    _require_meeting_owner(meeting_id, user)
 
     if not file_data:
         raise HTTPException(status_code=400, detail="No file in upload")
@@ -780,12 +784,26 @@ async def post_meeting_material(meeting_id: str, request: Request):
 
 
 @app.get("/api/materials/{material_id}")
-async def get_material_detail(material_id: str):
-    """GET /api/materials/{id} — 材料详情"""
+async def get_material_detail(material_id: str, user: dict = Depends(get_current_user)):
+    """GET /api/materials/{id} — 材料详情 (需认证 + owner 校验)"""
     meta = material_storage.get_material(material_id)
     if meta is None:
         raise HTTPException(status_code=404, detail=f"Material not found: {material_id}")
+    if meta.meeting_id:
+        _require_meeting_owner(meta.meeting_id, user)
     return meta.to_dict()
+
+
+@app.delete("/api/materials/{material_id}")
+async def delete_material(material_id: str, user: dict = Depends(get_current_user)):
+    """DELETE /api/materials/{id} — 删除会议材料 (需认证 + owner 校验, v0.19.0)"""
+    meta = material_storage.get_material(material_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail=f"Material not found: {material_id}")
+    if meta.meeting_id:
+        _require_meeting_owner(meta.meeting_id, user)
+    ok = material_storage.delete_material(material_id)
+    return {"deleted": ok, "material_id": material_id}
 
 
 @app.get("/api/materials/{material_id}/file")
@@ -1805,7 +1823,7 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
 @app.get("/meetings")
 async def fe_list_meetings():
     """GET /meetings → GET /api/meetings (wrap)"""
-    from ..ui_server import list_meetings
+    from ..server.api_utils import list_meetings
     meetings = list_meetings()
     return {"meetings": meetings, "count": len(meetings)}
 
@@ -1887,7 +1905,7 @@ async def fe_recording_stop(meeting_id: str):
 @app.get("/meetings/{meeting_id}/deliverables")
 async def fe_list_deliverables(meeting_id: str):
     """GET /meetings/:id/deliverables → GET /api/meetings/:id/docs (wrap)"""
-    from ..ui_server import _doc_payload
+    from ..server.api_utils import _doc_payload
     docs = []
     for kind in DOC_KINDS:
         payload = _doc_payload(meeting_id, kind)

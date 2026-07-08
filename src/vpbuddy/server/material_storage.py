@@ -185,6 +185,29 @@ def store_file(
     return meta
 
 
+def delete_material(material_id: str) -> bool:
+    """删除材料及其文件目录，从 index 中移除 (v0.19.0)."""
+    # 先查元数据找 meeting_id
+    all_meetings = [d.name for d in _base().iterdir() if d.is_dir() and d.name != "temp"]
+    found_dir = None
+    target_meeting = None
+    for mid in all_meetings:
+        candidate = _base() / mid / material_id
+        if candidate.is_dir():
+            found_dir = candidate
+            target_meeting = mid
+            break
+    if found_dir is None:
+        return False
+    # 删文件目录
+    shutil.rmtree(found_dir)
+    # 从 index 中移除
+    entries = _load_index(target_meeting)
+    entries = [e for e in entries if e.get("id") != material_id]
+    _save_index(target_meeting, entries)
+    return True
+
+
 def list_materials(meeting_id: str) -> list[dict]:
     """列出会议的所有材料。"""
     return _load_index(meeting_id)
