@@ -124,12 +124,18 @@ def handle_kb_upload(body: bytes, content_type: str, user_id: str = "") -> dict:
 
     multipart/form-data:
         meeting_id: str (必填, 用于上传目录组织)
+        scope: str (可选, 默认 "personal_kb", #20 KB 产品层参数)
+        labels: str (可选, 逗号分隔标签字符串, #20)
+        meeting_callable: str (可选, "true"/"false", 默认 "true", #20)
         file: binary (必填, .txt/.md/.pdf)
 
     2026-07-01 ADR-0023: _parse_multipart 升级支持多文件, 这里为向后兼容仍只取
     files[0]. 多文件上传请走 handle_chat_upload (POST /api/meetings/{id}/chat).
 
     2026-07-07 ADR-0047: Chroma metadata 加 user_id, 检索按 user 隔离.
+
+    2026-07-08 #20: 新增 scope / labels / meeting_callable 三个可选表单字段,
+    存入 Chroma metadata, 在 list/search 响应中返回.
     """
     try:
         parts = _parse_multipart(body, content_type)
@@ -137,6 +143,14 @@ def handle_kb_upload(body: bytes, content_type: str, user_id: str = "") -> dict:
         return {"error": f"解析请求失败: {e}", "status": 400}
 
     meeting_id = parts.get("meeting_id", "").strip()
+    # #20 KB 产品层参数
+    scope = parts.get("scope", "personal_kb").strip() or "personal_kb"
+    labels = parts.get("labels", "").strip()
+    meeting_callable = parts.get("meeting_callable", "true").strip().lower()
+    # 规范化 bool 字符串
+    if meeting_callable not in ("true", "false"):
+        meeting_callable = "true"
+
     files = parts.get("files") or []
     if not files:
         return {"error": "file 必填", "status": 400}
@@ -168,7 +182,7 @@ def handle_kb_upload(body: bytes, content_type: str, user_id: str = "") -> dict:
     if not text.strip():
         return {"error": "文件内容为空", "status": 400}
 
-    # 入库 Chroma (ADR-0047: metadata 加 user_id)
+    # 入库 Chroma (ADR-0047: metadata 加 user_id; #20: 加 scope/labels/meeting_callable)
     rag = get_rag()
     doc_id = f"{meeting_id}:{file_uuid}"
     now = datetime.now(UTC).isoformat()
@@ -183,10 +197,13 @@ def handle_kb_upload(body: bytes, content_type: str, user_id: str = "") -> dict:
             "chunk_index": 0,
             "file_size": len(file_bytes),
             "file_ext": Path(filename).suffix.lower().lstrip("."),
+            "scope": scope,
+            "labels": labels,
+            "meeting_callable": meeting_callable,
         }],
     )
 
-    logger.info("KB uploaded: meeting=%s file=%s doc_id=%s size=%d", meeting_id, filename, doc_id, len(file_bytes))
+    logger.info("KB uploaded: meeting=%s file=%s doc_id=%s size=%d scope=%s", meeting_id, filename, doc_id, len(file_bytes), scope)
 
     return {
         "status": 200,
@@ -195,6 +212,9 @@ def handle_kb_upload(body: bytes, content_type: str, user_id: str = "") -> dict:
         "filename": filename,
         "chunks": 1,
         "char_count": len(text),
+        "scope": scope,
+        "labels": labels,
+        "meeting_callable": meeting_callable,
     }
 
 
@@ -322,17 +342,27 @@ def handle_kb_search(params: dict[str, list[str]], body_bytes: bytes, user_id: s
     }
 
 
-def handle_kb_list(params: dict[str, list[str]]) -> dict:
-    """GET /api/kb/list?meeting_id= — 列出 KB 文档 (按会议/全部)."""
-    # Chroma 不提供按 metadata 列表, 用 count
+def handle_kb_list(params: dict[str, list[str]], user_id: str = "") -> dict:
+    """GET /api/kb/list?meeting_id= — 列出 KB 文档 (按会议/全部, #20: 返回元数据).
+
+    ADR-0047: 按 user_id 过滤.
+    #20: 返回 scope / labels / meeting_callable 等产品层字段.
+    """
     rag = get_rag()
     meeting_id = params.get("meeting_id", [None])[0]
 
-    total = rag.count()
+    # 构建 where 过滤
+    where: dict[str, str] = {}
+    if user_id:
+        where["user_id"] = user_id
+    elif meeting_id:
+        where["meeting_id"] = meeting_id
+
+    docs = rag.list_docs(where=where if where else None)
     return {
-        "total": total,
+        "total": len(docs),
         "meeting_id": meeting_id or None,
-        "note": "全量列表需逐文档遍历(Chroma 不暴露 metadata 枚举)",
+        "docs": docs,
     }
 
 
@@ -347,3 +377,23 @@ def handle_kb_delete(path: str) -> dict:
     rag.delete([doc_id])
     logger.info("KB deleted: doc_id=%s", doc_id)
     return {"status": 200, "doc_id": doc_id}
+
+
+def get_kb_file_path(doc_id: str) -> tuple[Path | None, str | None]:
+    """按 KB doc_id 查找原始文件路径，返回 (file_path, meeting_id).
+
+    doc_id 格式: {meeting_id}:{file_uuid} 或 {meeting_id}:chat-upload:{file_uuid}
+    原始文件存储路径: {UPLOADS_DIR}/{meeting_id}/{file_uuid}_{原始文件名}
+    """
+    parts = doc_id.split(":")
+    if len(parts) < 2:
+        return None, None
+    meeting_id = parts[0]
+    file_uuid = parts[-1]  # 最后一个 : 之后的部分 = uuid
+    upload_dir = UPLOADS_DIR / meeting_id
+    if not upload_dir.is_dir():
+        return None, meeting_id
+    matches = sorted(upload_dir.glob(f"{file_uuid}_*"))
+    if not matches:
+        return None, meeting_id
+    return matches[0], meeting_id

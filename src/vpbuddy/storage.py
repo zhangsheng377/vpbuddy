@@ -34,6 +34,31 @@ def _get_lock(meeting_id: str) -> threading.Lock:
         return _meeting_locks[meeting_id]
 
 
+def release_lock(meeting_id: str) -> None:
+    """释放 per-meeting 锁，从字典中移除 (#10)"""
+    with _global_lock:
+        _meeting_locks.pop(meeting_id, None)
+
+
+def cleanup_meeting_locks(data_dir: str | Path) -> int:
+    """移除磁盘上已不存在的会议的残留锁 (#10)
+
+    Returns:
+        清理掉的锁数量
+    """
+    data_dir = Path(data_dir)
+    removed = 0
+    with _global_lock:
+        stale = [
+            mid for mid in _meeting_locks
+            if not (data_dir / f"{mid}.json").exists()
+        ]
+        for mid in stale:
+            _meeting_locks.pop(mid, None)
+            removed += 1
+    return removed
+
+
 class StorageError(Exception):
     pass
 
@@ -99,6 +124,7 @@ class MeetingStorage:
         path = self._path(meeting_id)
         if path.exists():
             path.unlink()
+            release_lock(meeting_id)
             return True
         return False
 

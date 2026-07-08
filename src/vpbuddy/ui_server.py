@@ -176,6 +176,14 @@ def _doc_payload(meeting_id: str, kind: str) -> dict[str, Any]:
     if exists:
         content = path.read_text(encoding="utf-8", errors="replace")
         updated_at = datetime.fromtimestamp(path.stat().st_mtime).isoformat()
+    # 版本号: demo 走 list_versions 计数, 其他文档走 get_version_file 或默认 "1"
+    if kind == "demo":
+        from .demo_version import list_versions
+        versions = list_versions(meeting_id)
+        version = str(len(versions)) if versions else "1"
+    else:
+        from .demo_version import get_version_file
+        version = get_version_file(meeting_id, kind)
     return {
         "meeting_id": meeting_id,
         "kind": kind,
@@ -185,6 +193,7 @@ def _doc_payload(meeting_id: str, kind: str) -> dict[str, Any]:
         "content": content,
         "updated_at": updated_at,
         "doc_size": path.stat().st_size if exists else 0,
+        "version": version,
     }
 
 
@@ -728,80 +737,5 @@ def _close_meeting(meeting_id: str) -> dict:
         }
     except Exception as e:
         return {"error": str(e), "status": "close_failed"}
-
-    def _500(self, msg):
-        self.send_response(500)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.end_headers()
-        self.wfile.write(f"500: {msg}".encode())
-
-    # === v0.9.0 #9 BFF API ===
-
-    def _handle_meeting_aggregate(self, meeting_id: str):
-        """GET /api/meetings/{id}/aggregate — 会议聚合 DTO.
-
-        一次返回: state, docs, collab, chat, 经验.
-        """
-        result: dict[str, Any] = {"meeting_id": meeting_id}
-
-        # 1. State
-        try:
-            from .storage import MeetingStorage
-            storage = MeetingStorage(DATA_DIR)
-            if storage.exists(meeting_id):
-                state = storage.load(meeting_id)
-                result["state"] = state.model_dump(mode="json")
-            else:
-                result["state"] = None
-        except Exception as e:
-            result["state_error"] = str(e)
-
-        # 2. Documents
-        try:
-            docs = [_doc_payload(meeting_id, kind) for kind in DOC_KINDS]
-            result["docs"] = docs
-        except Exception as e:
-            result["docs_error"] = str(e)
-
-        # 3. Collab
-        try:
-            from .collab import collab_stats, list_pending, list_answered, read_collab
-            result["collab"] = {
-                "collab": read_collab(meeting_id),
-                "pending": list_pending(meeting_id),
-                "answered": list_answered(meeting_id),
-                "stats": collab_stats(meeting_id),
-            }
-        except Exception as e:
-            result["collab_error"] = str(e)
-
-        # 4. Experiences
-        try:
-            from .experience_store import load_experiences
-            result["experiences"] = [it.to_dict() for it in load_experiences(meeting_id)]
-        except Exception:
-            result["experiences"] = []
-
-        return self._json(result)
-
-    def _handle_device_status(self):
-        """GET /api/client/device-status — 设备状态.
-
-        返回麦克风/录音/客户端版本等前端设置页需要的信息.
-        """
-        status: dict[str, Any] = {
-            "version": __import__("..__init__", fromlist=["__version__"]).__version__,
-            "audio": {
-                "available": True,
-                "platform": __import__("sys").platform,
-            },
-            "recording": {
-                "active_meetings": len([
-                    p.stem for p in DATA_DIR.glob("*.json")
-                    if not p.name.endswith(".stream.json") and not p.name.endswith(".chat.json")
-                ]),
-            },
-        }
-        return self._json(status)
 
 

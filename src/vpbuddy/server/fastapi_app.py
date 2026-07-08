@@ -266,13 +266,13 @@ def get_kb_list(
     meeting_id: str = Query(None),
     user: dict = Depends(get_current_user),
 ):
-    """GET /api/kb/list — 列出 KB 文档"""
+    """GET /api/kb/list — 列出 KB 文档 (#20: 返回元数据含 scope/labels/meeting_callable)"""
     from ..kb_api import handle_kb_list
 
     params = {}
     if meeting_id:
         params["meeting_id"] = [meeting_id]
-    return handle_kb_list(params)
+    return handle_kb_list(params, user_id=user["user_id"])
 
 
 @app.delete("/api/kb/{doc_id}")
@@ -281,6 +281,23 @@ def delete_kb_doc(doc_id: str, user: dict = Depends(get_current_user)):
     from ..kb_api import handle_kb_delete
 
     return handle_kb_delete(f"/api/kb/{doc_id}")
+
+
+@app.get("/api/kb/{doc_id}/file")
+def get_kb_doc_file(doc_id: str, user: dict = Depends(get_current_user)):
+    """GET /api/kb/{doc_id}/file — 下载 KB 文档原始文件 (需认证 + owner 校验)"""
+    from ..kb_api import get_kb_file_path
+
+    fp, meeting_id = get_kb_file_path(doc_id)
+    if fp is None or not fp.exists():
+        raise HTTPException(status_code=404, detail=f"KB file not found: {doc_id}")
+    if meeting_id:
+        _require_meeting_owner(meeting_id, user)
+    return FileResponse(
+        str(fp),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{fp.name}"'},
+    )
 
 
 @app.get("/api/status")
@@ -424,6 +441,23 @@ def get_meeting_doc(meeting_id: str, kind: str, user: dict = Depends(get_current
     if kind not in DOC_KINDS:
         raise HTTPException(status_code=400, detail=f"unknown doc kind: {kind}")
     return _doc_payload(meeting_id, kind)
+
+
+@app.get("/api/meetings/{meeting_id}/docs/{kind}/download")
+def get_meeting_doc_download(meeting_id: str, kind: str, user: dict = Depends(get_current_user)):
+    """GET /api/meetings/{id}/docs/{kind}/download — 下载文档文件 (归档/导出)"""
+    if kind not in DOC_KINDS:
+        raise HTTPException(status_code=400, detail=f"unknown doc kind: {kind}")
+    _require_meeting_owner(meeting_id, user)
+    path = _doc_path(meeting_id, kind)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"doc file not found: {meeting_id}/{kind}")
+    filename = "demo.html" if kind == "demo" else f"{kind}.md"
+    return FileResponse(
+        str(path),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/api/meetings/{meeting_id}/demo/versions")
@@ -666,12 +700,21 @@ async def get_material_detail(material_id: str):
 
 
 @app.get("/api/materials/{material_id}/file")
-async def get_material_file(material_id: str):
-    """GET /api/materials/{id}/file — 下载材料原文件"""
+async def get_material_file(material_id: str, user: dict = Depends(get_current_user)):
+    """GET /api/materials/{id}/file — 下载材料原文件 (需认证 + 会议 owner 校验)"""
+    meta = material_storage.get_material(material_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail=f"Material not found: {material_id}")
+    if meta.meeting_id:
+        _require_meeting_owner(meta.meeting_id, user)
     fp = material_storage.get_file_path(material_id)
-    if fp is None:
+    if fp is None or not fp.exists():
         raise HTTPException(status_code=404, detail=f"Material file not found: {material_id}")
-    return FileResponse(str(fp))
+    return FileResponse(
+        str(fp),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{meta.filename}"'},
+    )
 
 
 # =============================================================================
@@ -1783,11 +1826,20 @@ async def fe_get_deliverable(deliverable_id: str):
     if not doc_path.exists():
         raise HTTPException(status_code=404, detail=f"Deliverable {kind} not found for meeting {meeting_id}")
     content = doc_path.read_text(encoding="utf-8")
+    # 版本号: demo 走 list_versions 计数, 其他文档走 get_version_file 或默认 "1"
+    if kind == "demo":
+        from ..demo_version import list_versions
+        versions = list_versions(meeting_id)
+        version = str(len(versions)) if versions else "1"
+    else:
+        from ..demo_version import get_version_file
+        version = get_version_file(meeting_id, kind)
     return {
         "id": deliverable_id,
         "meetingId": meeting_id,
         "type": kind,
         "name": DOC_LABELS.get(kind, kind),
+        "version": version,
         "content": content,
         "updatedAt": datetime.fromtimestamp(doc_path.stat().st_mtime).isoformat(),
     }

@@ -43,29 +43,28 @@ def _get_lock(path: Path) -> threading.Lock:
 def _file_lock(path: Path) -> Iterator[None]:
     """组合锁: 进程内 threading + 跨进程 fcntl (POSIX)."""
     in_proc = _get_lock(path)
-    in_proc.acquire()
-    fcntl_fd = None
-    try:
-        # POSIX fcntl 跨进程互斥
-        if os.name == "posix":
-            try:
-                import fcntl
-                lock_path = path.parent / f".{path.name}.lock"
-                lock_path.parent.mkdir(parents=True, exist_ok=True)
-                fd = open(lock_path, "w")
-                fcntl.flock(fd.fileno(), fcntl.LOCK_EX)
-                fcntl_fd = fd
-            except Exception:
-                # fcntl 失败不阻塞 (Windows 不支持; 容器可能禁 .lock)
-                fcntl_fd = None
-        yield
-    finally:
-        if fcntl_fd is not None:
-            try:
-                fcntl_fd.close()
-            except Exception:
-                pass
-        in_proc.release()
+    with in_proc:
+        fcntl_fd = None
+        try:
+            # POSIX fcntl 跨进程互斥
+            if os.name == "posix":
+                try:
+                    import fcntl
+                    lock_path = path.parent / f".{path.name}.lock"
+                    lock_path.parent.mkdir(parents=True, exist_ok=True)
+                    fd = open(lock_path, "w")
+                    fcntl.flock(fd.fileno(), fcntl.LOCK_EX)
+                    fcntl_fd = fd
+                except Exception:
+                    # fcntl 失败不阻塞 (Windows 不支持; 容器可能禁 .lock)
+                    fcntl_fd = None
+            yield
+        finally:
+            if fcntl_fd is not None:
+                try:
+                    fcntl_fd.close()
+                except Exception:
+                    pass
 
 
 # ── 路径 ──

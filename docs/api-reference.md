@@ -1,12 +1,13 @@
 # VPBuddy HTTP API 参考
 
-> **版本**: v0.18.4 · `@ 2026-07-08`
+> **版本**: v0.19.0 · `@ 2026-07-08`
 > **Base URL**: `http://47.100.182.3:28765`（公网 GPU 服务器）
 > **协议**: HTTP/1.1 · WebSocket 实时 ASR · SSE 实时推送 · Multipart 上传
 > **编码**: 所有请求/响应使用 UTF-8
 > **CORS**: 所有端点返回 `Access-Control-Allow-Origin: *`
 > **认证 (ADR-0047)**: 除 `/api/auth/*` 外所有端点要求 `Authorization: Bearer <token>`
 > **会议隔离 (ADR-0050)**: 会议单端点 (state/chat history) 仅 owner 可访问, 非 owner 返回 `403`
+> **百炼 ASR (ADR-0051)**: API Key 从 `DASHSCOPE_API_KEY` 环境变量读取, 仓库不存明文
 
 ---
 
@@ -31,24 +32,26 @@
 5. [文档](#5-文档)
    - [GET /api/meetings/{id}/docs](#51-获取全部文档)
    - [GET /api/meetings/{id}/docs/{kind}](#52-获取单个文档)
-   - [GET /api/meetings/{id}/demo/versions](#53-获取demo版本列表)
+   - [GET /api/meetings/{id}/docs/{kind}/download](#53-下载文档文件)
+   - [GET /api/meetings/{id}/demo/versions](#54-获取demo版本列表)
 6. [Chat 对话](#6-chat-对话)
    - [POST /api/meetings/{id}/chat](#61-发送chat消息)
    - [GET /api/meetings/{id}/chat/history](#62-获取chat历史)
 7. [协作提问](#7-协作提问)
-   - [POST /api/meetings/{id}/ask_question](#71-提问)
-   - [POST /api/meetings/{id}/answer_question](#72-回答)
-   - [GET /api/meetings/{id}/collab](#73-获取协作记录)
 8. [SSE 实时事件流](#8-sse-实时事件流)
-   - [GET /api/meetings/{id}/events](#81-sse-事件流)
 9. [知识库 (KB)](#9-知识库-kb)
    - [GET /api/kb/search](#91-kb搜索get)
    - [POST /api/kb/search](#92-kb搜索post)
    - [POST /api/kb/upload](#93-上传文件到kb)
    - [GET /api/kb/list](#94-kb统计)
    - [DELETE /api/kb/{doc_id}](#95-删除kb文档)
-10. [系统](#10-系统)
-   - [GET /api/timeline](#101-时间线)
+   - [GET /api/kb/{doc_id}/file](#96-下载kb原文件)
+10. [文件下载](#10-文件下载)
+   - [GET /api/meetings/{id}/docs/{kind}/download](#101-下载交付物文件)
+   - [GET /api/materials/{id}/file](#102-下载会议材料文件)
+   - [GET /api/kb/{doc_id}/file](#103-下载知识库文件)
+11. [系统](#10-系统)
+   - [GET /api/timeline](#111-时间线)
 
 ---
 
@@ -439,12 +442,12 @@ GET /api/meetings/{id}/docs
 {
   "meeting_id": "{id}",
   "docs": [
-    { "kind": "req",  "label": "需求", "content": "# 需求\n...", "version": 1, "status": "stored" },
-    { "kind": "arch", "label": "架构", "content": "# 架构\n...", "version": 1, "status": "stored" },
-    { "kind": "tasks","label": "任务", "content": "# 任务\n...", "version": 1, "status": "stored" },
-    { "kind": "api",  "label": "接口", "content": "# 接口\n...", "version": 1, "status": "stored" },
-    { "kind": "risk", "label": "风险", "content": "# 风险\n...", "version": 1, "status": "stored" },
-    { "kind": "demo", "label": "演示", "content": "<html>...",  "version": 2, "status": "stored" }
+    { "kind": "req",  "label": "需求", "content": "# 需求\n...", "version": "1", "status": "stored" },
+    { "kind": "arch", "label": "架构", "content": "# 架构\n...", "version": "1", "status": "stored" },
+    { "kind": "tasks","label": "任务", "content": "# 任务\n...", "version": "1", "status": "stored" },
+    { "kind": "api",  "label": "接口", "content": "# 接口\n...", "version": "1", "status": "stored" },
+    { "kind": "risk", "label": "风险", "content": "# 风险\n...", "version": "1", "status": "stored" },
+    { "kind": "demo", "label": "演示", "content": "<html>...",  "version": "2", "status": "stored" }
   ]
 }
 ```
@@ -484,7 +487,17 @@ GET /api/meetings/{id}/docs/{kind}
 
 ---
 
-### 5.3 获取 Demo 版本列表
+### 5.3 下载文档文件 (v0.19.0)
+
+```
+GET /api/meetings/{id}/docs/{kind}/download
+```
+
+返回文档文件原始内容，`Content-Disposition: attachment` 触发浏览器下载。`kind=demo` 返回 `demo.html`，其余返回 `{kind}.md`。需认证 + owner 校验。
+
+---
+
+### 5.4 获取 Demo 版本列表
 
 ```
 GET /api/meetings/{id}/demo/versions
@@ -564,14 +577,53 @@ GET /api/meetings/{id}/events
 | GET | `/api/kb/search?q=X&meeting_id=Y` | 关键词搜索 |
 | POST | `/api/kb/search` | JSON 搜索 `{"query":"...", "top_k":5}` |
 | POST | `/api/kb/upload` | 上传文件 (.txt/.md/.pdf, ≤50MB) |
-| GET | `/api/kb/list?meeting_id=Y` | KB 统计 |
+| GET | `/api/kb/list?meeting_id=Y` | KB 统计 + 文档列表 |
 | DELETE | `/api/kb/{doc_id}` | 删除文档 |
+| GET | `/api/kb/{doc_id}/file` | 下载 KB 文档原始文件 |
+
+### KB 上传参数 (v0.19.0)
+
+`POST /api/kb/upload` multipart 新增可选字段:
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| scope | string | `personal_kb` | 知识库范围: `personal_kb` / `enterprise` / `industry` |
+| labels | string | 空 | 逗号分隔标签, 如 `"ESG,碳管理"` |
+| meeting_callable | string | `true` | 本次会议是否可调用: `"true"` / `"false"` |
+
+上传响应中额外返回 `scope`、`labels`、`meeting_callable` 字段。KB 列表和搜索结果中的 `metadata` 也包含这些字段。
 
 ---
 
-## 10. 系统
+## 10. 文件下载 (v0.19.0)
 
-### 10.1 时间线
+三种文件下载接口, 均需认证 + owner 校验, 返回 `Content-Disposition: attachment`:
+
+### 10.1 下载交付物文件
+
+```
+GET /api/meetings/{id}/docs/{kind}/download
+```
+
+### 10.2 下载会议材料文件
+
+```
+GET /api/materials/{id}/file
+```
+
+### 10.3 下载知识库文件
+
+```
+GET /api/kb/{doc_id}/file
+```
+
+> **合并导出**: 打包 ZIP / 生成 PDF 汇总由前端负责, 服务端只提供单个文件下载。
+
+---
+
+## 11. 系统
+
+### 11.1 时间线
 
 ```
 GET /api/timeline

@@ -135,6 +135,26 @@ class ChromaRAG(RAGBackend):
         self._collection.delete(ids=ids)
         logger.debug("ChromaRAG deleted %d docs", len(ids))
 
+    def list_docs(
+        self,
+        where: dict[str, str] | None = None,
+        limit: int = 1000,
+    ) -> SearchResult:
+        """列出文档及元数据 (按 where 条件过滤)."""
+        raw = self._collection.get(where=where, limit=limit)
+        ids = raw.get("ids") or []
+        docs = raw.get("documents") or []
+        metas = raw.get("metadatas") or []
+        results: SearchResult = []
+        for i in range(len(ids)):
+            results.append({
+                "id": ids[i] if i < len(ids) else "",
+                "document": docs[i] if i < len(docs) else "",
+                "distance": 0.0,
+                "metadata": metas[i] if i < len(metas) else {},
+            })
+        return results
+
     def count(self, where: dict[str, str] | None = None) -> int:
         return self._collection.count()
 

@@ -279,3 +279,16 @@ def list_versions(meeting_id: str, docs_dir: Path | None = None) -> list[dict]:
     """返 [{version, created_at, summary, file_size, file}, ...], 倒序 (最新在前)."""
     manifest = load_manifest(meeting_id, docs_dir)
     return sorted(manifest, key=lambda m: m.get("version", 0), reverse=True)
+
+
+def get_version_file(meeting_id: str, kind: str, docs_dir: Path | None = None) -> str:
+    """读取文档版本号文件, 不存在则返回 '1'.
+
+    用于非 demo 类文档的版本号持久化:
+      data/docs/{meeting_id}/{kind}.version
+    """
+    md = _meeting_dir(meeting_id, docs_dir)
+    vp = md / f"{kind}.version"
+    if vp.exists():
+        return vp.read_text(encoding="utf-8").strip() or "1"
+    return "1"

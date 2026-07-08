@@ -340,12 +340,68 @@ def get_doc_path(meeting_id: str, doc_kind: str) -> Path:
     return base / f"{doc_kind}.md"
 
 
+MAX_ITEMS_PER_SECTION: int = 50
+
+
+def _format_item_list(section_title: str, items: list, max_items: int = MAX_ITEMS_PER_SECTION) -> str:
+    """将累积项列表格式化为 LLM 友好的文本，超过 max_items 时截断并附注省略数量。"""
+    if not items:
+        return ""
+    lines = [section_title, ""]
+    limit = min(len(items), max_items)
+    for it in items[:limit]:
+        sid = getattr(it, "id", "?")
+        prio = getattr(it, "priority", None)
+        prio_str = prio.value if hasattr(prio, "value") else str(prio)
+        status = getattr(it, "status", None)
+        status_str = status.value if hasattr(status, "value") else str(status)
+        speaker = getattr(it, "speaker_name", None) or ""
+        line = f"- [{sid}] ({prio_str}, {status_str}) {it.text}"
+        if speaker:
+            line += f" — {speaker}"
+        lines.append(line)
+    if len(items) > max_items:
+        omitted = len(items) - max_items
+        lines.append(f"... 还有 {omitted} 条已省略 (共 {len(items)} 条, 仅展示前 {max_items} 条)")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def format_state_summary(state) -> str:
-    """把 MeetingState 格式化成 LLM 友好的摘要 (v0.10.0: 使用 cleaned_text 替代旧 5 类 facts)."""
+    """把 MeetingState 格式化成 LLM 友好的摘要.
+
+    v0.10.0: 使用 cleaned_text 替代旧 5 类 facts 作为主要上下文。
+    当前版本同步输出 5 类累积项 (requirements/goals/features/risks/open_questions),
+    每类最多展示 MAX_ITEMS_PER_SECTION 条, 超出部分截断以防 OOM。
+    """
     parts = [f"# 会议 {state.meeting_id} 累积摘要", ""]
     parts.append(f"- 平台: {state.platform.value}")
     parts.append(f"- 最后更新: {state.last_updated}")
     parts.append("")
+
+    # === 5 类累积项 (均限制条数, 防止 OOM) ===
+    sections = [
+        ("requirements", state.requirements),
+        ("goals", state.goals),
+        ("features", state.features),
+        ("risks", state.risks),
+        ("open_questions", state.open_questions),
+    ]
+    for raw_key, items in sections:
+        # 统一 key 转为人可读的中文标题
+        titles = {
+            "requirements": "需求 (Requirements)",
+            "goals": "目标 (Goals)",
+            "features": "功能点 (Features)",
+            "risks": "风险 (Risks)",
+            "open_questions": "待确认问题 (Open Questions)",
+        }
+        section_text = _format_item_list(
+            section_title=f"## {titles[raw_key]}",
+            items=items,
+        )
+        if section_text:
+            parts.append(section_text)
 
     if state.cleaned_text:
         parts.append("## 清理后的会议转写文本 (完整)")
