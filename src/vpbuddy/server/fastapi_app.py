@@ -312,6 +312,65 @@ async def post_ai_settings_test(user: dict = Depends(get_current_user)):
         }
 
 
+# ══════════════════════════════════════════════════════════════════
+# Experience (#1) — 经验候选 API
+# ══════════════════════════════════════════════════════════════════
+
+@app.get("/api/experiences")
+def get_experiences(user: dict = Depends(get_current_user)):
+    """GET /api/experiences — 当前用户已确认经验列表."""
+    from ..experience_store import get_approved_experiences
+    items = get_approved_experiences()
+    return {
+        "experiences": [it.to_dict() for it in items],
+        "count": len(items),
+    }
+
+
+@app.get("/api/experiences/candidates")
+def get_experience_candidates(
+    meeting_id: str = Query(..., description="会议 ID"),
+    user: dict = Depends(get_current_user),
+):
+    """GET /api/experiences/candidates?meeting_id=X — 某会议的经验候选."""
+    _require_meeting_owner(meeting_id, user)
+    from ..experience_store import load_experiences
+    items = load_experiences(meeting_id)
+    return {
+        "meeting_id": meeting_id,
+        "candidates": [it.to_dict() for it in items],
+        "count": len(items),
+    }
+
+
+@app.post("/api/experiences/{item_id}/approve")
+async def post_approve_experience(item_id: str, request: Request, user: dict = Depends(get_current_user)):
+    """POST /api/experiences/{id}/approve — 确认一条经验."""
+    body = await request.json()
+    meeting_id = body.get("meeting_id", "")
+    if not meeting_id:
+        raise HTTPException(status_code=400, detail="meeting_id is required")
+    _require_meeting_owner(meeting_id, user)
+
+    from ..experience_store import approve_experience
+    ok = approve_experience(item_id, meeting_id)
+    return {"approved": ok, "item_id": item_id}
+
+
+@app.post("/api/experiences/{item_id}/reject")
+async def post_reject_experience(item_id: str, request: Request, user: dict = Depends(get_current_user)):
+    """POST /api/experiences/{id}/reject — 拒绝一条经验候选."""
+    body = await request.json()
+    meeting_id = body.get("meeting_id", "")
+    if not meeting_id:
+        raise HTTPException(status_code=400, detail="meeting_id is required")
+    _require_meeting_owner(meeting_id, user)
+
+    from ..experience_store import reject_experience
+    ok = reject_experience(item_id, meeting_id)
+    return {"rejected": ok, "item_id": item_id}
+
+
 @app.get("/api/meetings/check_id")
 def get_meetings_check_id(id: str = Query(..., description="meeting_id")):
     """GET /api/meetings/check_id — 校验 meeting_id 是否可用 (ADR-0022)"""

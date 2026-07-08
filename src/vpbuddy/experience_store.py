@@ -111,6 +111,37 @@ def approve_experience(item_id: str, meeting_id: str) -> bool:
     return True
 
 
+def reject_experience(item_id: str, meeting_id: str) -> bool:
+    """拒绝/删除一条经验候选 (从 meeting 文件 + 聚合索引中移除, v0.19.0)."""
+    items = load_experiences(meeting_id)
+    items = [it for it in items if it.id != item_id]
+    if len(items) == len(load_experiences(meeting_id)):
+        return False  # not found
+
+    # 重新保存 (不含被拒绝项)
+    ensure_dir()
+    path = EXPERIENCES_DIR / f"{meeting_id}.json"
+    data = {
+        "meeting_id": meeting_id,
+        "items": [it.to_dict() for it in items],
+        "updated_at": __import__("datetime").datetime.now().isoformat(),
+    }
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # 从聚合索引中删除
+    with _aggregate_lock:
+        if _aggregate_path.exists():
+            try:
+                agg = json.loads(_aggregate_path.read_text(encoding="utf-8"))
+                agg["items"] = [it for it in agg.get("items", []) if it.get("id") != item_id]
+                _aggregate_path.write_text(
+                    json.dumps(agg, ensure_ascii=False, indent=2), encoding="utf-8",
+                )
+            except Exception:
+                pass
+    return True
+
+
 def _update_aggregate(new_items: list[ExperienceItem]):
     """将新经验条目合并到聚合索引, 对已存在条目更新其字段."""
     with _aggregate_lock:
