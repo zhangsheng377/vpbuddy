@@ -31,6 +31,9 @@ from .config import (
 _CHAT_AGENT_CACHE: dict[str, Any] = {}
 
 # 2026-07-05 fix(#4): per-meeting 文件锁 for stream_meta + chat_history
+# FIXME: 锁字典无限增长 — 每个 meeting_id 创建后永不释放,
+# 长期运行会累积内存。重启清空,当前可接受;后续可加 LRU 淘汰或
+# 定期清扫 (每 100 次访问清理超过 1 小时未用的锁).
 _meta_locks: dict[str, threading.Lock] = {}
 _chat_locks: dict[str, threading.Lock] = {}
 _file_lock_global = threading.Lock()
@@ -43,7 +46,7 @@ _CLEAN_AGENT_LOCK = threading.Lock()
 def _get_meta_lock(meeting_id: str) -> threading.Lock:
     with _file_lock_global:
         if meeting_id not in _meta_locks:
-            _meta_locks[meeting_id] = threading.Lock()
+            _meta_locks[meeting_id] = threading.RLock()
         return _meta_locks[meeting_id]
 
 
@@ -153,13 +156,9 @@ def _doc_payload(meeting_id: str, kind: str) -> dict[str, object]:
     import time as _time
     from ..demo_version import get_deliverable_version
 
-    status = "stored"
     path = _doc_path(meeting_id, kind)
     exists = path.exists()
-    if kind == "demo":
-        status = "stored" if exists else "pending"
-    else:
-        status = "stored" if exists else "pending"
+    status = "stored" if exists else "pending"
 
     raw = path.read_text(encoding="utf-8") if exists else ""
     content = raw[:2000] if kind != "demo" else ""
@@ -447,6 +446,7 @@ def _run_asr_clean(meeting_id: str, raw_segments: list[dict], previous_cleaned: 
 
     # 直接调 ollama /api/chat
     ollama_url = os.environ.get("VPBUDDY_OLLAMA_URL", "http://localhost:11434/api/chat")
+    timeout = int(os.environ.get("VPBUDDY_ASR_CLEAN_TIMEOUT", "30"))
     model = os.environ.get("VPBUDDY_LLM_MODEL")  # ADR-0049: env 配置,不写死
     if not model:
         raise RuntimeError("VPBUDDY_LLM_MODEL not set in environment")

@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from .experience import ExperienceItem
@@ -43,7 +44,7 @@ def save_experiences(meeting_id: str, items: list[ExperienceItem]) -> str:
     data = {
         "meeting_id": meeting_id,
         "items": [it.to_dict() for it in items],
-        "updated_at": __import__("datetime").datetime.now().isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -114,8 +115,9 @@ def approve_experience(item_id: str, meeting_id: str) -> bool:
 def reject_experience(item_id: str, meeting_id: str) -> bool:
     """拒绝/删除一条经验候选 (从 meeting 文件 + 聚合索引中移除, v0.19.0)."""
     items = load_experiences(meeting_id)
+    orig_count = len(items)
     items = [it for it in items if it.id != item_id]
-    if len(items) == len(load_experiences(meeting_id)):
+    if len(items) == orig_count:
         return False  # not found
 
     # 重新保存 (不含被拒绝项)
@@ -124,7 +126,7 @@ def reject_experience(item_id: str, meeting_id: str) -> bool:
     data = {
         "meeting_id": meeting_id,
         "items": [it.to_dict() for it in items],
-        "updated_at": __import__("datetime").datetime.now().isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -164,7 +166,7 @@ def _update_aggregate(new_items: list[ExperienceItem]):
                 existing_map[d["id"]] = d
 
         _aggregate_path.write_text(
-            json.dumps({"items": existing, "updated_at": __import__("datetime").datetime.now().isoformat()},
+            json.dumps({"items": existing, "updated_at": datetime.now(timezone.utc).isoformat()},
                        ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
@@ -186,7 +188,7 @@ def extract_from_meeting_state(
         提取的经验候选列表 (均未确认)
     """
     items: list[ExperienceItem] = []
-    now = __import__("datetime").datetime.now().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
 
     # 获取 facts
     facts = []

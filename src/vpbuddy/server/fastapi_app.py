@@ -5,6 +5,11 @@ VPBuddy FastAPI UI Server — 替代 BaseHTTPRequestHandler 的 FastAPI 实现
 用法:
     python -m vpbuddy.server.fastapi_app [--port 8765] [--host 0.0.0.0]
     vpbuddy ui --fastapi
+
+错误响应格式约定:
+  HTTPException detail 统一使用 dict: {"error": "描述", "status": HTTP状态码}
+  FastAPI 自动将其序列化为 JSON。旧端点有少量直接用 str 的 legacy 格式，
+  新端点一律遵循 dict 格式。
 """
 from __future__ import annotations
 
@@ -158,7 +163,7 @@ def _require_meeting_owner(meeting_id: str, user: dict, storage=None):
         raise HTTPException(status_code=404, detail=f"meeting {meeting_id} not found")
     state = storage.load(meeting_id)
     owner = getattr(state, "owner_id", "")
-    if owner and owner != user["user_id"]:
+    if owner != user.get("user_id", ""):
         raise HTTPException(status_code=403, detail="access denied")
     return state
 
@@ -449,7 +454,7 @@ def get_kb_doc_file(doc_id: str, user: dict = Depends(get_current_user)):
 
 
 @app.get("/api/status")
-def get_status_api():
+def get_status_api(user: dict = Depends(get_current_user)):
     """GET /api/status — Controller + 数据状态"""
     return get_status()
 
@@ -503,6 +508,7 @@ def get_meeting_collab(meeting_id: str, user: dict = Depends(get_current_user)):
 @app.get("/api/meetings/{meeting_id}/aggregate")
 def get_meeting_aggregate(meeting_id: str, user: dict = Depends(get_current_user)):
     """GET /api/meetings/{id}/aggregate — 会议聚合 DTO (BFF 端点)"""
+    _require_meeting_owner(meeting_id, user)
     result: dict[str, Any] = {"meeting_id": meeting_id}
 
     # 1. State
@@ -739,9 +745,9 @@ async def post_meeting_material(meeting_id: str, request: Request, user: dict = 
             base_url = _os.environ.get("OPENAI_BASE_URL", "https://api.minimax.chat/v1")
             api_key = _os.environ.get("OPENAI_API_KEY") or _os.environ.get("MINIMAX_API_KEY") or ""
             if not api_key:
-                # 从 /root/.hermes/.env 读 key
+                # 从 ~/.hermes/.env 读 key
                 try:
-                    with open("/root/.hermes/.env") as _f:
+                    with open(os.environ.get("HERMES_ENV_PATH", os.path.expanduser("~/.hermes/.env"))) as _f:
                         for _line in _f:
                             if "=" in _line and not _line.strip().startswith("#"):
                                 _k, _v = _line.strip().split("=", 1)
@@ -749,7 +755,8 @@ async def post_meeting_material(meeting_id: str, request: Request, user: dict = 
                                     api_key = _v.strip()
                                     break
                 except Exception:
-                    pass
+                    import logging
+                    logging.getLogger(__name__).warning("non-critical error reading env file", exc_info=True)
             
             if api_key:
                 import requests as _requests
@@ -777,7 +784,7 @@ async def post_meeting_material(meeting_id: str, request: Request, user: dict = 
             else:
                 print(f"[materials] Vision 跳过: 无 API key")
         except Exception as e:
-            print(f"[materials] Vision 分析失败: {e}")
+            print(f"[materials] Vision 分析失败: {str(e)[:200]}")
 
         chat_message += "\n\n请将以上内容纳入会议上下文。"
     else:
@@ -798,11 +805,12 @@ async def post_meeting_material(meeting_id: str, request: Request, user: dict = 
             push_event(meeting_id, "chat-message", user_msg)
 
             result = _run_vp_chat(meeting_id, chat_message)
-            assistant_msg = _append_chat_message(
-                meeting_id, "assistant", result["content"],
-                source=result["source"], status=result["status"],
-            )
-            push_event(meeting_id, "chat-message", assistant_msg)
+            if result.get("status") != "fallback" and result.get("content"):
+                assistant_msg = _append_chat_message(
+                    meeting_id, "assistant", result["content"],
+                    source=result["source"], status=result["status"],
+                )
+                push_event(meeting_id, "chat-message", assistant_msg)
         except Exception as e:
             print(f"[materials] Hermes 处理失败: {e}")
 
@@ -834,7 +842,7 @@ async def post_meeting_material(meeting_id: str, request: Request, user: dict = 
             ]
         kb_body = b"".join(parts)
         kb_ct = f"multipart/form-data; boundary={boundary.decode()}"
-        handle_kb_upload(kb_body, kb_ct)
+        handle_kb_upload(kb_body, kb_ct, user_id=user.get("user_id", ""))
         print(f"[materials] KB 入库完成: {filename}")
     except Exception as e:
         print(f"[materials] KB 入库失败: {e}")
@@ -1041,23 +1049,10 @@ async def post_stream_chunk(
         }
 
     # 同步模式: 阻塞处理并返回完整结果
-    try:
-        return _process_chunk_sync(
-            meeting_id, tmp_path, chunk_index, chunk_start_sec,
-            overlap_sec, client_sent_at,
-        )
-    except Exception as e:
-        import traceback
-
-        raise HTTPException(
-            status_code=500,
-            detail={"error": f"Stream chunk failed: {e}", "trace": traceback.format_exc()},
-        )
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
+    return _process_chunk_sync(
+        meeting_id, tmp_path, chunk_index, chunk_start_sec,
+        overlap_sec, client_sent_at,
+    )
 
 
 def infer_speaker_map(segments: list[dict]) -> dict[str, str]:
@@ -1068,7 +1063,7 @@ def infer_speaker_map(segments: list[dict]) -> dict[str, str]:
     from collections import defaultdict
     durs = defaultdict(float)
     for s in segments:
-        durs[s["speaker_id"]] += s["end_sec"] - s["start_sec"]
+        durs[s.get("speaker_id", "UNKNOWN")] += float(s.get("end_sec", 0)) - float(s.get("start_sec", 0))
     sorted_spks = sorted(durs.keys(), key=lambda k: -durs[k])
     default_names = ["VP", "PM", "Designer", "Guest1", "Guest2"]
     return {spk: default_names[i] if i < len(default_names) else f"Speaker{i+1}"
@@ -1100,7 +1095,6 @@ def _process_chunk_core(
         client_sent_at: Timestamp when client sent the chunk (for end_to_end_ms).
         raw_seg_count: Number of raw segments before dedup (for metrics).
     """
-    import time as _time
 
     from ..state import MeetingState, Platform
     from ..storage import MeetingStorage
@@ -1135,24 +1129,26 @@ def _process_chunk_core(
     storage.save(state)
 
     # ── 3. Stream meta update ──
-    meta = _load_stream_meta(meeting_id)
-    if not is_background:
-        meta.setdefault("processed_chunks", []).append(chunk_index)
-        meta["processed_chunks"] = sorted(set(meta["processed_chunks"]))
-    meta.setdefault("transcript_segments", []).extend(new_segs)
-    processing_ms = int((_time.time() - started) * 1000)
-    end_to_end_ms = int((_time.time() - client_sent_at) * 1000) if client_sent_at else None
-    meta.setdefault("metrics", []).append({
-        "chunk_index": chunk_index,
-        "chunk_start_sec": chunk_start_sec,
-        "overlap_sec": overlap_sec,
-        "raw_segments": raw_seg_count,
-        "new_segments": len(new_segs),
-        "processing_ms": processing_ms,
-        "end_to_end_ms": end_to_end_ms,
-        "received_at": datetime.now().isoformat(),
-    })
-    _save_stream_meta(meeting_id, meta)
+    from ..server.api_utils import _get_meta_lock
+    with _get_meta_lock(meeting_id):
+        meta = _load_stream_meta(meeting_id)
+        if not is_background:
+            meta.setdefault("processed_chunks", []).append(chunk_index)
+            meta["processed_chunks"] = sorted(set(meta["processed_chunks"]))
+        meta.setdefault("transcript_segments", []).extend(new_segs)
+        processing_ms = int((time.time() - started) * 1000)
+        end_to_end_ms = int((time.time() - client_sent_at) * 1000) if client_sent_at else None
+        meta.setdefault("metrics", []).append({
+            "chunk_index": chunk_index,
+            "chunk_start_sec": chunk_start_sec,
+            "overlap_sec": overlap_sec,
+            "raw_segments": raw_seg_count,
+            "new_segments": len(new_segs),
+            "processing_ms": processing_ms,
+            "end_to_end_ms": end_to_end_ms,
+            "received_at": datetime.now().isoformat(),
+        })
+        _save_stream_meta(meeting_id, meta)
 
     # ── 4. Doc generation trigger ──
     def _doc_runner(gen_id: int, mid: str) -> dict:
@@ -1174,7 +1170,7 @@ def _process_chunk_core(
 
         if is_background:
             # 背景模式: pending_clean 窗口逻辑
-            now_ts = _time.time()
+            now_ts = time.time()
             meta.setdefault("pending_clean", [])
             for s in new_segs:
                 meta["pending_clean"].append({"seg": s, "received_ts": now_ts})
@@ -1290,36 +1286,41 @@ def _process_chunk_sync(
     client_sent_at: float,
 ) -> dict:
     """同步处理 WAV chunk (同步模式), 委托给 _process_chunk_core."""
-    import time as _time
 
     from ..scripts.gpu_transcribe import process
 
-    started = _time.time()
-    transcript = process(tmp_path)
-    raw_segs = transcript.get("segments", [])
-    meta = _load_stream_meta(meeting_id)
-    seen_segments = meta.get("transcript_segments", [])
-    new_segs = []
-    for s in raw_segs:
-        abs_seg = dict(s)
-        abs_seg["start_sec"] = round(float(s.get("start_sec", 0)) + chunk_start_sec, 3)
-        abs_seg["end_sec"] = round(float(s.get("end_sec", 0)) + chunk_start_sec, 3)
-        abs_seg["chunk_index"] = chunk_index
-        if not _is_duplicate_segment(abs_seg, seen_segments + new_segs):
-            new_segs.append(abs_seg)
+    try:
+        started = time.time()
+        transcript = process(tmp_path)
+        raw_segs = transcript.get("segments", [])
+        meta = _load_stream_meta(meeting_id)
+        seen_segments = meta.get("transcript_segments", [])
+        new_segs = []
+        for s in raw_segs:
+            abs_seg = dict(s)
+            abs_seg["start_sec"] = round(float(s.get("start_sec", 0)) + chunk_start_sec, 3)
+            abs_seg["end_sec"] = round(float(s.get("end_sec", 0)) + chunk_start_sec, 3)
+            abs_seg["chunk_index"] = chunk_index
+            if not _is_duplicate_segment(abs_seg, seen_segments + new_segs):
+                new_segs.append(abs_seg)
 
-    return _process_chunk_core(
-        meeting_id=meeting_id,
-        tmp_path=tmp_path,
-        chunk_index=chunk_index,
-        chunk_start_sec=chunk_start_sec,
-        overlap_sec=overlap_sec,
-        new_segs=new_segs,
-        started=started,
-        is_background=False,
-        client_sent_at=client_sent_at,
-        raw_seg_count=len(raw_segs),
-    )
+        return _process_chunk_core(
+            meeting_id=meeting_id,
+            tmp_path=tmp_path,
+            chunk_index=chunk_index,
+            chunk_start_sec=chunk_start_sec,
+            overlap_sec=overlap_sec,
+            new_segs=new_segs,
+            started=started,
+            is_background=False,
+            client_sent_at=client_sent_at,
+            raw_seg_count=len(raw_segs),
+        )
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
 
 
 def _process_chunk_background(
@@ -1332,11 +1333,10 @@ def _process_chunk_background(
 ):
     """后台 daemon thread 处理 WAV chunk (异步模式), 委托给 _process_chunk_core."""
     try:
-        import time as _time
 
         from ..scripts.gpu_transcribe import process
 
-        started = _time.time()
+        started = time.time()
         transcript = process(tmp_path)
         raw_segs = transcript.get("segments", [])
         meta = _load_stream_meta(meeting_id)
@@ -1363,7 +1363,7 @@ def _process_chunk_background(
             raw_seg_count=len(raw_segs),
         )
 
-        processing_ms = int((_time.time() - started) * 1000)
+        processing_ms = int((time.time() - started) * 1000)
         print(
             f"[stream_chunk/bg] {meeting_id}/{chunk_index} done in {processing_ms}ms, "
             f"{len(new_segs)} new segments"
@@ -1382,24 +1382,28 @@ def _process_chunk_background(
                 "error": str(e)[:500],
             })
         except Exception:
-            pass
+            import logging
+            logging.getLogger(__name__).warning("non-critical error pushing failed_chunk event", exc_info=True)
     finally:
         try:
             os.unlink(tmp_path)
         except Exception:
-            pass
+            import logging
+            logging.getLogger(__name__).warning("non-critical error unlinking tmp_path", exc_info=True)
 
 
 @app.post("/api/meetings/{meeting_id}/upload_audio")
 async def post_upload_audio(
     meeting_id: str,
     request: Request,
+    user: dict = Depends(get_current_user),
 ):
     """POST /api/meetings/{id}/upload_audio — 上传音频自动转写+入库+触发 6 docs
 
     multipart/form-data:
         audio: binary (或 file: binary)
     """
+    _require_meeting_owner(meeting_id, user)
     content_type = request.headers.get("Content-Type", "")
     if "multipart/form-data" not in content_type:
         raise HTTPException(status_code=400, detail="Content-Type must be multipart/form-data")
@@ -1456,7 +1460,8 @@ async def post_upload_audio(
         try:
             os.unlink(tmp_path)
         except Exception:
-            pass
+            import logging
+            logging.getLogger(__name__).warning("non-critical error unlinking tmp_path in finally (sync)", exc_info=True)
 
 
 @app.post("/api/meetings/{meeting_id}/stream_stop")
@@ -1516,7 +1521,8 @@ async def post_chat(meeting_id: str, request: Request, user: dict = Depends(get_
 
             push_event(meeting_id, "chat-message", user_msg)
         except Exception:
-            pass
+            import logging
+            logging.getLogger(__name__).warning("non-critical error pushing chat-message user_msg (upload)", exc_info=True)
 
         result = _run_vp_chat(meeting_id, text or "(用户只上传了文件, 没问文本)")
         assistant_msg = _append_chat_message(
@@ -1532,7 +1538,8 @@ async def post_chat(meeting_id: str, request: Request, user: dict = Depends(get_
 
             push_event(meeting_id, "chat-message", assistant_msg)
         except Exception:
-            pass
+            import logging
+            logging.getLogger(__name__).warning("non-critical error pushing chat-message assistant_msg", exc_info=True)
 
         return {
             "meeting_id": meeting_id,
@@ -1568,7 +1575,8 @@ async def post_chat(meeting_id: str, request: Request, user: dict = Depends(get_
 
         push_event(meeting_id, "chat-message", user_msg)
     except Exception:
-        pass
+        import logging
+        logging.getLogger(__name__).warning("non-critical error pushing chat-message user_msg (client)", exc_info=True)
 
     result = _run_vp_chat(meeting_id, message, client_context)
     assistant_msg = _append_chat_message(
@@ -1584,7 +1592,8 @@ async def post_chat(meeting_id: str, request: Request, user: dict = Depends(get_
 
         push_event(meeting_id, "chat-message", assistant_msg)
     except Exception:
-        pass
+        import logging
+        logging.getLogger(__name__).warning("non-critical error pushing chat-message assistant_msg", exc_info=True)
 
     return {
         "meeting_id": meeting_id,
@@ -1652,7 +1661,8 @@ def post_collab_ask(
             "asker": asker,
         })
     except Exception:
-        pass
+        import logging
+        logging.getLogger(__name__).warning("non-critical error pushing collab-update (ask)", exc_info=True)
 
     return result
 
@@ -1687,7 +1697,8 @@ def post_collab_answer(
             "status": "answered",
         })
     except Exception:
-        pass
+        import logging
+        logging.getLogger(__name__).warning("non-critical error pushing collab-update (answer)", exc_info=True)
 
     return result
 
@@ -1771,7 +1782,8 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
             try:
                 await websocket.send_json(msg)
             except Exception:
-                pass
+                import logging
+                logging.getLogger(__name__).warning("non-critical error sending json via websocket", exc_info=True)
 
         # Phase 2: 启动百炼识别
         import asyncio as _asyncio
@@ -1822,7 +1834,8 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
                             _doc_last_text_len[0] = cur_len
                             get_task_manager().submit(meeting_id, _doc_runner)
             except Exception:
-                pass
+                import logging
+                logging.getLogger(__name__).warning("non-critical error in doc kick loop", exc_info=True)
 
         _asyncio.create_task(_kick_docs())
 
@@ -1854,7 +1867,8 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
         try:
             await websocket.send_json({"type": "error", "error": str(e)})
         except Exception:
-            pass
+            import logging
+            logging.getLogger(__name__).warning("non-critical error sending error via websocket", exc_info=True)
     finally:
         _doc_running[0] = False
         if session:
@@ -1862,7 +1876,8 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
         try:
             await websocket.close()
         except Exception:
-            pass
+            import logging
+            logging.getLogger(__name__).warning("non-critical error closing websocket", exc_info=True)
 
         # WS 断开: 触发文档生成 (文本已由 BailianCallback 实时写入 state)
         try:
@@ -1880,15 +1895,17 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
 
 # GET /meetings — 会议工作台列表
 @app.get("/meetings")
-async def fe_list_meetings():
-    """GET /meetings → GET /api/meetings (wrap)"""
+async def fe_list_meetings(user: dict = Depends(get_current_user)):
+    """GET /meetings → 按 owner 过滤后返回"""
     from ..server.api_utils import list_meetings
     meetings = list_meetings()
-    return {"meetings": meetings, "count": len(meetings)}
+    # 按 owner 过滤 (align with GET /api/meetings)
+    own = [m for m in meetings if m.get("owner_id") == user["user_id"]]
+    return {"meetings": own, "count": len(own)}
 
 # GET /meetings/{meeting_id} — 会议详情聚合
 @app.get("/api/meetings/{meeting_id}")
-async def fe_get_meeting(meeting_id: str):
+async def fe_get_meeting(meeting_id: str, user: dict = Depends(get_current_user)):
     """GET /meetings/:id → 聚合 state + docs + collab + experiences"""
     from ..storage import MeetingStorage, StorageError
     result: dict[str, Any] = {"id": meeting_id}
@@ -1931,7 +1948,7 @@ async def fe_get_meeting(meeting_id: str):
 
 # GET /meetings/{meeting_id}/transcript-segments — 转写片段
 @app.get("/meetings/{meeting_id}/transcript-segments")
-async def fe_transcript_segments(meeting_id: str):
+async def fe_transcript_segments(meeting_id: str, user: dict = Depends(get_current_user)):
     """GET /meetings/:id/transcript-segments → 从 stream meta 提取"""
     meta_path = DATA_DIR / f"{meeting_id}.stream.json"
     if not meta_path.exists():
@@ -1945,7 +1962,7 @@ async def fe_transcript_segments(meeting_id: str):
 
 # POST /meetings/{meeting_id}/recording/start — 开始录音
 @app.post("/meetings/{meeting_id}/recording/start")
-async def fe_recording_start(meeting_id: str):
+async def fe_recording_start(meeting_id: str, user: dict = Depends(get_current_user)):
     """POST /meetings/:id/recording/start → POST /api/meetings/stream_start"""
     from ..ui_server import _handle_stream_start
     # 复用 stream_start handler
@@ -1954,7 +1971,7 @@ async def fe_recording_start(meeting_id: str):
 
 # POST /meetings/{meeting_id}/recording/stop — 停止录音
 @app.post("/meetings/{meeting_id}/recording/stop")
-async def fe_recording_stop(meeting_id: str):
+async def fe_recording_stop(meeting_id: str, user: dict = Depends(get_current_user)):
     """POST /meetings/:id/recording/stop → POST /api/meetings/:id/stream_stop"""
     from ..ui_server import _handle_stream_stop
     result = _handle_stream_stop(meeting_id)
@@ -1962,7 +1979,7 @@ async def fe_recording_stop(meeting_id: str):
 
 # GET /meetings/{meeting_id}/deliverables — 交付物列表
 @app.get("/meetings/{meeting_id}/deliverables")
-async def fe_list_deliverables(meeting_id: str):
+async def fe_list_deliverables(meeting_id: str, user: dict = Depends(get_current_user)):
     """GET /meetings/:id/deliverables → GET /api/meetings/:id/docs (wrap)"""
     from ..server.api_utils import _doc_payload
     docs = []
@@ -1981,7 +1998,7 @@ async def fe_list_deliverables(meeting_id: str):
 
 # GET /deliverables/{deliverable_id} — 交付物详情
 @app.get("/deliverables/{deliverable_id}")
-async def fe_get_deliverable(deliverable_id: str):
+async def fe_get_deliverable(deliverable_id: str, user: dict = Depends(get_current_user)):
     """GET /deliverables/:id → parse {meetingId}:{kind} → file content"""
     # 格式: del-{meeting_id}-{kind}
     parts = deliverable_id.split("-", 2)
@@ -2017,7 +2034,7 @@ async def fe_get_deliverable(deliverable_id: str):
 
 # POST /meetings/{meeting_id}/archive — 结束会议并归档
 @app.post("/meetings/{meeting_id}/archive")
-async def fe_archive_meeting(meeting_id: str):
+async def fe_archive_meeting(meeting_id: str, user: dict = Depends(get_current_user)):
     """POST /meetings/:id/archive → POST /api/meetings/:id/close + 归档信息"""
     from ..ui_server import _close_meeting
     close_result = _close_meeting(meeting_id)
@@ -2086,7 +2103,8 @@ def main(argv: list[str] | None = None) -> int:
 
         get_rag().count()
     except Exception:
-        pass
+        import logging
+        logging.getLogger(__name__).warning("non-critical error during KB Chroma warmup", exc_info=True)
 
     # 打印版本
     try:

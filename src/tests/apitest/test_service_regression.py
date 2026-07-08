@@ -74,9 +74,9 @@ def test_list_meetings(auth):
     assert isinstance(resp["meetings"], list)
 
 
-def test_get_status():
-    """GET /api/status → 200."""
-    code, resp = api("/api/status")
+def test_get_status(auth):
+    """GET /api/status → 200 (v0.19.0: 需认证)."""
+    code, resp = api("/api/status", token=auth["token"])
     assert code == 200
 
 
