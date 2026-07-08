@@ -1465,6 +1465,12 @@ async def post_upload_audio(
     if not body:
         raise HTTPException(status_code=400, detail="Empty body")
 
+    if len(body) > MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail={"error": f"文件过大 ({len(body)} bytes, 上限 {MAX_UPLOAD_SIZE} bytes)", "status": 413},
+        )
+
     fields, file_data = _parse_multipart(body, content_type)
     if not file_data:
         raise HTTPException(status_code=400, detail="No audio file in form (field name: 'audio' or 'file')")

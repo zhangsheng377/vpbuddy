@@ -10,12 +10,14 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
 import urllib.request
 import urllib.error
 
+import httpx
 import pytest
 
 pytestmark = pytest.mark.e2e
@@ -55,6 +57,9 @@ def _register_user() -> tuple[str, str]:
     email = f"e2e_impr_{uuid.uuid4().hex[:8]}@test.com"
     body = json.dumps({"email": email, "password": "t123456"}).encode()
     code, resp = _api("/api/auth/register", method="POST", body=body)
+    if code == 429:
+        time.sleep(61)
+        code, resp = _api("/api/auth/register", method="POST", body=body)
     assert code == 200, f"注册失败: {resp}"
     return resp["token"], email
 
@@ -74,27 +79,30 @@ class TestRateLimit:
     def test_api_rate_limit(self):
         """快速连续请求应触发速率限制 (429)."""
         token, _ = _register_user()
-        # 快速连续请求
-        codes = []
-        for i in range(150):
-            code, _ = _api("/api/status", token=token)
-            codes.append(code)
-            if code == 429:
-                break
-        # 应该有 429 响应
-        assert 429 in codes, f"未触发速率限制, 响应码: {set(codes)}"
+        
+        async def _run():
+            limits = httpx.Limits(max_connections=100, max_keepalive_connections=20)
+            async with httpx.AsyncClient(timeout=10, limits=limits) as client:
+                tasks = [
+                    client.get(f"{GPU_URL}/api/status", headers={"Authorization": f"Bearer {token}"})
+                    for _ in range(200)
+                ]
+                responses = await asyncio.gather(*tasks)
+                return [r.status_code for r in responses]
+        
+        codes = asyncio.run(_run())
+        assert 429 in codes, f"未触发速率限制, 响应码: {set(codes)}, 总数: {len(codes)}"
 
     def test_auth_rate_limit_stricter(self):
         """认证端点应有更严格的限制."""
         codes = []
-        for i in range(20):
+        for i in range(15):
             email = f"auth_rate_{uuid.uuid4().hex[:8]}@test.com"
             body = json.dumps({"email": email, "password": "t123456"}).encode()
             code, _ = _api("/api/auth/register", method="POST", body=body)
             codes.append(code)
             if code == 429:
                 break
-        # 认证端点限制更严 (默认 10/min)
         assert 429 in codes, f"认证端点未触发速率限制, 响应码: {set(codes)}"
 
 
@@ -122,9 +130,9 @@ class TestUnifiedErrorFormat:
 
     def test_http_exception_format(self):
         """HTTPException 应返回统一的 {"error": str, "status": int} 格式."""
-        # 触发 400 错误 (缺少参数)
         token, _ = _register_user()
-        code, resp = _api("/api/meetings/chat", method="POST", token=token,
+        mid = _create_meeting(token)
+        code, resp = _api(f"/api/meetings/{mid}/chat", method="POST", token=token,
                           body=json.dumps({}).encode())
         assert code == 400, f"预期 400, 实际 {code}"
         assert isinstance(resp, dict), f"响应应为 dict, 实际 {type(resp)}"
@@ -133,13 +141,10 @@ class TestUnifiedErrorFormat:
 
     def test_unhandled_exception_no_traceback(self):
         """未捕获异常不应泄露 traceback."""
-        # 触发一个可能的内部错误
         token, _ = _register_user()
         mid = _create_meeting(token)
-        # 发送一个无效格式的请求
-        code, resp = _api(f"/api/meetings/{mid}/upload", method="POST", token=token,
+        code, resp = _api(f"/api/meetings/{mid}/upload_audio", method="POST", token=token,
                           body=b"invalid-data", ct="text/plain")
-        # 无论什么错误, 都不应包含 traceback
         resp_str = str(resp)
         assert "traceback" not in resp_str.lower(), f"响应不应包含 traceback: {resp_str}"
         assert "stack" not in resp_str.lower(), f"响应不应包含 stack: {resp_str}"
@@ -153,7 +158,6 @@ class TestInputValidation:
         """超长 chat 消息应被拒绝 (400)."""
         token, _ = _register_user()
         mid = _create_meeting(token)
-        # 超过限制的消息 (20000+)
         long_msg = "a" * 30000
         body = json.dumps({"message": long_msg}).encode()
         code, resp = _api(f"/api/meetings/{mid}/chat", method="POST", token=token, body=body)
@@ -163,10 +167,9 @@ class TestInputValidation:
         """超大上传文件应被拒绝 (413)."""
         token, _ = _register_user()
         mid = _create_meeting(token)
-        # 超过 100MB 的数据
         huge_data = b"x" * (101 * 1024 * 1024)
         body, ct = _build_multipart(huge_data, "test-project")
-        code, resp = _api(f"/api/meetings/{mid}/upload", method="POST", token=token,
+        code, resp = _api(f"/api/meetings/{mid}/upload_audio", method="POST", token=token,
                           body=body, ct=ct, timeout=60)
         assert code == 413, f"超大文件应返回 413, 实际 {code}: {resp}"
 
