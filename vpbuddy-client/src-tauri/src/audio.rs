@@ -162,10 +162,11 @@ impl AudioCapture {
         let channels = cfg.channels() as usize;
 
         let (tx, rx) = mpsc::sync_channel::<Vec<i16>>(64);
-        let stream = device.build_input_stream(
-            &config,
-            move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                // 多声道 → 单声道 downmix
+        let fmt = cfg.sample_format();
+        let stream: cpal::Stream;
+        if fmt == cpal::SampleFormat::I16 {
+            let tx_i16 = tx.clone();
+            let data_cb = move |data: &[i16], _: &cpal::InputCallbackInfo| {
                 let mono: Vec<i16> = if channels == 1 {
                     data.to_vec()
                 } else {
@@ -176,11 +177,68 @@ impl AudioCapture {
                         })
                         .collect()
                 };
-                let _ = tx.try_send(mono);
-            },
-            |err| log::error!("cpal stream error: {err}"),
-            None,
-        )?;
+                let _ = tx_i16.try_send(mono);
+            };
+            stream = device.build_input_stream(&config, data_cb, |err| log::error!("cpal stream error: {err}"), None)?;
+        } else if fmt == cpal::SampleFormat::F32 {
+            let tx_f32 = tx.clone();
+            let data_cb = move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                let i16_data: Vec<i16> = data
+                    .iter()
+                    .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
+                    .collect();
+                let mono: Vec<i16> = if channels == 1 {
+                    i16_data
+                } else {
+                    i16_data
+                        .chunks(channels)
+                        .map(|frame| {
+                            let sum: i32 = frame.iter().map(|&s| s as i32).sum();
+                            (sum / channels as i32) as i16
+                        })
+                        .collect()
+                };
+                let _ = tx_f32.try_send(mono);
+            };
+            stream = device.build_input_stream(&config, data_cb, |err| log::error!("cpal stream error: {err}"), None)?;
+        } else if fmt == cpal::SampleFormat::U16 {
+            let tx_u16 = tx.clone();
+            let data_cb = move |data: &[u16], _: &cpal::InputCallbackInfo| {
+                let i16_data: Vec<i16> = data
+                    .iter()
+                    .map(|&s| s.wrapping_sub(32768) as i16)
+                    .collect();
+                let mono: Vec<i16> = if channels == 1 {
+                    i16_data
+                } else {
+                    i16_data
+                        .chunks(channels)
+                        .map(|frame| {
+                            let sum: i32 = frame.iter().map(|&s| s as i32).sum();
+                            (sum / channels as i32) as i16
+                        })
+                        .collect()
+                };
+                let _ = tx_u16.try_send(mono);
+            };
+            stream = device.build_input_stream(&config, data_cb, |err| log::error!("cpal stream error: {err}"), None)?;
+        } else {
+            let tx_fallback = tx;
+            let data_cb = move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                let mono: Vec<i16> = if channels == 1 {
+                    data.to_vec()
+                } else {
+                    data.chunks(channels)
+                        .map(|frame| {
+                            let sum: i32 = frame.iter().map(|&s| s as i32).sum();
+                            (sum / channels as i32) as i16
+                        })
+                        .collect()
+                };
+                let _ = tx_fallback.try_send(mono);
+            };
+            stream = device.build_input_stream(&config, data_cb, |err| log::error!("cpal stream error: {err}"), None)?;
+        }
 
         stream.play()?;
         log::info!(
