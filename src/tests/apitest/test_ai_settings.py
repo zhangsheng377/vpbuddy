@@ -82,6 +82,9 @@ def test_no_auth_401():
 
 def test_test_not_configured(auth):
     """没保存配置时 test 返回 failed."""
+    # 确保清空之前测试可能留下的 key
+    body = json.dumps({"api_key": ""}).encode()
+    api("/api/settings/ai", method="PUT", body=body, token=auth["token"])
     code, resp = api("/api/settings/ai/test", method="POST", body=b"{}", token=auth["token"])
     assert code == 200
     assert resp["connected"] is False
