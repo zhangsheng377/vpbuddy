@@ -79,6 +79,7 @@ fn rand_mid() -> String {
 // ══════════════════════════════════════════════════════════════════
 
 #[tokio::test]
+#[ignore = "需要 GPU 服务器可访问: GPU_URL=http://47.100.182.3:28765 cargo test --test realtime_e2e -- --ignored --nocapture"]
 async fn test_healthz_no_auth() {
     let url = gpu_url();
     let resp = http().get(format!("{}/healthz", url)).send().await.unwrap();
@@ -88,6 +89,7 @@ async fn test_healthz_no_auth() {
 }
 
 #[tokio::test]
+#[ignore = "需要 GPU 服务器可访问"]
 async fn test_status_requires_auth() {
     let url = gpu_url();
     let resp = http()
@@ -99,6 +101,7 @@ async fn test_status_requires_auth() {
 }
 
 #[tokio::test]
+#[ignore = "需要 GPU 服务器可访问"]
 async fn test_status_with_auth() {
     let url = gpu_url();
     let c = http();
@@ -117,6 +120,7 @@ async fn test_status_with_auth() {
 // ══════════════════════════════════════════════════════════════════
 
 #[tokio::test]
+#[ignore = "需要 GPU 服务器可访问"]
 async fn test_meeting_lifecycle() {
     let url = gpu_url();
     let c = http();
@@ -150,6 +154,7 @@ async fn test_meeting_lifecycle() {
 }
 
 #[tokio::test]
+#[ignore = "需要 GPU 服务器可访问"]
 async fn test_delete_nonexistent_meeting() {
     let url = gpu_url();
     let c = http();
@@ -170,6 +175,7 @@ async fn test_delete_nonexistent_meeting() {
 // ══════════════════════════════════════════════════════════════════
 
 #[tokio::test]
+#[ignore = "需要 GPU 服务器可访问"]
 async fn test_meeting_owner_isolation() {
     let url = gpu_url();
     let c = http();
@@ -223,6 +229,7 @@ async fn test_meeting_owner_isolation() {
 // ══════════════════════════════════════════════════════════════════
 
 #[tokio::test]
+#[ignore = "需要 GPU 服务器可访问"]
 async fn test_ws_realtime_asr_no_token_rejected() {
     let url = gpu_url();
     let ws_url = url
@@ -255,6 +262,7 @@ async fn test_ws_realtime_asr_no_token_rejected() {
 }
 
 #[tokio::test]
+#[ignore = "需要 GPU 服务器可访问"]
 async fn test_ws_realtime_asr_with_token() {
     let url = gpu_url();
     let c = http();
@@ -326,6 +334,7 @@ async fn test_ws_realtime_asr_with_token() {
 }
 
 #[tokio::test]
+#[ignore = "需要 GPU 服务器可访问"]
 async fn test_ws_ping_pong() {
     let url = gpu_url();
     let c = http();
@@ -379,6 +388,7 @@ async fn test_ws_ping_pong() {
 }
 
 #[tokio::test]
+#[ignore = "需要 GPU 服务器可访问"]
 async fn test_ws_bad_handshake() {
     let url = gpu_url();
     let c = http();
@@ -421,6 +431,7 @@ async fn test_ws_bad_handshake() {
 }
 
 #[tokio::test]
+#[ignore = "需要 GPU 服务器可访问"]
 async fn test_ws_unauthorized_meeting() {
     let url = gpu_url();
     let c = http();
