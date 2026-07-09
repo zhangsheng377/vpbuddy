@@ -64,10 +64,18 @@ def register_user(prefix: str = "api") -> tuple[str, str]:
     return resp["token"], email
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def auth():
-    """Register a fresh test user, return {'token': str, 'email': str}."""
+    """Register a fresh test user once per session, return {'token': str, 'email': str}."""
     token, email = register_user("api")
+    return {"token": token, "email": email}
+
+
+@pytest.fixture
+def auth_alt():
+    """Second user for cross-user tests, registered once per test."""
+    import time; time.sleep(1)
+    token, email = register_user("ap2")
     return {"token": token, "email": email}
 
 
