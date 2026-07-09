@@ -225,15 +225,16 @@ impl AudioCapture {
         } else {
             let tx_fallback = tx;
             let data_cb = move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                            data.to_vec()
-                        } else {
-                            data.chunks(channels)
-                                .map(|frame| {
-                                    let sum: i32 = frame.iter().map(|&s| s as i32).sum();
-                                    (sum / channels as i32) as i16
-                                })
-                                .collect()
-                        };
+                let mono: Vec<i16> = if channels == 1 {
+                    data.to_vec()
+                } else {
+                    data.chunks(channels)
+                        .map(|frame| {
+                            let sum: i32 = frame.iter().map(|&s| s as i32).sum();
+                            (sum / channels as i32) as i16
+                        })
+                        .collect()
+                };
                 let _ = tx_fallback.try_send(mono);
             };
             stream = device.build_input_stream(&config, data_cb, |err| log::error!("cpal stream error: {err}"), None)?;
