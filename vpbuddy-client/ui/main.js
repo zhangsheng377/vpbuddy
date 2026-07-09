@@ -158,6 +158,9 @@ let currentMeetingId = null;
 let docsByKind = {};
 const renderedChatIds = new Set();
 
+// 2026-06-28: ASR 30s batch 延迟显示 — 录音开始累加, 收到 segment 重置
+// 因为 funasr 是 batch 模式, 用户说话后最长等 30s 才出字, 必须有视觉反馈
+const LATENCY_WINDOW_S = 30; // 服务端 30s 切片
 let latencyTimer = null;
 let latencyStartMs = 0;
 function startLatencyTicker() {
@@ -165,10 +168,10 @@ function startLatencyTicker() {
   latencyStartMs = Date.now();
   const el = document.getElementById("latency");
   if (!el) return;
-  el.textContent = `已采集 0.0s`;
+  el.textContent = `已等 0.0s / ${LATENCY_WINDOW_S}s`;
   latencyTimer = setInterval(() => {
     const elapsed = (Date.now() - latencyStartMs) / 1000;
-    el.textContent = `已采集 ${elapsed.toFixed(1)}s`;
+    el.textContent = `已等 ${elapsed.toFixed(1)}s / ${LATENCY_WINDOW_S}s`;
   }, 500);
 }
 function stopLatencyTicker(resetText = true) {
@@ -487,7 +490,7 @@ listen("transcript-segment", (e) => {
   const seg = e.payload;
   if (latencyTimer) {
     latencyStartMs = Date.now();
-    document.getElementById("latency").textContent = `已采集 0.0s (出字中)`;
+    document.getElementById("latency").textContent = `已等 0.0s / ${LATENCY_WINDOW_S}s (刚出字)`;
   }
   segCount += 1;
   const list = document.getElementById("stream-list");
@@ -949,14 +952,6 @@ listen("state-update", (e) => {
 listen("error", (e) => {
   document.getElementById("rec-status").textContent = "❌ " + e.payload;
   document.getElementById("rec-dot").className = "dot err";
-  recording = false;
-  stopLatencyTicker();
-  const btn = document.getElementById("btn-rec");
-  if (btn) {
-    btn.dataset.state = "idle";
-    btn.textContent = "开始录音";
-    btn.disabled = false;
-  }
 });
 
 // === KB 检索 ===
