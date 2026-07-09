@@ -218,7 +218,7 @@ def handle_kb_upload(body: bytes, content_type: str, user_id: str = "") -> dict:
     }
 
 
-def handle_chat_upload(body: bytes, content_type: str, meeting_id: str) -> dict:
+def handle_chat_upload(body: bytes, content_type: str, meeting_id: str, user_id: str = "") -> dict:
     """POST /api/meetings/{id}/chat (multipart) — chat 多文件上传 (ADR-0023).
 
     行为:
@@ -280,6 +280,7 @@ def handle_chat_upload(body: bytes, content_type: str, meeting_id: str) -> dict:
                     ids=[doc_id],
                     documents=[content],
                     metadatas=[{
+                        "user_id": user_id,
                         "meeting_id": meeting_id,
                         "source": f"chat-upload:{fname}",
                         "uploaded_at": now,

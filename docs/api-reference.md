@@ -1,13 +1,14 @@
 # VPBuddy HTTP API 参考
 
-> **版本**: v0.19.0 · `@ 2026-07-08`
+> **版本**: v0.20.0 · `@ 2026-07-09`
 > **Base URL**: `http://47.100.182.3:28765`（公网 GPU 服务器）
 > **协议**: HTTP/1.1 · WebSocket 实时 ASR · SSE 实时推送 · Multipart 上传
 > **编码**: 所有请求/响应使用 UTF-8
 > **CORS**: 所有端点返回 `Access-Control-Allow-Origin: *`
-> **认证 (ADR-0047)**: 除 `/api/auth/*` 外所有端点要求 `Authorization: Bearer <token>`
-> **会议隔离 (ADR-0050)**: 会议单端点 (state/chat history) 仅 owner 可访问, 非 owner 返回 `403`
+> **认证 (ADR-0047)**: 除 `/healthz` 和 `/api/auth/*` 外所有端点要求 `Authorization: Bearer <token>`。WebSocket 端点通过 `?token=<JWT>` query param 认证。
+> **会议隔离 (ADR-0050)**: 所有单会议端点 (state/docs/events/aggregate/collab/chat/close/materials) 仅 owner 可访问, 非 owner 返回 `403`
 > **百炼 ASR (ADR-0051)**: API Key 从 `DASHSCOPE_API_KEY` 环境变量读取, 仓库不存明文
+> **⚠️ Breaking in v0.20**: `upload_audio`、`stream_chunk`、`stream_stop` 已移除，30s 切片模式已废弃，请使用 WebSocket 实时 ASR。
 
 ---
 
@@ -22,11 +23,11 @@
 4. [会议](#4-会议)
    - [GET /api/meetings](#41-列出所有会议)
    - [GET /api/meetings/{id}/state](#42-获取会议状态)
-   - [POST /api/meetings/upload](#43-上传音频自动生成文档)
-   - [POST /api/meetings/stream_start](#44-创建流式会议)
-   - [WS /api/meetings/{id}/realtime_asr](#45-websocket-实时-asr百炼-fun-asr-realtime)
-   - [POST /api/meetings/{id}/stream_chunk](#46-推送音频切片http-模式)
-   - [POST /api/meetings/{id}/stream_stop](#47-停止录音)
+   - [GET /api/meetings/{id}](#43-获取会议详情)
+   - [PATCH /api/meetings/{id}](#44-更新会议标题)
+   - [DELETE /api/meetings/{id}](#45-删除会议)
+   - [POST /api/meetings/stream_start](#46-创建流式会议)
+   - [WS /api/meetings/{id}/realtime_asr](#47-websocket-实时-asr百炼-fun-asr-realtime)
    - [POST /api/meetings/{id}/close](#48-结束会议)
    - [GET /api/meetings/check_id](#49-校验会议名)
 5. [文档](#5-文档)
@@ -65,7 +66,9 @@
    - [POST /api/experiences/{id}/approve](#133-确认经验)
    - [POST /api/experiences/{id}/reject](#134-拒绝经验)
 14. [系统](#14-系统)
-   - [GET /api/timeline](#141-时间线)
+   - [GET /healthz](#140-健康检查)
+   - [GET /api/status](#141-服务状态)
+   - [GET /api/timeline](#142-时间线)
 
 ---
 
@@ -91,23 +94,30 @@ curl -H "Authorization: Bearer $TOKEN" http://47.100.182.3:28765/api/meetings
 ```bash
 # 1. 创建流式会议 (需要 token)
 curl -X POST "http://47.100.182.3:28765/api/meetings/stream_start?meeting_id=my-meeting&audio_source=microphone" \
-  -H "Authorization: Bearer $TOKEN"
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"platform": "cli"}'
 
-# 2. WebSocket 实时 ASR — 连接后持续推送 PCM 音频帧
-# ws://47.100.182.3:28765/api/meetings/my-meeting/realtime_asr
+# 2. WebSocket 实时 ASR — 需要 token query param
+# ws://47.100.182.3:28765/api/meetings/my-meeting/realtime_asr?token=$TOKEN
 
 # 3. 15 秒后自动生成文档, 查看
 curl -H "Authorization: Bearer $TOKEN" \
   http://47.100.182.3:28765/api/meetings/my-meeting/docs
 ```
 
-### 上传音频 (离线模式)
+### 后续操作
 
 ```bash
-curl -X POST http://47.100.182.3:28765/api/meetings/upload \
+# 更新会议标题
+curl -X PATCH "http://47.100.182.3:28765/api/meetings/my-meeting" \
   -H "Authorization: Bearer $TOKEN" \
-  -F "audio=@meeting.wav" \
-  -F "project_name=产品评审会"
+  -H "Content-Type: application/json" \
+  -d '{"project_name":"新标题"}'
+
+# 删除会议
+curl -X DELETE "http://47.100.182.3:28765/api/meetings/my-meeting" \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ---
@@ -122,7 +132,7 @@ curl -X POST http://47.100.182.3:28765/api/meetings/upload \
 
 ### 认证
 
-所有 API 端点（除 `/api/auth/*`）要求 `Authorization: Bearer <token>` header。无 token 返回 `401 Unauthorized`。token 通过注册或登录获取，JWT 72 小时过期。参见 [§3 认证](#3-认证)。
+所有 API 端点（除 `/healthz` 和 `/api/auth/*`）要求 `Authorization: Bearer <token>` header。无 token 返回 `401 Unauthorized`。WebSocket 端点通过 `?token=<JWT>` query param 认证。token 通过注册或登录获取，JWT 72 小时过期。参见 [§3 认证](#3-认证)。
 
 ### 知识库隔离 (ADR-0047)
 
@@ -285,23 +295,48 @@ GET /api/meetings/{id}/state
 
 ---
 
-### 4.3 上传音频自动生成文档
+### 4.3 获取会议详情
 
 ```
-POST /api/meetings/upload
+GET /api/meetings/{id}
 ```
 
-**请求**: `Content-Type: multipart/form-data`
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| audio | file | 是 | WAV 文件 (16kHz, mono, PCM) |
-| project_name | string | 否 | 会议名称 |
-| platform | string | 否 | 来源平台标识 |
+**v0.20 新增**。返回会议聚合信息，包含 state、docs 摘要等。需 owner 校验。
 
 ---
 
-### 4.4 创建流式会议
+### 4.4 更新会议标题
+
+```
+PATCH /api/meetings/{id}
+```
+
+**v0.20 新增**。更新会议 `project_name`。
+
+**请求 JSON**:
+```json
+{"project_name": "新标题"}
+```
+
+**权限 (ADR-0050)**: 仅会议 owner 可操作。非 owner 返回 `403`。
+
+---
+
+### 4.5 删除会议
+
+```
+DELETE /api/meetings/{id}
+```
+
+**v0.20 新增**。删除会议 state、chat history、materials、docs 目录。
+
+**响应**: `{"meeting_id": "{id}", "deleted": {"state": true, "chat": true, "docs": true, ...}}`
+
+**权限 (ADR-0050)**: 仅会议 owner 可操作。
+
+---
+
+### 4.6 创建流式会议
 
 ```
 POST /api/meetings/stream_start
@@ -312,27 +347,29 @@ POST /api/meetings/stream_start
 |------|------|------|------|
 | meeting_id | string | 否 | 复用已有会议 ID (不传则自动生成) |
 | audio_source | string | 否 | `microphone` / `loopback` / `both` (默认 microphone) |
+| project_name | string | 否 | 会议名称 (v0.20 新增, 默认 "长连接会议 {id}") |
 
 **响应**:
 ```json
 {
   "meeting_id": "api_908de970",
-  "chunk_interval_sec": 30,
   "audio_source": "microphone",
   "reused": false,
-  "message": "Stream started, send 30s WAV chunks to /api/meetings/{id}/stream_chunk"
+  "message": "Stream started, connect via WebSocket /api/meetings/{id}/realtime_asr"
 }
 ```
 
-创建会议后会初始化 `MeetingState`（含空的 `cleaned_text` 字段）。后续通过 WebSocket（推荐）或 HTTP chunk 推送音频。
+创建会议后会初始化 `MeetingState`（含空的 `cleaned_text` 字段）。后续通过 WebSocket 推送音频。
 
 ---
 
-### 4.5 WebSocket 实时 ASR（百炼 Fun-ASR-Realtime）
+### 4.7 WebSocket 实时 ASR（百炼 Fun-ASR-Realtime）
 
 ```
 WS /api/meetings/{id}/realtime_asr
 ```
+
+**⚠️ v0.20 变更**: 必须在 URL 中携带 `token` query param: `ws://.../realtime_asr?token=<JWT>`。无 token 或无效 token 返回 `{"type":"error","error":"token 无效或缺失"}` 并关闭连接。
 
 **协议**: WebSocket，全双工。客户端先发 JSON 控制消息，然后持续发 binary PCM 帧。服务端每句完成后推送 `transcript` JSON 消息。
 
@@ -386,38 +423,6 @@ WS /api/meetings/{id}/realtime_asr
   │  ← {"type":"asr_complete",...}            │
   │  连接断开                                  │
 ```
-
----
-
-### 4.6 推送音频切片 (HTTP 模式)
-
-```
-POST /api/meetings/{id}/stream_chunk
-```
-
-**说明**: HTTP 多路音频上传（每 30s 一个 WAV 切片），适用于无法建立 WebSocket 的场景。
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| audio | file | 是 | WAV 切片 (30s, 16kHz, mono) |
-| chunk_index | int | 是 | 切片序号 (从 0 开始) |
-| chunk_start_sec | float | 是 | 切片开始时间 (秒) |
-| overlap_sec | float | 否 | 与前一片重叠秒数 (默认 0) |
-
-**Query 参数**:
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| sync | bool | `true`=同步阻塞等 ASR 完成, `false`=异步后台 (默认 true) |
-
----
-
-### 4.7 停止录音
-
-```
-POST /api/meetings/{id}/stream_stop
-```
-
-关闭 SSE 订阅者，停止接收音频。与 close 不同，不结束会议。
 
 ---
 
@@ -830,7 +835,32 @@ POST /api/experiences/{item_id}/reject
 
 ## 14. 系统
 
-### 14.1 时间线
+### 14.0 健康检查
+
+```
+GET /healthz
+```
+
+**v0.20 新增**。公开端点，无需认证。用于负载均衡/监控探测。
+
+**响应** `200`:
+```json
+{"ok": true}
+```
+
+---
+
+### 14.1 服务状态
+
+```
+GET /api/status
+```
+
+**⚠️ v0.20 变更**: 现在需要认证 (`Authorization: Bearer <token>`)。无 token 返回 `401`。
+
+---
+
+### 14.2 时间线
 
 ```
 GET /api/timeline

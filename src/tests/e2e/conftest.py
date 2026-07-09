@@ -39,10 +39,13 @@ import pytest
 
 
 # === 配置 ===
-VPBUDDY_CLIENT_DIR = Path("/home/zsd/vpbuddy/vpbuddy-client")
+_IS_WIN = sys.platform.startswith("win")
+_THIS_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _THIS_DIR.parent.parent.parent
+VPBUDDY_CLIENT_DIR = _REPO_ROOT / "vpbuddy-client"
 DIST_DIR = VPBUDDY_CLIENT_DIR / "dist"
 GPU_SERVER_URL = os.environ.get("VP_E2E_GPU_URL", "http://47.100.182.3:28765")
-E2E_VITE_PORT = 4173
+E2E_VITE_PORT = int(os.environ.get("VP_E2E_PORT", "4173"))
 SR = 16000
 
 
@@ -66,11 +69,17 @@ def _port_free(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) != 0
 
 
-def _http_ready(url: str, timeout: float = 5.0) -> bool:
+def _http_ready(url: str, timeout: float = 5.0, method: str = "GET",
+                data: bytes | None = None, content_type: str | None = None,
+                expected_status: int = 200) -> bool:
     try:
-        req = urllib.request.Request(url, method="GET")
+        req = urllib.request.Request(url, method=method, data=data)
+        if content_type:
+            req.add_header("Content-Type", content_type)
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.status == 200
+            return r.status == expected_status
+    except urllib.error.HTTPError as e:
+        return e.code == expected_status
     except Exception:
         return False
 
@@ -214,7 +223,7 @@ def gpu_server() -> str:
 
     Returns: GPU server base URL.
     """
-    if not _http_ready(f"{GPU_SERVER_URL}/api/status"):
+    if not _http_ready(f"{GPU_SERVER_URL}/api/auth/login", method="POST", data=b'{"email":"test@test.com","password":"wrong"}', content_type="application/json", expected_status=401):
         pytest.skip(f"GPU server 不通: {GPU_SERVER_URL} (部署路径不通, e2e 跳过)")
     return GPU_SERVER_URL
 
@@ -243,13 +252,18 @@ def vite_preview_url() -> Iterator[str]:
     if not _port_free(E2E_VITE_PORT):
         pytest.skip(f"port {E2E_VITE_PORT} 被占, e2e 起 vite preview 失败")
 
+    npx_cmd = "npx.cmd" if _IS_WIN else "npx"
+    popen_kwargs = {}
+    if not _IS_WIN:
+        popen_kwargs["preexec_fn"] = os.setsid
+
     proc = subprocess.Popen(
-        ["npx", "--yes", "vite", "preview", "--port", str(E2E_VITE_PORT), "--strictPort"],
+        [npx_cmd, "--yes", "vite", "preview", "--port", str(E2E_VITE_PORT), "--strictPort"],
         cwd=str(VPBUDDY_CLIENT_DIR),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         stdin=subprocess.DEVNULL,
-        preexec_fn=os.setsid,
+        **popen_kwargs,
     )
     url = f"http://localhost:{E2E_VITE_PORT}"
 
@@ -259,7 +273,10 @@ def vite_preview_url() -> Iterator[str]:
         time.sleep(0.25)
     else:
         try:
-            os.killpg(os.getpgid(proc.pid), 9)
+            if _IS_WIN:
+                proc.terminate()
+            else:
+                os.killpg(os.getpgid(proc.pid), 9)
         except OSError:
             pass
         pytest.skip(f"vite preview 启动失败 ({url})")
@@ -268,14 +285,20 @@ def vite_preview_url() -> Iterator[str]:
         yield url
     finally:
         try:
-            os.killpg(os.getpgid(proc.pid), 15)
+            if _IS_WIN:
+                proc.terminate()
+            else:
+                os.killpg(os.getpgid(proc.pid), 15)
         except (OSError, ProcessLookupError):
             pass
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             try:
-                os.killpg(os.getpgid(proc.pid), 9)
+                if _IS_WIN:
+                    proc.kill()
+                else:
+                    os.killpg(os.getpgid(proc.pid), 9)
             except (OSError, ProcessLookupError):
                 pass
 

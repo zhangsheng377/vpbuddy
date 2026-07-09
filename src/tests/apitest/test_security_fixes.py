@@ -1,7 +1,6 @@
 """安全修复回归测试 — v0.19.0 code review
 
 验证:
-- 高危 #3: upload_audio 端点现已需认证 + owner 校验
 - 高危 #4: 前端桥接路由 8 个均已添加认证
 - 高危 #5: aggregate 端点现已需 owner 校验
 - 高危 #8: owner_id 空字符串不再绕过权限检查
@@ -13,26 +12,6 @@ import json
 import uuid
 
 from .conftest import api, register_user
-
-
-# ══════════════════════════════════════════════════════════════════
-# HIGH #3: upload_audio 认证
-# ══════════════════════════════════════════════════════════════════
-
-def test_upload_audio_no_auth_401():
-    """upload_audio 无 token → 401."""
-    code, _ = api("/api/meetings/test/upload_audio", method="POST", body=b"fake")
-    assert code == 401
-
-
-def test_upload_audio_cross_user_403(meeting):
-    """upload_audio 非 owner → 403."""
-    tok2, _ = register_user("up_cross")
-    code, _ = api(
-        f"/api/meetings/{meeting['mid']}/upload_audio",
-        method="POST", body=b"fake", token=tok2,
-    )
-    assert code == 403
 
 
 # ══════════════════════════════════════════════════════════════════

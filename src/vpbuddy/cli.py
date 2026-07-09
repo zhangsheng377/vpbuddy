@@ -25,18 +25,6 @@ def cmd_ui(args: argparse.Namespace) -> int:
     return fastapi_main(extra) or 0
 
 
-
-def cmd_transcribe(args: argparse.Namespace) -> int:
-    """转写音频(调用 GPU 服务器上的 Whisper + pyannote)"""
-    import subprocess
-    cmd = [
-        sys.executable, "-m", "vpbuddy.scripts.gpu_transcribe",
-        args.audio_file,
-        "-o", args.output,
-    ]
-    return subprocess.call(cmd)
-
-
 def cmd_setup_gpu(args: argparse.Namespace) -> int:
     """装 GPU 模型(本地一次性)"""
     import subprocess
@@ -102,12 +90,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_ui.add_argument("--port", type=int, default=8765, help="端口(默认 8765)")
     p_ui.add_argument("--host", default="0.0.0.0", help="绑定 host(默认 0.0.0.0)")
     p_ui.set_defaults(func=cmd_ui)
-
-    # transcribe
-    p_tx = sub.add_parser("transcribe", help="转写音频(调用 GPU 服务器)")
-    p_tx.add_argument("audio_file", help="音频文件路径")
-    p_tx.add_argument("-o", "--output", default="transcript.json", help="输出文件")
-    p_tx.set_defaults(func=cmd_transcribe)
 
     # setup-gpu
     p_gpu = sub.add_parser("setup-gpu", help="装 GPU 模型(本地一次性)")

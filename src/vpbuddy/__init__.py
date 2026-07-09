@@ -13,7 +13,7 @@ ADR-0008 Superseded:见 docs/decisions/0008-ADR-0001-决策1-Superseded.md
 ADR-0009 部署架构:见 docs/decisions/0009-部署架构-Hermes-runtime.md (2026-06-22 更新 — VPBuddy 用 in-process `from run_agent import AIAgent` 真共享 session + ThreadPoolExecutor(3) 真并发)
 ADR-0011 HF 模型离线:见 docs/decisions/0011-HF模型离线铁律.md (2026-06-23)
 """
-__version__ = "0.9.0"  # v0.9.0 — 后台任务队列 + 经验蒸馏 Phase 1 + BFF API
+__version__ = "0.9.1"  # v0.9.1 — 30s切片废弃→WS实时、Issue #28 安全加固 + #29 客户端7项修复
 
 # 动态 version 优先: 从 _version.py 加载 git describe / 环境变量版本
 try:

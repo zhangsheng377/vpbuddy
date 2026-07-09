@@ -101,25 +101,8 @@ class TestE2EFullChain:
         print(f"[01] ✅ wav: {out} ({out.stat().st_size} bytes)")
 
     def test_02_asr_transcribe(self, tmp_path):
-        """Step 2: ASR 转写(funasr paraformer-zh)"""
-        from vpbuddy.loopback import capture_loopback
-
-        # 准备音频(silence_fallback 即可,验证转写 pipeline)
-        wav = tmp_path / "for_asr.wav"
-        capture_loopback(
-            duration_sec=3.0,
-            output_path=wav,
-            silence_fallback=True,
-        )
-
-        # 走 gpu_transcribe
-        from vpbuddy.scripts.gpu_transcribe import process as transcribe_process
-        result = transcribe_process(str(wav))
-
-        assert "sentences" in result or "segments" in result, f"转写结果格式错: {result.keys()}"
-        print(f"[02] ✅ ASR result keys: {list(result.keys())}")
-        if "sentences" in result:
-            print(f"[02]    sentences: {len(result['sentences'])}")
+        """Step 2: ASR 转写 — 已迁移至百炼 WS 实时模式, 待重写为 WS 版"""
+        pytest.skip("gpu_transcribe 已移除, 待适配百炼 WS 实时转写")
 
     def test_03_meeting_state_setup(self, tmp_path):
         """Step 3: 创建 meeting state(从 ASR 结果或 mock)"""

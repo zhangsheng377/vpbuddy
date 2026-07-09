@@ -38,30 +38,6 @@ def install_fakes(docs_dir: Path) -> None:
     fake_run_agent.AIAgent = FakeAIAgent
     sys.modules["run_agent"] = fake_run_agent
 
-    fake_gpu = types.ModuleType("vpbuddy.scripts.gpu_transcribe")
-
-    def fake_process(_path: str) -> dict:
-        return {
-            "segments": [
-                {
-                    "start_sec": 0.5,
-                    "end_sec": 1.6,
-                    "text": "必须实时展示会议转写和六类文档",
-                    "speaker_id": "SPEAKER_00",
-                },
-                {
-                    "start_sec": 2.0,
-                    "end_sec": 3.2,
-                    "text": "需要支持 Demo 实时预览",
-                    "speaker_id": "SPEAKER_01",
-                },
-            ],
-            "num_speakers": 2,
-        }
-
-    fake_gpu.process = fake_process
-    sys.modules["vpbuddy.scripts.gpu_transcribe"] = fake_gpu
-
     import vpbuddy.sub_session_controller as sub_session_controller
 
     sub_session_controller.DOCS_DIR = docs_dir

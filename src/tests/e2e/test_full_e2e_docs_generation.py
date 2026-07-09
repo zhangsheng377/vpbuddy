@@ -46,6 +46,7 @@ MIN_DOC_BYTES = 50
 class TestUploadAndDocGeneration:
     """核心流程: 上传 → ASR → controller → 6 文档 → 可读内容"""
 
+    @pytest.mark.skip(reason="upload 端点已废弃, 待适配 WS 实时模式的全链路测试")
     def test_upload_audio_returns_meeting(self, gpu_server, synth_wav):
         """上传 30s 音频 → 返回 meeting_id + ASR 有 segment."""
         body, ct = build_upload_multipart(synth_wav,

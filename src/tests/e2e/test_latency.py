@@ -1,38 +1,15 @@
 """e2e — ASR 延迟 + 文档生成延迟测量
 
+NOTE: 此测试文件基于已废弃的 30s 切片 API (stream_chunk / stream_stop)，
+现已迁移至 WebSocket 实时 ASR。待新的 WebSocket 延迟测试实现后重新启用。
+
 跑法: RUN_E2E=1 pytest src/tests/e2e/test_latency.py -v -m e2e
-     (真实语音测试需要 edge-tts + ffmpeg 预装)
-
-架构说明:
-- funasr 是 30s batch 模式, 不是 streaming. 用户说话后最长等 30s 才出字.
-  → ASR latency = ~30s (设计如此, v0.9.x 计划上 streaming 降低)
-- 文档生成依赖 LLM (Hermes), GPU 测试服务器无 Hermes API, 所以文档块为空.
-  正式使用场景下 (用户电脑 → GPU 服务器 → Hermes), 文档在 ASR 完成后 ~30-60s 内生成.
-
-延迟链路时序 (2026-07-04 实测):
-  语音满 30s → POST chunk (~0.5s 网络) → funasr 处理 (~28s)
-  → ingest 分类 (~0.5s) → SSE 推回 (~0.3s) → 客户端渲染 (~0.1s)
-  ──────────────────────────────────────────
-  总计: ~30s (用户开始说话到客户端显示文字)
-
-真实语音实测 (30s TTS 中文需求, edge-tts xiaoxiao):
-  ASR processing_ms: 27,949ms
-  客户端墙钟:        31,556ms (含网络 + 排队)
-  识别段数:          9 段 (全部正确识别)
 """
 from __future__ import annotations
 
-import json
-import math
-import os
-import random
-import struct
-import time
-import urllib.error
-import urllib.request
-from pathlib import Path
-
 import pytest
+
+pytest.skip("已废弃: 基于 30s 切片 API (stream_chunk)，待 WebSocket 版本实现", allow_module_level=True)
 
 
 pytestmark = pytest.mark.e2e

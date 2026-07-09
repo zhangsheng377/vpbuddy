@@ -2,50 +2,23 @@
 """VPBuddy 无头客户端。
 
 用途:
-- 模拟桌面客户端完整链路: stream_start -> SSE -> stream_chunk -> state/docs 查询
+- 模拟桌面客户端完整链路: stream_start -> SSE -> state/docs 查询
 - 不依赖 Tauri、GUI、麦克风或系统音频设备
 - 可用于本地端到端测试和 CI smoke test
 
 运行示例:
-    PYTHONPATH=src python src/tests/headless_client.py --server http://127.0.0.1:8765 --chunks 2
+    PYTHONPATH=src python src/tests/headless_client.py --server http://127.0.0.1:8765
 """
 from __future__ import annotations
 
 import argparse
 import json
-import math
 import socket
 import threading
 import time
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Optional
-
-
-def make_wav(duration_sec: float = 1.0, sample_rate: int = 16000, tone_hz: float = 440.0) -> bytes:
-    """生成 16kHz mono i16 WAV。duration 很短即可触发服务端测试链路。"""
-    n = int(sample_rate * duration_sec)
-    samples = bytearray()
-    for i in range(n):
-        v = int(1200 * math.sin(2 * math.pi * tone_hz * i / sample_rate))
-        samples.extend(v.to_bytes(2, "little", signed=True))
-
-    data_size = len(samples)
-    header = bytearray(44)
-    header[0:4] = b"RIFF"
-    header[4:8] = (36 + data_size).to_bytes(4, "little")
-    header[8:12] = b"WAVE"
-    header[12:16] = b"fmt "
-    header[16:20] = (16).to_bytes(4, "little")
-    header[20:22] = (1).to_bytes(2, "little")
-    header[22:24] = (1).to_bytes(2, "little")
-    header[24:28] = sample_rate.to_bytes(4, "little")
-    header[28:32] = (sample_rate * 2).to_bytes(4, "little")
-    header[32:34] = (2).to_bytes(2, "little")
-    header[34:36] = (16).to_bytes(2, "little")
-    header[36:40] = b"data"
-    header[40:44] = data_size.to_bytes(4, "little")
-    return bytes(header) + bytes(samples)
 
 
 @dataclass
@@ -83,27 +56,6 @@ class HeadlessVPBuddyClient:
         if self._thread:
             self._thread.join(timeout=2)
 
-    def upload_chunk(
-        self,
-        wav_data: bytes,
-        chunk_index: int,
-        chunk_start_sec: float,
-        overlap_sec: float = 2.0,
-    ) -> dict:
-        if not self.meeting_id:
-            raise RuntimeError("请先调用 start_meeting()")
-        fields = {
-            "chunk_index": str(chunk_index),
-            "chunk_start_sec": f"{chunk_start_sec:.3f}",
-            "overlap_sec": f"{overlap_sec:.3f}",
-            "client_sent_at": f"{time.time():.3f}",
-        }
-        return self._upload_multipart(
-            f"/api/meetings/{self.meeting_id}/stream_chunk",
-            wav_data,
-            fields,
-        )
-
     def get_state(self) -> dict:
         if not self.meeting_id:
             raise RuntimeError("请先调用 start_meeting()")
@@ -136,15 +88,10 @@ class HeadlessVPBuddyClient:
             time.sleep(0.1)
         return False
 
-    def run_smoke(self, chunks: int = 1, chunk_duration_sec: float = 1.0, chat_message: Optional[str] = None) -> dict:
+    def run_smoke(self, chat_message: Optional[str] = None) -> dict:
         meeting_id = self.start_meeting()
         self.connect_sse()
         time.sleep(0.3)
-
-        responses = []
-        for i in range(chunks):
-            wav = make_wav(duration_sec=chunk_duration_sec, tone_hz=440.0 + i * 30)
-            responses.append(self.upload_chunk(wav, i, i * 28.0, overlap_sec=2.0))
 
         self.wait_for_events({"connected"}, timeout_sec=3)
         chat_response = None
@@ -156,7 +103,6 @@ class HeadlessVPBuddyClient:
         chat_history = self.get_chat_history()
         return {
             "meeting_id": meeting_id,
-            "chunk_responses": responses,
             "chat_response": chat_response,
             "chat_history": chat_history,
             "events": [{"event": e.event, "data": e.data, "id": e.event_id} for e in self.events],
@@ -258,36 +204,9 @@ class HeadlessVPBuddyClient:
         with urllib.request.urlopen(self._url(path), timeout=10) as resp:
             return json.loads(resp.read().decode())
 
-    def _upload_multipart(self, path: str, wav_data: bytes, fields: dict[str, str]) -> dict:
-        boundary = "----VPBuddyHeadlessBoundary"
-        body = (
-            f"--{boundary}\r\n"
-            'Content-Disposition: form-data; name="audio"; filename="chunk.wav"\r\n'
-            "Content-Type: audio/wav\r\n\r\n"
-        ).encode() + wav_data + b"\r\n"
-        for key, value in fields.items():
-            body += (
-                f"--{boundary}\r\n"
-                f'Content-Disposition: form-data; name="{key}"\r\n\r\n'
-                f"{value}\r\n"
-            ).encode()
-        body += f"--{boundary}--\r\n".encode()
-
-        req = urllib.request.Request(
-            self._url(path),
-            data=body,
-            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            return json.loads(resp.read().decode())
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description="VPBuddy 无头客户端 smoke test")
     parser.add_argument("--server", default="http://127.0.0.1:8765", help="VPBuddy 服务端地址")
-    parser.add_argument("--chunks", type=int, default=1, help="上传音频分片数量")
-    parser.add_argument("--duration", type=float, default=1.0, help="每个测试 WAV 的秒数")
     parser.add_argument("--chat", default="", help="发送一条 VP Chat 消息")
     parser.add_argument("--json", action="store_true", help="输出完整 JSON")
     args = parser.parse_args()
@@ -295,8 +214,6 @@ def main() -> int:
     client = HeadlessVPBuddyClient(args.server)
     try:
         result = client.run_smoke(
-            chunks=args.chunks,
-            chunk_duration_sec=args.duration,
             chat_message=args.chat or None,
         )
         if args.json:
@@ -304,7 +221,6 @@ def main() -> int:
         else:
             event_types = [e["event"] for e in result["events"]]
             print(f"meeting_id={result['meeting_id']}")
-            print(f"chunks={len(result['chunk_responses'])}")
             print(f"events={event_types}")
             print(f"docs={len(result['docs'].get('docs', []))}")
             if result.get("chat_response"):

@@ -1,10 +1,9 @@
 """E2E: FastAPI server 路由验证
 
 启动 fastapi_app (uvicorn TestServer), 验证:
-- 28 个路由端点可访问
+- 路由端点可访问
 - SSE StreamingResponse Content-Type = text/event-stream
 - CORS 头
-- POST stream_chunk 功能
 - 测试完成后 cleanup data 目录
 """
 from __future__ import annotations
@@ -288,19 +287,6 @@ class TestFastAPIRoutes:
             # SSE 端点可能因为 meeting 不存在报错, 但 Content-Type 应该仍是正确的
             pass
 
-    def test_post_stream_chunk_empty(self, fastapi_test_server: str):
-        """POST /api/meetings/{mid}/stream_chunk — 空 body 返回 400."""
-        import urllib.error
-
-        try:
-            _http_post(
-                f"{fastapi_test_server}/api/meetings/test_mid_999/stream_chunk",
-                data=b"",
-                content_type="multipart/form-data; boundary=xxx",
-            )
-        except urllib.error.HTTPError as e:
-            assert e.code == 400
-
     def test_post_kb_search_post(self, fastapi_test_server: str):
         """POST /api/kb/search."""
         _, body, _ = _http_post(
@@ -379,19 +365,6 @@ class TestFastAPIRoutes:
                 content_type="application/json",
             )
             data = json.loads(body)
-        except urllib.error.HTTPError as e:
-            assert e.code in (400, 404, 500)
-
-    def test_post_stream_stop(self, fastapi_test_server: str):
-        """POST /api/meetings/{mid}/stream_stop."""
-        import urllib.error
-
-        try:
-            _, body, _ = _http_post(
-                f"{fastapi_test_server}/api/meetings/test_mid_999/stream_stop",
-                data=b"{}",
-                content_type="application/json",
-            )
         except urllib.error.HTTPError as e:
             assert e.code in (400, 404, 500)
 

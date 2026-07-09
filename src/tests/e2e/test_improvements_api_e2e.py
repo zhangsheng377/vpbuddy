@@ -10,14 +10,13 @@
 """
 from __future__ import annotations
 
-import asyncio
 import json
+import subprocess
 import time
 import uuid
 import urllib.request
 import urllib.error
 
-import httpx
 import pytest
 
 pytestmark = pytest.mark.e2e
@@ -80,17 +79,17 @@ class TestRateLimit:
         """快速连续请求应触发速率限制 (429)."""
         token, _ = _register_user()
         
-        async def _run():
-            limits = httpx.Limits(max_connections=100, max_keepalive_connections=20)
-            async with httpx.AsyncClient(timeout=10, limits=limits) as client:
-                tasks = [
-                    client.get(f"{GPU_URL}/api/status", headers={"Authorization": f"Bearer {token}"})
-                    for _ in range(200)
-                ]
-                responses = await asyncio.gather(*tasks)
-                return [r.status_code for r in responses]
-        
-        codes = asyncio.run(_run())
+        cmd = [
+            'bash', '-c',
+            f'''seq 1 200 | xargs -P 20 -I {{}} curl -s -o /dev/null -w "%{{http_code}}\\n" http://127.0.0.1:8765/api/status -H "Authorization: Bearer {token}" --max-time 3'''
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        raw = result.stdout.strip()
+        codes = []
+        for i in range(0, len(raw), 3):
+            chunk = raw[i:i+3]
+            if chunk.isdigit():
+                codes.append(int(chunk))
         assert 429 in codes, f"未触发速率限制, 响应码: {set(codes)}, 总数: {len(codes)}"
 
     def test_auth_rate_limit_stricter(self):
@@ -139,6 +138,7 @@ class TestUnifiedErrorFormat:
         assert "error" in resp, f"响应缺少 error 字段: {resp}"
         assert "status" in resp, f"响应缺少 status 字段: {resp}"
 
+    @pytest.mark.skip(reason="upload_audio 已废弃, 待适配 WS 或新端点")
     def test_unhandled_exception_no_traceback(self):
         """未捕获异常不应泄露 traceback."""
         token, _ = _register_user()
@@ -163,6 +163,7 @@ class TestInputValidation:
         code, resp = _api(f"/api/meetings/{mid}/chat", method="POST", token=token, body=body)
         assert code == 400, f"超长消息应返回 400, 实际 {code}: {resp}"
 
+    @pytest.mark.skip(reason="upload_audio 已废弃, 待适配 WS 或新端点")
     def test_file_size_limit(self):
         """超大上传文件应被拒绝 (413)."""
         token, _ = _register_user()

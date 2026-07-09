@@ -65,9 +65,6 @@ from ..server.api_utils import (
     _meeting_context_for_chat,
     _get_chat_agent,
     _run_vp_chat,
-    # ASR 后处理
-    _get_clean_agent,
-    _run_asr_clean,
     # State / Meetings / Timeline / Status
     _state_payload,
     _validate_meeting_id,
@@ -494,9 +491,15 @@ def get_kb_doc_file(doc_id: str, user: dict = Depends(get_current_user)):
     )
 
 
+@app.get("/healthz")
+def get_healthz():
+    """GET /healthz — 健康检查 (无需认证)"""
+    return {"ok": True}
+
+
 @app.get("/api/status")
-def get_status_api():
-    """GET /api/status — Controller + 数据状态 (公开端点, 健康检查用)"""
+def get_status_api(user: dict = Depends(get_current_user)):
+    """GET /api/status — Controller + 数据状态"""
     return get_status()
 
 
@@ -532,6 +535,7 @@ def get_meeting_chat_history(meeting_id: str, user: dict = Depends(get_current_u
 @app.get("/api/meetings/{meeting_id}/collab")
 def get_meeting_collab(meeting_id: str, user: dict = Depends(get_current_user)):
     """GET /api/meetings/{id}/collab — 协作提问文档 (ADR-0028)"""
+    _require_meeting_owner(meeting_id, user)
     try:
         from ..collab import collab_stats, list_answered, list_pending, read_collab
 
@@ -626,6 +630,7 @@ def get_client_device_status(user: dict = Depends(get_current_user)):
 @app.get("/api/meetings/{meeting_id}/docs")
 def get_meeting_docs(meeting_id: str, user: dict = Depends(get_current_user)):
     """GET /api/meetings/{id}/docs — 单场会议 6 类文档正文"""
+    _require_meeting_owner(meeting_id, user)
     docs = [_doc_payload(meeting_id, kind) for kind in DOC_KINDS]
     return {"meeting_id": meeting_id, "docs": docs}
 
@@ -633,6 +638,7 @@ def get_meeting_docs(meeting_id: str, user: dict = Depends(get_current_user)):
 @app.get("/api/meetings/{meeting_id}/docs/{kind}")
 def get_meeting_doc(meeting_id: str, kind: str, user: dict = Depends(get_current_user)):
     """GET /api/meetings/{id}/docs/{kind} — 单场会议某一类文档正文"""
+    _require_meeting_owner(meeting_id, user)
     if kind not in DOC_KINDS:
         raise HTTPException(status_code=400, detail=f"unknown doc kind: {kind}")
     return _doc_payload(meeting_id, kind)
@@ -676,6 +682,7 @@ async def get_meeting_events(meeting_id: str, request: Request, user: dict = Dep
     使用 StreamingResponse 包装 realtime_server.sse_generator (同步生成器)。
     FastAPI 自动在线程池中运行同步生成器，不阻塞事件循环。
     """
+    _require_meeting_owner(meeting_id, user)
     from ..realtime_server import sse_generator
 
     def event_stream():
@@ -953,13 +960,22 @@ async def get_material_file(material_id: str, user: dict = Depends(get_current_u
 async def post_stream_start(request: Request, user: dict = Depends(get_current_user)):
     """POST /api/meetings/stream_start — 创建长连接会议
 
-    参数通过 query string 传递:
+    参数通过 query string 或 JSON body 传递:
         meeting_id: str (可选, ADR-0022 — 复用已有会议)
         audio_source: str (可选, ADR-0021 — microphone|loopback|both)
+        project_name: str (可选, 会议名称，默认 "长连接会议 {id}")
     """
     query_params = dict(request.query_params)
     from ..state import AudioSourceKind
     from ..storage import MeetingStorage
+
+    project_name = query_params.get("project_name", "").strip()
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not project_name:
+        project_name = str(body.get("project_name", "")).strip()
 
     # meeting_id (ADR-0022)
     meeting_id_in = (query_params.get("meeting_id") or "").strip()
@@ -990,6 +1006,7 @@ async def post_stream_start(request: Request, user: dict = Depends(get_current_u
     reused = bool(meeting_id_in) and storage.exists(meeting_id)
     try:
         if reused:
+            _require_meeting_owner(meeting_id, user, storage=storage)
             state = storage.load(meeting_id)
             state.audio_source = audio_source
             state.last_updated = datetime.now().isoformat()
@@ -1000,7 +1017,7 @@ async def post_stream_start(request: Request, user: dict = Depends(get_current_u
                 platform=Platform.LOCAL,
                 audio_source=audio_source,
                 owner_id=user["user_id"],
-                project_name=f"长连接会议 {meeting_id}",
+                project_name=project_name or f"长连接会议 {meeting_id}",
             )
             storage.save(state)
         _save_stream_meta(
@@ -1013,529 +1030,16 @@ async def post_stream_start(request: Request, user: dict = Depends(get_current_u
                 "audio_source": audio_source.value,
             },
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"create state failed: {e}")
 
     return {
         "meeting_id": meeting_id,
-        "chunk_interval_sec": 30,
         "audio_source": audio_source.value,
         "reused": reused,
-        "message": "Stream started, send 30s WAV chunks to /api/meetings/{id}/stream_chunk",
-    }
-
-
-@app.post("/api/meetings/{meeting_id}/stream_chunk")
-async def post_stream_chunk(
-    meeting_id: str,
-    request: Request,
-    sync: bool = Query(True, description="同步模式 (默认 true, ?sync=false 走异步)"),
-    user: dict = Depends(get_current_user),
-):
-    """POST /api/meetings/{id}/stream_chunk — 接收 30s WAV 切片
-
-    multipart/form-data:
-        chunk_index: int
-        chunk_start_sec: float
-        overlap_sec: float
-        client_sent_at: float
-        audio: binary (WAV 文件)
-    """
-    content_type = request.headers.get("Content-Type", "")
-    if "multipart/form-data" not in content_type:
-        raise HTTPException(status_code=400, detail="Content-Type must be multipart/form-data")
-
-    body = await request.body()
-    if not body:
-        raise HTTPException(status_code=400, detail="Empty body")
-
-    try:
-        fields, file_data = _parse_multipart(body, content_type)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    if not file_data:
-        raise HTTPException(status_code=400, detail="No audio file in form")
-
-    chunk_index = int(fields.get("chunk_index", "0") or "0")
-    chunk_start_sec = float(fields.get("chunk_start_sec", "0") or "0")
-    overlap_sec = float(fields.get("overlap_sec", "0") or "0")
-    client_sent_at = float(fields.get("client_sent_at", "0") or "0")
-
-    meta = _load_stream_meta(meeting_id)
-    if chunk_index in meta.get("processed_chunks", []):
-        return {
-            "meeting_id": meeting_id,
-            "chunk_index": chunk_index,
-            "new_segments": [],
-            "duplicate_chunk": True,
-            "docs_triggered": False,
-        }
-
-    # 保存临时 WAV 文件
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        tmp.write(file_data)
-        tmp_path = tmp.name
-
-    sync_mode = str(sync).lower() != "false"
-
-    if not sync_mode:
-        # 异步模式: 后台线程处理, 立即返回 accepted
-        threading.Thread(
-            target=_process_chunk_background,
-            args=(
-                meeting_id, tmp_path, chunk_index, chunk_start_sec,
-                overlap_sec, client_sent_at,
-            ),
-            daemon=True,
-        ).start()
-        meta.setdefault("processed_chunks", []).append(chunk_index)
-        meta["processed_chunks"] = sorted(set(meta["processed_chunks"]))
-        _save_stream_meta(meeting_id, meta)
-        return {
-            "meeting_id": meeting_id,
-            "chunk_index": chunk_index,
-            "status": "accepted",
-            "message": "Chunk accepted, processing in background. Subscribe to /api/meetings/{id}/events for results.",
-            "duplicate_chunk": False,
-            "docs_triggered": True,
-        }
-
-    # 同步模式: 阻塞处理并返回完整结果
-    return _process_chunk_sync(
-        meeting_id, tmp_path, chunk_index, chunk_start_sec,
-        overlap_sec, client_sent_at,
-    )
-
-
-def infer_speaker_map(segments: list[dict]) -> dict[str, str]:
-    """从 segments 推断 speaker 映射 (按时长排序 → S00=最多, S01=次, S02=第三)
-
-    Returns: {speaker_id: speaker_name} 如 {"SPEAKER_00": "VP", "SPEAKER_01": "PM", "SPEAKER_02": "Designer"}
-    """
-    from collections import defaultdict
-    durs = defaultdict(float)
-    for s in segments:
-        durs[s.get("speaker_id", "UNKNOWN")] += float(s.get("end_sec", 0)) - float(s.get("start_sec", 0))
-    sorted_spks = sorted(durs.keys(), key=lambda k: -durs[k])
-    default_names = ["VP", "PM", "Designer", "Guest1", "Guest2"]
-    return {spk: default_names[i] if i < len(default_names) else f"Speaker{i+1}"
-            for i, spk in enumerate(sorted_spks)}
-
-
-def _process_chunk_core(
-    meeting_id: str,
-    tmp_path: str,
-    chunk_index: int,
-    chunk_start_sec: float,
-    overlap_sec: float,
-    new_segs: list[dict],
-    started: float,
-    is_background: bool = False,
-    client_sent_at: float | None = None,
-    raw_seg_count: int = 0,
-) -> dict | None:
-    """Shared core logic for processing a WAV chunk.
-
-    Handles speaker registration, ASR cleaning, state save,
-    stream_meta update (transcript_segments, metrics, processed_chunks),
-    doc generation trigger, and SSE push.
-
-    Args:
-        new_segs: Already-deduplicated new segments (dedup is done by caller).
-        started: time.time() at the start of processing.
-        is_background: If True, use background-mode SSE push (pending_clean window).
-        client_sent_at: Timestamp when client sent the chunk (for end_to_end_ms).
-        raw_seg_count: Number of raw segments before dedup (for metrics).
-    """
-
-    from ..state import MeetingState, Platform
-    from ..storage import MeetingStorage
-    from ..task_manager import get_task_manager
-    from ..sub_session_controller import _dispatch_kind, BATCH_DOCS_KIND, DEMO_KIND
-
-    # ── 1. 加载/创建 state ──
-    storage = MeetingStorage(DATA_DIR)
-    if storage.exists(meeting_id):
-        state = storage.load(meeting_id)
-    else:
-        state = MeetingState(
-            meeting_id=meeting_id,
-            platform=Platform.LOCAL,
-            project_name=f"长连接会议 {meeting_id}",
-        )
-
-    # ── 2. Speaker registration + ASR cleaning + state save ──
-    spk_map = state.speaker_map
-    if new_segs:
-        inferred = infer_speaker_map(new_segs)
-        spk_map = dict(state.speaker_map or {})
-        for spk_id, spk_name in inferred.items():
-            spk_map.setdefault(spk_id, spk_name)
-        for spk_id, spk_name in spk_map.items():
-            state.register_speaker(spk_id, spk_name)
-        # 增量 ASR 清洗: 仅处理新 segments, 追加到 cleaned_text
-        from ..server.asr_clean import clean_transcript
-        cleaned = clean_transcript(new_segs)
-        if cleaned:
-            state.cleaned_text = state.cleaned_text + "\n" + cleaned if state.cleaned_text else cleaned
-    storage.save(state)
-
-    # ── 3. Stream meta update ──
-    from ..server.api_utils import _get_meta_lock
-    with _get_meta_lock(meeting_id):
-        meta = _load_stream_meta(meeting_id)
-        if not is_background:
-            meta.setdefault("processed_chunks", []).append(chunk_index)
-            meta["processed_chunks"] = sorted(set(meta["processed_chunks"]))
-        meta.setdefault("transcript_segments", []).extend(new_segs)
-        processing_ms = int((time.time() - started) * 1000)
-        end_to_end_ms = int((time.time() - client_sent_at) * 1000) if client_sent_at else None
-        meta.setdefault("metrics", []).append({
-            "chunk_index": chunk_index,
-            "chunk_start_sec": chunk_start_sec,
-            "overlap_sec": overlap_sec,
-            "raw_segments": raw_seg_count,
-            "new_segments": len(new_segs),
-            "processing_ms": processing_ms,
-            "end_to_end_ms": end_to_end_ms,
-            "received_at": datetime.now().isoformat(),
-        })
-        _save_stream_meta(meeting_id, meta)
-
-    # ── 4. Doc generation trigger ──
-    def _doc_runner(gen_id: int, mid: str) -> dict:
-        kinds = [BATCH_DOCS_KIND, DEMO_KIND]
-        results = {}
-        for kind in kinds:
-            try:
-                r = _dispatch_kind(mid, kind, dry_run=False)
-                results[kind] = {"triggered": r.get("triggered"), "error": r.get("error")}
-            except Exception as e:
-                results[kind] = {"triggered": False, "error": str(e)}
-        return results
-
-    get_task_manager().submit(meeting_id, _doc_runner)
-
-    # ── 5. SSE push ──
-    try:
-        from ..realtime_server import push_event
-
-        if is_background:
-            # 背景模式: pending_clean 窗口逻辑
-            now_ts = time.time()
-            meta.setdefault("pending_clean", [])
-            for s in new_segs:
-                meta["pending_clean"].append({"seg": s, "received_ts": now_ts})
-
-            should_clean = False
-            if len(meta["pending_clean"]) >= ASR_CLEAN_WINDOW_SIZE:
-                should_clean = True
-            elif meta["pending_clean"]:
-                oldest_ts = meta["pending_clean"][0]["received_ts"]
-                if (now_ts - oldest_ts) >= ASR_CLEAN_WINDOW_TIMEOUT_S:
-                    should_clean = True
-
-            if should_clean:
-                pending = meta.pop("pending_clean")
-                pending_segs = [item["seg"] for item in pending]
-                prev_cleaned = "\n".join(meta.get("cleaned_segments", [])[-3:])
-                cleaned_text = _run_asr_clean(meeting_id, pending_segs, prev_cleaned)
-                meta.setdefault("cleaned_segments", []).append(cleaned_text)
-                truncated = "[...已截断" in cleaned_text
-                meta.setdefault("cleaned_windows", []).append({
-                    "window_id": len(meta.get("cleaned_windows", [])) + 1,
-                    "start_sec": pending_segs[0].get("start_sec", 0),
-                    "end_sec": pending_segs[-1].get("end_sec", 0),
-                    "raw_segments": pending_segs,
-                    "cleaned_text": cleaned_text,
-                    "truncated": truncated,
-                    "cleaned_at": datetime.now().isoformat(),
-                    "window_segments": len(pending_segs),
-                })
-                _save_stream_meta(meeting_id, meta)
-                first_seg = pending_segs[0]
-                last_seg = pending_segs[-1]
-                push_event(meeting_id, "transcript-segment", {
-                    "start_sec": first_seg["start_sec"],
-                    "end_sec": last_seg["end_sec"],
-                    "text": cleaned_text,
-                    "raw_texts": [s["text"] for s in pending_segs],
-                    "speaker_ids": list({s["speaker_id"] for s in pending_segs}),
-                    "chunk_index": chunk_index,
-                    "speaker_name": spk_map.get(first_seg["speaker_id"], "UNKNOWN"),
-                    "cleaned": True,
-                    "window_segments": len(pending_segs),
-                })
-            else:
-                for s in new_segs:
-                    push_event(meeting_id, "transcript-segment", {
-                        "start_sec": s["start_sec"],
-                        "end_sec": s["end_sec"],
-                        "text": s["text"],
-                        "speaker_id": s["speaker_id"],
-                        "chunk_index": chunk_index,
-                        "speaker_name": spk_map.get(s["speaker_id"], "UNKNOWN"),
-                        "cleaned": False,
-                    })
-        else:
-            # 同步模式: 直接推送每个 segment
-            for s in new_segs:
-                push_event(meeting_id, "transcript-segment", {
-                    "start_sec": s["start_sec"],
-                    "end_sec": s["end_sec"],
-                    "text": s["text"],
-                    "speaker_id": s["speaker_id"],
-                    "chunk_index": chunk_index,
-                    "speaker_name": spk_map.get(s["speaker_id"], "UNKNOWN"),
-                    "cleaned": True,
-                })
-
-        push_event(meeting_id, "state-update", _state_payload(state, include_items=True))
-        push_event(meeting_id, "metrics-update", {
-            "chunk_index": chunk_index,
-            "processing_ms": processing_ms,
-            "end_to_end_ms": end_to_end_ms,
-            "raw_segments": raw_seg_count,
-            "new_segments": len(new_segs),
-        })
-        push_event(meeting_id, "doc-update", {
-            "status": "triggered",
-            "kinds": DOC_KINDS,
-            "message": "6 docs generation triggered",
-        })
-    except Exception as e:
-        if is_background:
-            print(f"[stream_chunk/bg] push_event error: {e}")
-        # 同步模式: 静默忽略
-
-    if not is_background:
-        return {
-            "meeting_id": meeting_id,
-            "chunk_index": chunk_index,
-            "new_segments": [
-                {
-                    "start_sec": s["start_sec"],
-                    "end_sec": s["end_sec"],
-                    "text": s["text"],
-                    "speaker_id": s["speaker_id"],
-                    "chunk_index": s.get("chunk_index", chunk_index),
-                }
-                for s in new_segs
-            ],
-            "state_items": _state_payload(state, include_items=False),
-            "metrics": meta.get("metrics", [])[-1],
-            "docs_triggered": True,
-        }
-    return None
-
-
-def _process_chunk_sync(
-    meeting_id: str,
-    tmp_path: str,
-    chunk_index: int,
-    chunk_start_sec: float,
-    overlap_sec: float,
-    client_sent_at: float,
-) -> dict:
-    """同步处理 WAV chunk (同步模式), 委托给 _process_chunk_core."""
-
-    from ..scripts.gpu_transcribe import process
-
-    try:
-        started = time.time()
-        transcript = process(tmp_path)
-        raw_segs = transcript.get("segments", [])
-        meta = _load_stream_meta(meeting_id)
-        seen_segments = meta.get("transcript_segments", [])
-        new_segs = []
-        for s in raw_segs:
-            abs_seg = dict(s)
-            abs_seg["start_sec"] = round(float(s.get("start_sec", 0)) + chunk_start_sec, 3)
-            abs_seg["end_sec"] = round(float(s.get("end_sec", 0)) + chunk_start_sec, 3)
-            abs_seg["chunk_index"] = chunk_index
-            if not _is_duplicate_segment(abs_seg, seen_segments + new_segs):
-                new_segs.append(abs_seg)
-
-        return _process_chunk_core(
-            meeting_id=meeting_id,
-            tmp_path=tmp_path,
-            chunk_index=chunk_index,
-            chunk_start_sec=chunk_start_sec,
-            overlap_sec=overlap_sec,
-            new_segs=new_segs,
-            started=started,
-            is_background=False,
-            client_sent_at=client_sent_at,
-            raw_seg_count=len(raw_segs),
-        )
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
-
-
-def _process_chunk_background(
-    meeting_id: str,
-    tmp_path: str,
-    chunk_index: int,
-    chunk_start_sec: float,
-    overlap_sec: float,
-    client_sent_at: float,
-):
-    """后台 daemon thread 处理 WAV chunk (异步模式), 委托给 _process_chunk_core."""
-    try:
-
-        from ..scripts.gpu_transcribe import process
-
-        started = time.time()
-        transcript = process(tmp_path)
-        raw_segs = transcript.get("segments", [])
-        meta = _load_stream_meta(meeting_id)
-        seen_segments = meta.get("transcript_segments", [])
-        new_segs = []
-        for s in raw_segs:
-            abs_seg = dict(s)
-            abs_seg["start_sec"] = round(float(s.get("start_sec", 0)) + chunk_start_sec, 3)
-            abs_seg["end_sec"] = round(float(s.get("end_sec", 0)) + chunk_start_sec, 3)
-            abs_seg["chunk_index"] = chunk_index
-            if not _is_duplicate_segment(abs_seg, seen_segments + new_segs):
-                new_segs.append(abs_seg)
-
-        _process_chunk_core(
-            meeting_id=meeting_id,
-            tmp_path=tmp_path,
-            chunk_index=chunk_index,
-            chunk_start_sec=chunk_start_sec,
-            overlap_sec=overlap_sec,
-            new_segs=new_segs,
-            started=started,
-            is_background=True,
-            client_sent_at=client_sent_at,
-            raw_seg_count=len(raw_segs),
-        )
-
-        processing_ms = int((time.time() - started) * 1000)
-        print(
-            f"[stream_chunk/bg] {meeting_id}/{chunk_index} done in {processing_ms}ms, "
-            f"{len(new_segs)} new segments"
-        )
-    except Exception as e:
-        import traceback
-
-        print(f"[stream_chunk/bg] ERROR chunk_index={chunk_index}: {e}")
-        print(traceback.format_exc())
-        try:
-            from ..realtime_server import push_event
-
-            push_event(meeting_id, "doc-update", {
-                "status": "failed",
-                "chunk_index": chunk_index,
-                "error": str(e)[:500],
-            })
-        except Exception:
-            import logging
-            logging.getLogger(__name__).warning("non-critical error pushing failed_chunk event", exc_info=True)
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            import logging
-            logging.getLogger(__name__).warning("non-critical error unlinking tmp_path", exc_info=True)
-
-
-@app.post("/api/meetings/{meeting_id}/upload_audio")
-async def post_upload_audio(
-    meeting_id: str,
-    request: Request,
-    user: dict = Depends(get_current_user),
-):
-    """POST /api/meetings/{id}/upload_audio — 上传音频自动转写+入库+触发 6 docs
-
-    multipart/form-data:
-        audio: binary (或 file: binary)
-    """
-    _require_meeting_owner(meeting_id, user)
-    content_type = request.headers.get("Content-Type", "")
-    if "multipart/form-data" not in content_type:
-        raise HTTPException(status_code=400, detail="Content-Type must be multipart/form-data")
-
-    body = await request.body()
-    if not body:
-        raise HTTPException(status_code=400, detail="Empty body")
-
-    if len(body) > MAX_UPLOAD_SIZE:
-        raise HTTPException(
-            status_code=413,
-            detail={"error": f"文件过大 ({len(body)} bytes, 上限 {MAX_UPLOAD_SIZE} bytes)", "status": 413},
-        )
-
-    fields, file_data = _parse_multipart(body, content_type)
-    if not file_data:
-        raise HTTPException(status_code=400, detail="No audio file in form (field name: 'audio' or 'file')")
-
-    # 保存临时文件
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        tmp.write(file_data)
-        tmp_path = tmp.name
-
-    try:
-        from ..storage import MeetingStorage
-
-        # 计算下一个 chunk_index (已有 meta 中最大 +1, 或 0)
-        processed = _load_stream_meta(meeting_id).get("processed_chunks", [])
-        chunk_index = (max(processed) + 1) if processed else 0
-
-        _process_chunk_sync(
-            meeting_id=meeting_id,
-            tmp_path=tmp_path,
-            chunk_index=chunk_index,
-            chunk_start_sec=0,
-            overlap_sec=0,
-            client_sent_at=time.time(),
-        )
-
-        # 重新加载 state 获取 cleaned_text_length
-        storage = MeetingStorage(DATA_DIR)
-        state = storage.load(meeting_id)
-
-        return {
-            "meeting_id": meeting_id,
-            "transcript_segments": len(_load_stream_meta(meeting_id).get("transcript_segments", [])),
-            "num_speakers": len(state.speaker_map),
-            "cleaned_text_length": len(state.cleaned_text),
-            "docs_ready_in_seconds": 30,
-            "message": "Audio processed, docs will be ready in ~30s",
-        }
-    except Exception as e:
-        import traceback
-
-        raise HTTPException(
-            status_code=500,
-            detail={"error": f"Processing failed: {e}", "status": 500},
-        )
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            import logging
-            logging.getLogger(__name__).warning("non-critical error unlinking tmp_path in finally (sync)", exc_info=True)
-
-
-@app.post("/api/meetings/{meeting_id}/stream_stop")
-def post_stream_stop(meeting_id: str, user: dict = Depends(get_current_user)):
-    """POST /api/meetings/{id}/stream_stop — 停止录音, 关闭 SSE 订阅者 (ADR-0022)"""
-    try:
-        from ..realtime_server import close_meeting
-
-        closed = close_meeting(meeting_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    return {
-        "meeting_id": meeting_id,
-        "closed_subscribers": closed,
-        "message": "Stream stopped, SSE subscribers closed",
+        "message": "Stream started, connect via WebSocket /api/meetings/{id}/realtime_asr",
     }
 
 
@@ -1545,6 +1049,7 @@ async def post_chat(meeting_id: str, request: Request, user: dict = Depends(get_
 
     支持 JSON 路径和 multipart/form-data 路径 (ADR-0023).
     """
+    _require_meeting_owner(meeting_id, user)
     from ..kb_api import handle_chat_upload
 
     content_type = request.headers.get("Content-Type", "")
@@ -1552,7 +1057,7 @@ async def post_chat(meeting_id: str, request: Request, user: dict = Depends(get_
     # Multipart 分支 (ADR-0023 Phase 6)
     if content_type.startswith("multipart/form-data"):
         body = await request.body()
-        upload_result = handle_chat_upload(body, content_type, meeting_id)
+        upload_result = handle_chat_upload(body, content_type, meeting_id, user_id=user.get("user_id", ""))
         if upload_result.get("error"):
             status_code = upload_result.get("status", 400)
             if status_code != 200:
@@ -1656,6 +1161,7 @@ def post_meeting_close(meeting_id: str, user: dict = Depends(get_current_user)):
     4. 经验蒸馏
     5. task_manager.submit → batch_docs + demo 生成
     """
+    _require_meeting_owner(meeting_id, user)
     from ..ui_server import _close_meeting
     try:
         result = _close_meeting(meeting_id)
@@ -1666,6 +1172,81 @@ def post_meeting_close(meeting_id: str, user: dict = Depends(get_current_user)):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/meetings/{meeting_id}")
+def delete_meeting(meeting_id: str, user: dict = Depends(get_current_user)):
+    _require_meeting_owner(meeting_id, user)
+    import shutil
+
+    deleted = {"state": False, "chat": False, "materials": 0, "docs": False, "stream_meta": False}
+
+    try:
+        from ..realtime_server import close_meeting
+        close_meeting(meeting_id)
+    except Exception:
+        pass
+
+    try:
+        from ..task_manager import get_task_manager
+        get_task_manager().cancel_meeting(meeting_id)
+    except Exception:
+        pass
+
+    try:
+        from ..storage import MeetingStorage
+        storage = MeetingStorage(DATA_DIR)
+        deleted["state"] = storage.delete(meeting_id)
+    except Exception:
+        pass
+
+    try:
+        chat_path = DATA_DIR / f"{meeting_id}.chat.json"
+        if chat_path.exists():
+            chat_path.unlink()
+            deleted["chat"] = True
+    except Exception:
+        pass
+
+    try:
+        stream_meta_path = DATA_DIR / f"{meeting_id}.stream.json"
+        if stream_meta_path.exists():
+            stream_meta_path.unlink()
+            deleted["stream_meta"] = True
+    except Exception:
+        pass
+
+    try:
+        for m in material_storage.list_materials(meeting_id):
+            material_storage.delete_material(m.get("id", ""))
+            deleted["materials"] += 1
+    except Exception:
+        pass
+
+    try:
+        docs_dir = DOCS_DIR / meeting_id
+        if docs_dir.exists() and docs_dir.is_dir():
+            shutil.rmtree(str(docs_dir))
+            deleted["docs"] = True
+    except Exception:
+        pass
+
+    return {"meeting_id": meeting_id, "deleted": deleted}
+
+
+@app.patch("/api/meetings/{meeting_id}")
+async def patch_meeting(meeting_id: str, request: Request, user: dict = Depends(get_current_user)):
+    state = _require_meeting_owner(meeting_id, user)
+    body = await request.json()
+    project_name = str(body.get("project_name", "")).strip()
+    if not project_name:
+        raise HTTPException(status_code=400, detail={"error": "project_name is required", "status": 400})
+    from ..storage import MeetingStorage
+    storage = MeetingStorage(DATA_DIR)
+    state.project_name = project_name
+    state.last_updated = datetime.now().isoformat()
+    storage.save(state)
+    return {"meeting_id": meeting_id, "project_name": project_name}
 
 
 @app.post("/api/meetings/{meeting_id}/collab/ask")
@@ -1786,7 +1367,16 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
     import logging as _logging
     _log = _logging.getLogger(__name__)
     await websocket.accept()
-    _log.info("[ws_realtime_asr] client connected, meeting=%s", meeting_id)
+
+    token = websocket.query_params.get("token", "")
+    from .auth import verify_token
+    user = verify_token(token)
+    if user is None:
+        await websocket.send_json({"type": "error", "error": "token 无效或缺失"})
+        await websocket.close()
+        return
+
+    _log.info("[ws_realtime_asr] client connected, meeting=%s user=%s", meeting_id, user.get("user_id"))
 
     from .bailian_asr import start_session, send_audio, stop_session
 
