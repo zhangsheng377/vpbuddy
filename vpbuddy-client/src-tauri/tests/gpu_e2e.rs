@@ -1,10 +1,16 @@
-//! Tauri 客户端 ↔ GPU server 端到端联调
+//! Tauri 客户端 ↔ GPU server 端到端联调 (2026-06-24)
 //!
-//! 旧 30s 切片模式 (stream_chunk) 已废弃，改为 WebSocket 实时 ASR (realtime_asr)。
-//! 保留此文件作为 WS 模式 E2E 测试的模板，待重写。
+//! 流程:
+//! 1. POST /api/meetings/stream_start → 拿 meeting_id
+//! 2. 生成 0.5s 静音 WAV → POST /api/meetings/{id}/stream_chunk
+//! 3. 等 35s (30s controller 周期 + 5s 余量)
+//! 4. 验证 docs/{meeting_id}/{req,arch,tasks,api,risk}.md 都有内容
+//! 5. (可选) 验证 GET /api/meetings 能查到
+//!
+//! ⚠️ 需要 GPU server 8765 跑着. 跳过条件: VPBUDDY_GPU_URL 没设 或 server 不通
 //!
 //! 跑法:
-//!   GPU_URL=http://47.100.182.3:28765 cargo test --test gpu_e2e -- --ignored --nocapture
+//!   GPU_URL=http://192.168.10.63:8765 cargo test --test gpu_e2e -- --ignored --nocapture
 
 use std::env;
 use std::time::Duration;
@@ -17,7 +23,7 @@ fn gpu_url() -> Option<String> {
 }
 
 #[tokio::test]
-#[ignore = "待重写为 WS 实时模式 E2E: stream_start → realtime_asr WS → docs"]
+#[ignore = "需要 GPU server 8765 跑着 — 跑时用 --ignored"]
 async fn e2e_stream_chunk_creates_6_docs() {
     let url = match gpu_url() {
         Some(u) => u,
