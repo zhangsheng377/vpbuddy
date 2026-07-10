@@ -700,8 +700,7 @@ mod wasapi_loopback {
 
     use windows::core::GUID;
     use windows::Win32::Media::Audio::{
-        eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator,
-        MMDeviceEnumerator, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
+        eConsole, eRender, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator,
     };
     use windows::Win32::System::Com::{
         CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
