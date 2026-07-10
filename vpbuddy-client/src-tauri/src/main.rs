@@ -100,10 +100,7 @@ fn main() {
                 })
                 .build(app)?;
 
-            // 2026-06-26: 启动 GPU 连接心跳探针 (每 10s 探一次 /api/status)
-            // 前端通过 listen("gpu-connection", ...) 收事件, 渲染绿/红/黄指示灯
-            // 2026-06-27: 加防抖 — 连续 3 次失败才标红 (单次网络抖动不切)
-            // 注意: tauri::State 不是 Send, 不能 spawn 后持有, 必须在每次 await 前取
+            // 2026-07-11 #30: 心跳探针改用公开 /healthz (不依赖登录状态)
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 use std::time::Duration;
@@ -112,7 +109,6 @@ fn main() {
                     .build()
                     .unwrap();
 
-                // 初始状态: 检测中
                 let initial_url = app_handle.state::<AppState>().gpu_url.lock().await.clone();
                 let _ = app_handle.emit("gpu-connection", serde_json::json!({
                     "status": "checking",
@@ -126,7 +122,7 @@ fn main() {
                     tokio::time::sleep(Duration::from_secs(10)).await;
                     // 从 AppState 读当前 GPU URL (用户在设置页改了立刻生效)
                     let url = app_handle.state::<AppState>().gpu_url.lock().await.clone();
-                    let probe = client.get(format!("{url}/api/status")).send().await;
+                    let probe = client.get(format!("{url}/healthz")).send().await;
                     match probe {
                         Ok(resp) if resp.status().is_success() => {
                             fail_streak = 0;
@@ -183,8 +179,11 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
     log::info!("  capturing={} (设 false 中)", state.capturing.load(Ordering::SeqCst));
     state.capturing.store(false, Ordering::SeqCst);
     if let Some(h) = state.capture_handle.lock().await.take() {
-        h.abort();
-        log::info!("  采集 task 已 abort");
+        match tokio::time::timeout(std::time::Duration::from_secs(10), h).await {
+            Ok(Ok(())) => log::info!("  采集 task 已优雅退出"),
+            Ok(Err(e)) => log::warn!("  采集 task 异常结束: {e}"),
+            Err(_) => log::warn!("  采集 task 退出超时"),
+        }
     } else {
         log::warn!("  capture_handle 为空, 没在跑采集?");
     }
@@ -250,11 +249,13 @@ async fn start_realtime_capture(
      let src2 = audio_source_norm.clone();
      let dev2 = audio_device.clone();
      let app2 = app.clone();
+     let auth2 = auth_token.clone();
      let handle = tokio::spawn(async move {
          if let Err(e) = run_realtime_loop(
              app, gpu_url, mid2,
              capturing2, bytes2,
              dev2, src2, native2,
+             auth2,
          ).await {
              let _ = app2.emit("error", format!("实时采集错误: {e}"));
          }
@@ -274,7 +275,12 @@ pub async fn run_realtime_loop(
     audio_device: Option<String>,
     audio_source: String,
     native_rate: Arc<AtomicU32>,
+    auth_token: Option<String>,
 ) -> anyhow::Result<()> {
+    let token = auth_token
+        .as_deref()
+        .filter(|v| !v.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("登录凭证缺失，请重新登录"))?;
     use tokio::sync::mpsc as tmpsc;
     let (tx, mut rx) = tmpsc::channel::<Vec<i16>>(128);
 
@@ -327,7 +333,7 @@ pub async fn run_realtime_loop(
     let app_stats = app.clone();
     let app_ws = app.clone();
     let ws = match upload::BailianWsHandle::connect(
-        &gpu_url, &meeting_id, sample_rate,
+        &gpu_url, &meeting_id, token, sample_rate,
         move |text, bt, et, is_end| {
             let _ = app_ws.emit("transcript-segment", serde_json::json!({
                 "text": text, "start_sec": bt, "end_sec": et,
@@ -401,11 +407,13 @@ pub async fn run_realtime_loop(
     let close_url = format!("{}/api/meetings/{}/close", gpu_url, meeting_id);
     match reqwest::Client::new()
         .post(&close_url)
-        .timeout(std::time::Duration::from_secs(5))
+        .bearer_auth(token)
+        .timeout(std::time::Duration::from_secs(10))
         .send()
         .await
     {
-        Ok(r) => log::info!("close_meeting: HTTP {}", r.status()),
+        Ok(r) if r.status().is_success() => log::info!("close_meeting: HTTP {}", r.status()),
+        Ok(r) => log::warn!("close_meeting: HTTP {} (非 2xx)", r.status()),
         Err(e) => log::warn!("close_meeting 调用失败: {e}"),
     }
 

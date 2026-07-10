@@ -28,6 +28,7 @@ impl BailianWsHandle {
     pub async fn connect(
         gpu_url: &str,
         meeting_id: &str,
+        auth_token: &str,
         sample_rate: u32,
         on_transcript: impl Fn(String, f32, f32, bool) + Send + 'static,
         on_error: impl Fn(String) + Send + 'static,
@@ -35,7 +36,12 @@ impl BailianWsHandle {
         let ws_url = gpu_url
             .replace("http://", "ws://")
             .replace("https://", "wss://");
-        let url = format!("{}/api/meetings/{}/realtime_asr", ws_url, meeting_id);
+        let url = format!(
+            "{}/api/meetings/{}/realtime_asr?token={}",
+            ws_url.trim_end_matches('/'),
+            urlencoding::encode(meeting_id),
+            urlencoding::encode(auth_token),
+        );
 
         use tokio_tungstenite::connect_async;
         use tokio_tungstenite::tungstenite::Message;
