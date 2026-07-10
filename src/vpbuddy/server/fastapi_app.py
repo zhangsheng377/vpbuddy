@@ -468,10 +468,10 @@ def get_kb_list(
 
 @app.delete("/api/kb/{doc_id}")
 def delete_kb_doc(doc_id: str, user: dict = Depends(get_current_user)):
-    """DELETE /api/kb/{doc_id} — 删除 KB 文档"""
+    """DELETE /api/kb/{doc_id} — 删除 KB 文档 (需归属校验)"""
     from ..kb_api import handle_kb_delete
 
-    return handle_kb_delete(f"/api/kb/{doc_id}")
+    return handle_kb_delete(f"/api/kb/{doc_id}", user_id=user["user_id"])
 
 
 @app.get("/api/kb/{doc_id}/file")
@@ -1258,6 +1258,7 @@ def post_collab_ask(
     user: dict = Depends(get_current_user),
 ):
     """POST /api/meetings/{id}/collab/ask — 协作提问 (ADR-0028)"""
+    _require_meeting_owner(meeting_id, user)
     if not section or not question:
         raise HTTPException(status_code=400, detail="section 和 question 必填")
 
@@ -1291,6 +1292,7 @@ def post_collab_answer(
     user: dict = Depends(get_current_user),
 ):
     """POST /api/meetings/{id}/collab/answer — 协作回答 (ADR-0028)"""
+    _require_meeting_owner(meeting_id, user)
     if not qid or not answer:
         raise HTTPException(status_code=400, detail="qid 和 answer 必填")
 
@@ -1525,6 +1527,7 @@ async def fe_list_meetings(user: dict = Depends(get_current_user)):
 @app.get("/api/meetings/{meeting_id}")
 async def fe_get_meeting(meeting_id: str, user: dict = Depends(get_current_user)):
     """GET /meetings/:id → 聚合 state + docs + collab + experiences"""
+    _require_meeting_owner(meeting_id, user)
     from ..storage import MeetingStorage, StorageError
     result: dict[str, Any] = {"id": meeting_id}
 
@@ -1568,6 +1571,7 @@ async def fe_get_meeting(meeting_id: str, user: dict = Depends(get_current_user)
 @app.get("/meetings/{meeting_id}/transcript-segments")
 async def fe_transcript_segments(meeting_id: str, user: dict = Depends(get_current_user)):
     """GET /meetings/:id/transcript-segments → 从 stream meta 提取"""
+    _require_meeting_owner(meeting_id, user)
     meta_path = DATA_DIR / f"{meeting_id}.stream.json"
     if not meta_path.exists():
         return {"segments": [], "count": 0}
@@ -1582,6 +1586,7 @@ async def fe_transcript_segments(meeting_id: str, user: dict = Depends(get_curre
 @app.post("/meetings/{meeting_id}/recording/start")
 async def fe_recording_start(meeting_id: str, user: dict = Depends(get_current_user)):
     """POST /meetings/:id/recording/start → POST /api/meetings/stream_start"""
+    _require_meeting_owner(meeting_id, user)
     from ..ui_server import _handle_stream_start
     # 复用 stream_start handler
     result = _handle_stream_start(meeting_id=meeting_id)
@@ -1591,6 +1596,7 @@ async def fe_recording_start(meeting_id: str, user: dict = Depends(get_current_u
 @app.post("/meetings/{meeting_id}/recording/stop")
 async def fe_recording_stop(meeting_id: str, user: dict = Depends(get_current_user)):
     """POST /meetings/:id/recording/stop → POST /api/meetings/:id/stream_stop"""
+    _require_meeting_owner(meeting_id, user)
     from ..ui_server import _handle_stream_stop
     result = _handle_stream_stop(meeting_id)
     return {"status": "stopped", "ended_at": datetime.now().isoformat(), "detail": result}
@@ -1599,6 +1605,7 @@ async def fe_recording_stop(meeting_id: str, user: dict = Depends(get_current_us
 @app.get("/meetings/{meeting_id}/deliverables")
 async def fe_list_deliverables(meeting_id: str, user: dict = Depends(get_current_user)):
     """GET /meetings/:id/deliverables → GET /api/meetings/:id/docs (wrap)"""
+    _require_meeting_owner(meeting_id, user)
     from ..server.api_utils import _doc_payload
     docs = []
     for kind in DOC_KINDS:
@@ -1623,6 +1630,7 @@ async def fe_get_deliverable(deliverable_id: str, user: dict = Depends(get_curre
     if len(parts) < 3:
         raise HTTPException(status_code=400, detail=f"Invalid deliverable_id: {deliverable_id}, expected del-{meeting_id}-{kind}")
     meeting_id, kind = parts[1], parts[2]
+    _require_meeting_owner(meeting_id, user)
     doc_path = DOCS_DIR / meeting_id / f"{kind}.md"
     if not doc_path.exists():
         raise HTTPException(status_code=404, detail=f"Deliverable {kind} not found for meeting {meeting_id}")
@@ -1654,6 +1662,7 @@ async def fe_get_deliverable(deliverable_id: str, user: dict = Depends(get_curre
 @app.post("/meetings/{meeting_id}/archive")
 async def fe_archive_meeting(meeting_id: str, user: dict = Depends(get_current_user)):
     """POST /meetings/:id/archive → POST /api/meetings/:id/close + 归档信息"""
+    _require_meeting_owner(meeting_id, user)
     from ..ui_server import _close_meeting
     close_result = _close_meeting(meeting_id)
     # 附加归档信息

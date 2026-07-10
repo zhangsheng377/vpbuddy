@@ -367,16 +367,26 @@ def handle_kb_list(params: dict[str, list[str]], user_id: str = "") -> dict:
     }
 
 
-def handle_kb_delete(path: str) -> dict:
-    """DELETE /api/kb/{doc_id} — 删除 KB 文档."""
-    # /api/kb/<doc_id>
+def handle_kb_delete(path: str, user_id: str = "") -> dict:
+    """DELETE /api/kb/{doc_id} — 删除 KB 文档 (需归属校验)."""
     doc_id = path.split("/")[-1]
     if not doc_id:
         return {"error": "doc_id 必填", "status": 400}
 
     rag = get_rag()
+    if user_id:
+        try:
+            results = rag.get(ids=[doc_id])
+            if results and results.get("metadatas") and results["metadatas"][0]:
+                meta = results["metadatas"][0]
+                owner = meta.get("user_id", "")
+                if owner and owner != user_id:
+                    return {"error": "access denied: not the owner of this KB document", "status": 403}
+        except Exception as e:
+            logger.warning("KB delete: 无法校验归属 (继续删除): %s", e)
+
     rag.delete([doc_id])
-    logger.info("KB deleted: doc_id=%s", doc_id)
+    logger.info("KB deleted: doc_id=%s user=%s", doc_id, user_id)
     return {"status": 200, "doc_id": doc_id}
 
 
