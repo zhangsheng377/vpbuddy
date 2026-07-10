@@ -16,15 +16,14 @@ pub struct TranscriptSegment {
 // ── 百炼 WebSocket 实时转写 ──
 
 /// 百炼 WS 实时转写客户端.
-/// 通过 GPU Server relay 连接阿里百炼 fun-asr-realtime.
 pub struct BailianWsHandle {
     write_half: tokio::sync::mpsc::Sender<Vec<u8>>,
     stop_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
     recv_handle: tokio::task::JoinHandle<()>,
+    _disconnected: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl BailianWsHandle {
-    /// 连接 WS, 启动接收循环. 返回 handle 供发送 PCM 帧和停止.
     pub async fn connect(
         gpu_url: &str,
         meeting_id: &str,
@@ -50,7 +49,6 @@ impl BailianWsHandle {
         let (ws_stream, _) = connect_async(&url).await?;
         let (mut write, mut read) = ws_stream.split();
 
-        // Send start handshake
         let start_msg = serde_json::json!({
             "type": "start",
             "format": "pcm",
@@ -58,21 +56,22 @@ impl BailianWsHandle {
         });
         write.send(Message::Text(start_msg.to_string())).await?;
 
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1024);
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stop2 = stop.clone();
+        let disconnected = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let disconnected_send = disconnected.clone();
 
-        // Send task: forward PCM frames from channel to WS
         let send_handle = tokio::spawn(async move {
             while let Some(data) = rx.recv().await {
                 if stop2.load(std::sync::atomic::Ordering::Relaxed) {
                     break;
                 }
                 if write.send(Message::Binary(data)).await.is_err() {
+                    disconnected_send.store(true, std::sync::atomic::Ordering::SeqCst);
                     break;
                 }
             }
-            // Send stop message
             let _ = write
                 .send(Message::Text(
                     serde_json::json!({"type": "stop"}).to_string(),
@@ -126,6 +125,7 @@ impl BailianWsHandle {
             write_half: tx,
             stop_flag: stop,
             recv_handle,
+            _disconnected: disconnected,
         })
     }
 

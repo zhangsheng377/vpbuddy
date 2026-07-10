@@ -165,8 +165,23 @@ impl AppState {
     }
 }
 
+use std::sync::OnceLock;
+use std::sync::Mutex as StdMutex;
+
+static LOG_PATH: OnceLock<StdMutex<String>> = OnceLock::new();
+
+fn log_path_lock() -> &'static StdMutex<String> {
+    LOG_PATH.get_or_init(|| StdMutex::new(String::new()))
+}
+
 #[allow(dead_code)]
 pub fn get_log_path() -> String {
+    if let Ok(v) = log_path_lock().lock() {
+        let s = v.clone();
+        if !s.is_empty() {
+            return s;
+        }
+    }
     let p = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
     let dir = p.join("vpbuddy-client");
     std::fs::create_dir_all(&dir).ok();
@@ -175,10 +190,7 @@ pub fn get_log_path() -> String {
 
 /// Set the log path for the client
 pub fn set_log_path(p: String) {
-    use std::sync::OnceLock;
-    static LOG_PATH: OnceLock<std::sync::Mutex<String>> = OnceLock::new();
-    let lock = LOG_PATH.get_or_init(|| std::sync::Mutex::new(String::new()));
-    if let Ok(mut v) = lock.lock() {
+    if let Ok(mut v) = log_path_lock().lock() {
         *v = p;
     }
 }
