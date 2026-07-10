@@ -729,7 +729,6 @@ mod wasapi_loopback {
         };
         let channels = cfg.channels() as usize;
         let (tx, rx) = mpsc::sync_channel::<Vec<i16>>(64);
-        let tx2 = tx.clone();
 
         let stream = device
             .build_input_stream_raw(
