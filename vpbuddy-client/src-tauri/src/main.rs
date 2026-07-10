@@ -218,14 +218,6 @@ async fn start_realtime_capture(
         return Err(format!("非法 audio_source: {audio_source_norm}"));
     }
 
-    if cfg!(target_os = "windows") && (audio_source_norm == "loopback" || audio_source_norm == "both") {
-        return Err(
-            "Windows 暂不支持内录 (loopback/both) 模式，cpal 抽象层不暴露 WASAPI loopback。\
-            请使用麦克风 (microphone) 录制。如需录制系统声音，请安装虚拟声卡（如 VB-Audio VoiceMeeter）\
-            并在 Windows 声音设置中将系统输出指向该虚拟设备。".into(),
-        );
-    }
-
     log::info!("=== start_realtime_capture (百炼 WS 模式) ===");
     log::info!("  meeting_id: {mid_in}, audio_source: {audio_source_norm}");
 
