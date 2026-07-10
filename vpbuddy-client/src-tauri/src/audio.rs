@@ -698,9 +698,9 @@ mod wasapi_loopback {
     use anyhow::{Context, Result};
     use std::sync::{mpsc, Arc, atomic::{AtomicBool, Ordering}};
 
-    use windows::core::GUID;
+    use windows::core::{Interface, GUID};
     use windows::Win32::Media::Audio::{
-        eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
+        eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
     };
     use windows::Win32::System::Com::{
         CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
@@ -730,24 +730,28 @@ mod wasapi_loopback {
             MMDeviceEnumerator::new()
         }.context("无法创建 MMDeviceEnumerator")?;
 
-        let device = unsafe {
+        let device: IMMDevice = unsafe {
             enumerator.GetDefaultAudioEndpoint(eRender, eConsole)
         }.context("无法获取默认音频渲染端点")?;
 
         let audio_client: IAudioClient = unsafe {
-            device.Activate::<IAudioClient>(CLSCTX_ALL)
-        }.context("无法激活 IAudioClient")?;
+            let mut ppv: Option<IAudioClient> = None;
+            device.Activate(
+                &IAudioClient::IID,
+                CLSCTX_ALL,
+                None,
+                &mut ppv as *mut _ as *mut *mut std::ffi::c_void,
+            ).context("Activate 失败")?;
+            ppv.context("Activate 返回 null")?
+        };
 
-        let mix_format_ptr = unsafe { audio_client.GetMixFormat() };
-        if mix_format_ptr.is_null() {
-            anyhow::bail!("GetMixFormat 返回 null");
-        }
+        let mix_format_ptr = unsafe { audio_client.GetMixFormat().context("GetMixFormat 失败")? };
         let mix_format = unsafe { &*mix_format_ptr };
         let native_sample_rate = mix_format.nSamplesPerSec;
         let channels = mix_format.nChannels as u16;
 
-        let hns_buffer_duration: i64 = REFTIMES_PER_SEC;  // 1 second buffer
-        let init_result = unsafe {
+        let hns_buffer_duration: i64 = REFTIMES_PER_SEC;
+        unsafe {
             audio_client.Initialize(
                 AUDCLNT_SHAREMODE_SHARED,
                 AUDCLNT_STREAMFLAGS_LOOPBACK,
@@ -755,18 +759,17 @@ mod wasapi_loopback {
                 0,
                 mix_format_ptr,
                 std::ptr::null(),
-            )
-        };
-
-        if mix_format_ptr as usize > 0 {
-            unsafe { windows::Win32::System::Com::CoTaskMemFree(Some(mix_format_ptr as *mut std::ffi::c_void)); }
+            ).context("IAudioClient::Initialize 失败")?;
         }
 
-        init_result.context("IAudioClient::Initialize 失败")?;
-
         let capture_client: IAudioCaptureClient = unsafe {
-            audio_client.GetService::<IAudioCaptureClient>(&IID_IAUDIO_CAPTURE_CLIENT)
-        }.context("无法获取 IAudioCaptureClient")?;
+            let mut ppv: Option<IAudioCaptureClient> = None;
+            audio_client.GetService(
+                &IID_IAUDIO_CAPTURE_CLIENT,
+                &mut ppv as *mut _ as *mut *mut std::ffi::c_void,
+            ).context("GetService 失败")?;
+            ppv.context("GetService 返回 null")?
+        };
 
         unsafe { audio_client.Start() }.context("IAudioClient::Start 失败")?;
 
@@ -778,13 +781,13 @@ mod wasapi_loopback {
             let _keep_alive = capturing;
 
             while _keep_alive.load(Ordering::SeqCst) {
-                let mut data_ptr: *mut u8 = std::ptr::null_mut();
+                let mut data_ptr: *const u8 = std::ptr::null();
                 let mut frames_available: u32 = 0;
                 let mut flags: u32 = 0;
 
                 unsafe {
                     let hr = capture_client.GetBuffer(
-                        &mut data_ptr,
+                        &mut data_ptr as *mut *const u8 as *mut *mut u8,
                         &mut frames_available,
                         &mut flags,
                         None,
