@@ -1385,7 +1385,8 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
     session = None
     format_str = "pcm"
     sample_rate = 16000
-    _doc_running = [False]  # 文档自驱循环开关
+    _doc_running = [False]
+    _stop_received = False  # Issue #31: 区分主动停止 vs 断线
 
     try:
         # Phase 1: handshake — 收 JSON "start" 消息
@@ -1418,7 +1419,7 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
 
         # 启动自驱动文档 generator: asyncio 定时轮询 ASR 文本, 有增量就提交
 
-        _doc_last_text_len = [0]
+        _doc_last_hash = [""]
         _doc_running[0] = True
 
         def _doc_runner(gen_id: int, mid: str) -> dict:
@@ -1434,25 +1435,26 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
                     results[kind] = {"triggered": False, "error": str(e)}
             return results
 
-        # 自驱动文档: 15s 无条件第一轮, 之后每 30s 检查增量, 直到 WS 断开
+        # Issue #31: 自驱动文档调度 — hash-based 检测有意义变更, debounce 6s
         async def _kick_docs():
+            import hashlib
             try:
                 from ..task_manager import get_task_manager
                 from ..storage import MeetingStorage
                 st = MeetingStorage(DATA_DIR)
-                interval = 30
-                await _asyncio.sleep(15)
-                # 第 1 轮: 无条件提交 (文本已开始累积, close 可能还未来)
-                get_task_manager().submit(meeting_id, _doc_runner)
+                debounce = 6
+                # 第 1 轮: 等 debounce 后, 若有文本则触发
+                await _asyncio.sleep(debounce)
                 while _doc_running[0]:
-                    await _asyncio.sleep(interval)
                     if st.exists(meeting_id):
                         state = st.load(meeting_id)
-                        cur_len = len(state.cleaned_text) if state.cleaned_text else 0
-                        prev = _doc_last_text_len[0]
-                        if cur_len > prev + 50:
-                            _doc_last_text_len[0] = cur_len
+                        cur = state.cleaned_text if state.cleaned_text else ""
+                        cur_hash = hashlib.md5(cur.encode()).hexdigest()
+                        if cur_hash != _doc_last_hash[0] and len(cur) > 10:
+                            _doc_last_hash[0] = cur_hash
+                            _log.info("[_kick_docs] meaningful change detected, len=%d hast=%s", len(cur), cur_hash[:8])
                             get_task_manager().submit(meeting_id, _doc_runner)
+                    await _asyncio.sleep(debounce)
             except Exception:
                 import logging
                 logging.getLogger(__name__).warning("non-critical error in doc kick loop", exc_info=True)
@@ -1472,6 +1474,7 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
                 # JSON 控制消息
                 msg = json.loads(data["text"])
                 if msg.get("type") == "stop":
+                    _stop_received = True
                     _log.info("[ws_realtime_asr] client sent stop, meeting=%s", meeting_id)
                     break
                 elif msg.get("type") == "ping":
@@ -1493,19 +1496,33 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
         _doc_running[0] = False
         if session:
             stop_session(session)
+            _log.info("[ws_realtime_asr] session stopped, meeting=%s sentences=%d noise=%d",
+                       meeting_id, session.sentence_count, session.noise_count)
         try:
             await websocket.close()
         except Exception:
             import logging
             logging.getLogger(__name__).warning("non-critical error closing websocket", exc_info=True)
 
-        # WS 断开: 触发文档生成 (文本已由 BailianCallback 实时写入 state)
-        try:
-            from ..ui_server import _close_meeting
-            _log.info("[ws_realtime_asr] final close_meeting, meeting=%s", meeting_id)
-            _close_meeting(meeting_id)
-        except Exception as _ce:
-            _log.error("[ws_realtime_asr] close_meeting failed: %s", _ce)
+        # Issue #31: 只有客户端显式发送 stop 才 finalize 会议
+        # 网络断连/WebSocketDisconnect 不触发 close_meeting, 保留会议数据待恢复
+        if _stop_received:
+            try:
+                from ..ui_server import _close_meeting
+                _log.info("[ws_realtime_asr] final close_meeting (stop received), meeting=%s", meeting_id)
+                _close_meeting(meeting_id)
+            except Exception as _ce:
+                _log.error("[ws_realtime_asr] close_meeting failed: %s", _ce)
+        else:
+            _log.info("[ws_realtime_asr] connection lost, meeting %s kept open for potential reconnect", meeting_id)
+            from ..sub_session_controller import push_event
+            try:
+                push_event(meeting_id, "recording-disconnected", {
+                    "meeting_id": meeting_id,
+                    "sentences": session.sentence_count if session else 0,
+                })
+            except Exception:
+                pass
 
 
 # =============================================================================

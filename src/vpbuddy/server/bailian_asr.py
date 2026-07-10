@@ -29,6 +29,57 @@ MODEL = "fun-asr-realtime"
 API_KEY = os.environ.get("DASHSCOPE_API_KEY") or os.environ.get("BAILIAN_API_KEY", "")
 
 
+# ── ASR 降噪第一层: 确定性轻量过滤 (Issue #31/ADR-0052) ──
+
+_FILLER_WORDS = {"嗯", "呃", "啊", "哦", "哎", "唉", "诶", "唔", "那个", "就是", "就是说", "然后", "这个", "这样子", "那个啥", "反正"}
+_NOISE_PATTERNS = ["不是不是", "怎么怎么", "什么什么", "就是就是", "对对对", "好好好", "行行行", "可以可以"]
+_DEVICE_TEST_PHRASES = {"测试测试", "喂喂喂", "能听到吗", "听得见吗", "连接了吗", "开始录音了吗", "录音正常吗", "声音怎么样", "有声音吗"}
+
+
+def _is_noise_only(text: str) -> bool:
+    """判断句子是否只包含填充词/噪声, 不包含业务信息."""
+    t = text.strip()
+    if not t:
+        return True
+    if len(t) <= 2:
+        return True
+    # 设备测试短语
+    if t in _DEVICE_TEST_PHRASES:
+        return True
+    cleaned = t
+    for w in sorted(_FILLER_WORDS, key=len, reverse=True):
+        cleaned = cleaned.replace(w, "")
+    for p in _NOISE_PATTERNS:
+        cleaned = cleaned.replace(p, "")
+    cleaned = cleaned.strip("，,。.！!？?；;：: ")
+    if len(cleaned) <= 2:
+        return True
+    # 全是标点或空白
+    if not cleaned:
+        return True
+    return False
+
+
+def _compress_repetitions(text: str) -> str:
+    """压缩无意义重复: '不是不是不是' → '不是'"""
+    result = text
+    for pattern in _NOISE_PATTERNS:
+        while pattern * 2 in result:
+            result = result.replace(pattern * 2, pattern)
+    return result
+
+
+def _strip_fillers(text: str) -> str:
+    """去除句子中的纯填充词."""
+    t = text
+    for w in sorted(_FILLER_WORDS, key=len, reverse=True):
+        t = t.replace(w, "")
+    t = t.strip("，,。.！!？?；;：: ")
+    if len(t) <= 2 and text.strip():
+        return text  # 保留原始, 太短了不清理
+    return t or text
+
+
 @dataclass
 class _ASRSession:
     """单个识别会话的状态.
@@ -38,17 +89,25 @@ class _ASRSession:
     """
 
     meeting_id: str
+    session_id: str = ""
+    recording_session_id: str = ""
     recognition = None
     callback: "BailianCallback" = None
     accumulated_text: str = ""
+    cleaned_accumulated_text: str = ""
     sentence_count: int = 0
+    noise_count: int = 0
     started_at: float = 0.0
     running: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
 
-    def add_sentence(self, text: str) -> None:
+    def add_sentence(self, text: str, cleaned: str, is_noise: bool = False) -> None:
         self.sentence_count += 1
         self.accumulated_text += text
+        if is_noise:
+            self.noise_count += 1
+        else:
+            self.cleaned_accumulated_text += cleaned
 
 
 class BailianCallback:
@@ -110,6 +169,9 @@ class BailianCallback:
         if hasattr(RecognitionResult, "is_sentence_end"):
             is_end = RecognitionResult.is_sentence_end(sentence) or is_end
 
+        is_noise = _is_noise_only(text) if text.strip() else False
+        cleaned = _strip_fillers(_compress_repetitions(text.strip())) if text.strip() else text
+
         if text:
             self._safe_send({
                 "type": "transcript",
@@ -117,16 +179,18 @@ class BailianCallback:
                 "begin_time": begin_time,
                 "end_time": end_time,
                 "is_sentence_end": is_end,
+                "is_noise": is_noise,
+                "speaker_id": "UNKNOWN",
             })
 
         if is_end and text.strip():
-            self._session.add_sentence(text.strip())
-            # 同步写入 MeetingStorage, 让文档 agent 能实时读到文本
-            self._write_state(text, self._session.sentence_count)
-            logger.info("[bailian_asr] sentence #%d: %s", self._session.sentence_count, text[:80])
+            self._session.add_sentence(text, cleaned, is_noise=is_noise)
+            tag = " [NOISE]" if is_noise else ""
+            self._write_state(cleaned, self._session.sentence_count)
+            logger.info("[bailian_asr] sentence #%d%s: %s", self._session.sentence_count, tag, text[:80])
 
     def _write_state(self, text: str, idx: int) -> None:
-        """追加最新句子到 MeetingStorage (线程安全, 简单文件 I/O)."""
+        """追加清理后文本到 MeetingStorage (Issue #31: 写 cleaned_accumulated_text)."""
         if not self._data_dir or not self._session.meeting_id:
             return
         try:
@@ -135,7 +199,7 @@ class BailianCallback:
             mid = self._session.meeting_id
             if st.exists(mid):
                 state = st.load(mid)
-                state.cleaned_text = self._session.accumulated_text or text
+                state.cleaned_text = self._session.cleaned_accumulated_text or text
                 state.last_updated = datetime.now().isoformat()
                 st.save(state)
         except Exception as e:
@@ -156,9 +220,14 @@ def start_session(
     data_dir: str = "",
 ) -> _ASRSession:
     """启动一个百炼实时 ASR 会话."""
+    import uuid
     _ensure_dashscope()
 
-    session = _ASRSession(meeting_id=meeting_id)
+    session = _ASRSession(
+        meeting_id=meeting_id,
+        session_id=uuid.uuid4().hex[:12],
+        recording_session_id=uuid.uuid4().hex[:8],
+    )
     session.started_at = time.time()
 
     from dashscope.audio.asr import Recognition

@@ -337,7 +337,7 @@ pub async fn run_realtime_loop(
         move |text, bt, et, is_end| {
             let _ = app_ws.emit("transcript-segment", serde_json::json!({
                 "text": text, "start_sec": bt, "end_sec": et,
-                "speaker_id": "SPEAKER_00", "chunk_index": 0,
+                "speaker_id": "UNKNOWN", "chunk_index": 0,
                 "is_sentence_end": is_end,
             }));
         },
