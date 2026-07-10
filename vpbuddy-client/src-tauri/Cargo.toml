@@ -33,9 +33,6 @@ env_logger = "0.11"
 chrono = "0.4"
 dirs = "5"  # 客户端日志时间戳 (2026-06-27)
 
-[target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.62", features = ["Win32_Media_Audio", "Win32_System_Com"] }
-
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]

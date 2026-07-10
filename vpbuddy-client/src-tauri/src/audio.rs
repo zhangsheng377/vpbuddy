@@ -32,11 +32,10 @@ pub struct AudioDeviceInfo {
 enum StreamGuard {
     Single(cpal::Stream),
     Merged {
+        // P1#5 (2026-07-04): Arc 替代 Box::leak, 进程退出时 OS 回收
         _mic: Arc<cpal::Stream>,
         _loopback: Arc<cpal::Stream>,
     },
-    #[cfg(target_os = "windows")]
-    WasapiLoopback(wasapi_loopback::WindowsLoopback),
 }
 
 pub struct AudioCapture {
@@ -71,46 +70,34 @@ impl AudioCapture {
         match audio_source {
             "microphone" | "mic" => Self::new_with_device_inner(device_id),
             "loopback" => {
-                #[cfg(target_os = "windows")]
-                {
-                    return Self::new_wasapi_loopback();
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    let loopback_dev_id = detect_default_loopback();
-                    match loopback_dev_id {
-                        Some(id) => {
-                            log::info!("Phase 7: loopback 用设备 {id:?}");
-                            let mut cap = Self::new_with_device_inner(Some(id))?;
-                            cap.is_loopback = true;
-                            Ok(cap)
-                        }
-                        None => {
-                            log::warn!(
-                                "loopback 设备未找到 (Linux 无 PulseAudio/PipeWire monitor / macOS 未装 BlackHole) — 兜底用 microphone"
-                            );
-                            Self::new_with_device_inner(device_id)
-                        }
+                // 平台分支找默认 loopback 设备; 找不到 fallback mic
+                let loopback_dev_id = detect_default_loopback();
+                match loopback_dev_id {
+                    Some(id) => {
+                        log::info!("Phase 7: loopback 用设备 {id:?}");
+                        let mut cap = Self::new_with_device_inner(Some(id))?;
+                        cap.is_loopback = true;
+                        Ok(cap)
+                    }
+                    None => {
+                        log::warn!(
+                            "loopback 设备未找到 (Linux 无 PulseAudio/PipeWire monitor / macOS 未装 BlackHole / Windows v0.9.x 实现) — 兜底用 microphone"
+                        );
+                        Self::new_with_device_inner(device_id)
                     }
                 }
             }
             "both" => {
-                #[cfg(target_os = "windows")]
-                {
-                    log::warn!("Windows both 路径 v0.21.0 暂简化为 WASAPI loopback-only (待 v0.22 mic+loopback 混合)");
-                    return Self::new_wasapi_loopback();
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    let loopback_dev_id = detect_default_loopback();
-                    match loopback_dev_id {
-                        Some(id) => Self::new_with_both_streams(device_id, Some(id)),
-                        None => {
-                            log::warn!(
-                                "both path 缺 loopback 设备, 退化为仅 microphone (Linux 无 monitor / macOS 未装 BlackHole)"
-                            );
-                            Self::new_with_device_inner(device_id)
-                        }
+                // 双 stream 并行 + 混合 (v0.8 一期简化: 同步采 1s 切片, 短端补零 + 等权)
+                // mic 端 id 用 device_id, loopback 端 id 用 detect_default_loopback
+                let loopback_dev_id = detect_default_loopback();
+                match loopback_dev_id {
+                    Some(id) => Self::new_with_both_streams(device_id, Some(id)),
+                    None => {
+                        log::warn!(
+                            "both path 缺 loopback 设备, 退化为仅 microphone (Linux 无 monitor / macOS 未装 BlackHole / Windows v0.9.x)"
+                        );
+                        Self::new_with_device_inner(device_id)
                     }
                 }
             }
@@ -131,18 +118,6 @@ impl AudioCapture {
         log::debug!("audio_source={audio_source} (本期仅 log, mic path 仍走 new_with_device_inner)");
         let _ = audio_source; // suppress unused
         Self::new_with_device_inner(device_id)
-    }
-
-    #[cfg(target_os = "windows")]
-    fn new_wasapi_loopback() -> Result<Self> {
-        let (rx, native_rate, guard) = wasapi_loopback::create_loopback()?;
-        log::info!("WASAPI loopback 就绪, native_rate={}", native_rate);
-        Ok(Self {
-            _stream: StreamGuard::WasapiLoopback(guard),
-            rx,
-            native_sample_rate: native_rate,
-            is_loopback: true,
-        })
     }
 
     /// 实际设备 init (v0.7.0 原 logic, v0.8.0 内部用)
@@ -504,7 +479,7 @@ fn pick_input_config(device: &cpal::Device) -> Result<cpal::SupportedStreamConfi
 /// 2026-07-02 Phase 7 v0.8.0: 平台分支, 找当前默认的 loopback 设备 id (= name)
 /// - Linux: 第一个 .monitor 后缀设备 (PulseAudio/PipeWire 都用 .monitor 约定)
 /// - macOS: 第一个 BlackHole / Loopback / Soundflower 设备
-/// - Windows: WASAPI loopback (始终可用)
+/// - Windows: 永远 None (cpal 无 cross-platform API, v0.9.x unsafe 重构)
 pub fn detect_default_loopback() -> Option<String> {
     #[cfg(target_os = "linux")]
     return detect_linux_loopback();
@@ -512,7 +487,8 @@ pub fn detect_default_loopback() -> Option<String> {
     return detect_macos_loopback();
     #[cfg(target_os = "windows")]
     {
-        return Some(wasapi_loopback::loopback_device_name());
+        let _ = ();  // suppress unused on windows
+        return None;
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
@@ -544,7 +520,7 @@ fn detect_macos_loopback() -> Option<String> {
 /// 2026-07-02 Phase 7 v0.8.0: 平台分支判定设备名是否为 loopback
 /// - Linux: `.monitor` 后缀 (PulseAudio/PipeWire 约定)
 /// - macOS: BlackHole / Loopback / Soundflower (case-insensitive)
-/// - Windows: WASAPI Loopback 设备名
+/// - Windows: 恒 false (cpal 不暴露)
 pub fn is_loopback_device_name(name: &str) -> bool {
     #[cfg(target_os = "linux")]
     { return name.ends_with(".monitor"); }
@@ -557,7 +533,8 @@ pub fn is_loopback_device_name(name: &str) -> bool {
     }
     #[cfg(target_os = "windows")]
     {
-        return name == wasapi_loopback::loopback_device_name();
+        let _ = name;
+        return false;  // v0.9.x unsafe 重构
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
@@ -627,7 +604,6 @@ pub fn resample_linear(samples: &[i16], from_rate: u32, to_rate: u32) -> Vec<i16
 
 /// 2026-06-25: 枚举系统音频输入设备 (cherry-pick from feature 分支)
 /// 2026-07-02 Phase 7 v0.8.0: 每设备标 is_loopback 字段
-/// 2026-07-10 v0.21.0: Windows 追加 WASAPI Loopback 虚拟设备
 pub fn list_input_devices() -> Result<Vec<AudioDeviceInfo>> {
     let host = cpal::default_host();
     let default_name = host.default_input_device().and_then(|d| d.name().ok());
@@ -641,18 +617,6 @@ pub fn list_input_devices() -> Result<Vec<AudioDeviceInfo>> {
             is_loopback,
             name,
         });
-    }
-    #[cfg(target_os = "windows")]
-    {
-        let wasapi_name = wasapi_loopback::loopback_device_name();
-        if !out.iter().any(|d| d.name == wasapi_name) {
-            out.push(AudioDeviceInfo {
-                id: wasapi_name.clone(),
-                is_default: false,
-                is_loopback: true,
-                name: wasapi_name,
-            });
-        }
     }
     Ok(out)
 }
@@ -690,151 +654,8 @@ pub fn make_wav_header(data_len: u32, sample_rate: u32, channels: u16) -> Vec<u8
 }
 
 // =============================================================================
-// Windows WASAPI Loopback (v0.21.0)
+// inline unit tests
 // =============================================================================
-
-#[cfg(target_os = "windows")]
-mod wasapi_loopback {
-    use anyhow::{Context, Result};
-    use std::sync::{mpsc, Arc, atomic::{AtomicBool, Ordering}};
-
-    use windows::core::{Interface, GUID};
-    use windows::Win32::Media::Audio::{
-        eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
-    };
-    use windows::Win32::System::Com::{
-        CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
-    };
-
-    const IID_IAUDIO_CAPTURE_CLIENT: GUID = GUID::from_u128(0xC8ADBD64_E71E_48a0_A4DE_185C395CD317);
-
-    const REFTIMES_PER_SEC: i64 = 10_000_000;
-
-    pub struct WindowsLoopback {
-        _client: IAudioClient,
-        #[allow(dead_code)]
-        capturing: Arc<AtomicBool>,
-    }
-
-    impl Drop for WindowsLoopback {
-        fn drop(&mut self) {
-            unsafe { self._client.Stop().ok(); }
-            unsafe { CoUninitialize(); }
-        }
-    }
-
-    pub fn create_loopback() -> Result<(mpsc::Receiver<Vec<i16>>, u32, WindowsLoopback)> {
-        unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok(); }
-
-        let enumerator: IMMDeviceEnumerator = unsafe {
-            MMDeviceEnumerator::new()
-        }.context("无法创建 MMDeviceEnumerator")?;
-
-        let device: IMMDevice = unsafe {
-            enumerator.GetDefaultAudioEndpoint(eRender, eConsole)
-        }.context("无法获取默认音频渲染端点")?;
-
-        let audio_client: IAudioClient = unsafe {
-            let mut ppv: Option<IAudioClient> = None;
-            device.Activate(
-                &IAudioClient::IID,
-                CLSCTX_ALL,
-                None,
-                &mut ppv as *mut _ as *mut *mut std::ffi::c_void,
-            ).context("Activate 失败")?;
-            ppv.context("Activate 返回 null")?
-        };
-
-        let mix_format_ptr = unsafe { audio_client.GetMixFormat().context("GetMixFormat 失败")? };
-        let mix_format = unsafe { &*mix_format_ptr };
-        let native_sample_rate = mix_format.nSamplesPerSec;
-        let channels = mix_format.nChannels as u16;
-
-        let hns_buffer_duration: i64 = REFTIMES_PER_SEC;
-        unsafe {
-            audio_client.Initialize(
-                AUDCLNT_SHAREMODE_SHARED,
-                AUDCLNT_STREAMFLAGS_LOOPBACK,
-                hns_buffer_duration,
-                0,
-                mix_format_ptr,
-                std::ptr::null(),
-            ).context("IAudioClient::Initialize 失败")?;
-        }
-
-        let capture_client: IAudioCaptureClient = unsafe {
-            let mut ppv: Option<IAudioCaptureClient> = None;
-            audio_client.GetService(
-                &IID_IAUDIO_CAPTURE_CLIENT,
-                &mut ppv as *mut _ as *mut *mut std::ffi::c_void,
-            ).context("GetService 失败")?;
-            ppv.context("GetService 返回 null")?
-        };
-
-        unsafe { audio_client.Start() }.context("IAudioClient::Start 失败")?;
-
-        let (tx, rx) = mpsc::sync_channel::<Vec<i16>>(64);
-        let capturing = Arc::new(AtomicBool::new(true));
-        let capturing_clone = Arc::clone(&capturing);
-
-        std::thread::spawn(move || {
-            let _keep_alive = capturing;
-
-            while _keep_alive.load(Ordering::SeqCst) {
-                let mut data_ptr: *const u8 = std::ptr::null();
-                let mut frames_available: u32 = 0;
-                let mut flags: u32 = 0;
-
-                unsafe {
-                    let hr = capture_client.GetBuffer(
-                        &mut data_ptr as *mut *const u8 as *mut *mut u8,
-                        &mut frames_available,
-                        &mut flags,
-                        None,
-                        None,
-                    );
-
-                    if hr.is_ok() && frames_available > 0 {
-                        let sample_count = frames_available as usize * channels as usize;
-                        let f32_data: &[f32] = std::slice::from_raw_parts(
-                            data_ptr as *const f32,
-                            sample_count,
-                        );
-
-                        let mono: Vec<i16> = if channels == 1 {
-                            f32_data.iter()
-                                .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
-                                .collect()
-                        } else {
-                            f32_data.chunks(channels as usize)
-                                .map(|frame| {
-                                    let sum: f32 = frame.iter().sum::<f32>() / channels as f32;
-                                    (sum.clamp(-1.0, 1.0) * 32767.0) as i16
-                                })
-                                .collect()
-                        };
-
-                        let _ = tx.try_send(mono);
-                        capture_client.ReleaseBuffer(frames_available);
-                    } else {
-                        std::thread::sleep(std::time::Duration::from_millis(10));
-                    }
-                }
-            }
-        });
-
-        let guard = WindowsLoopback {
-            _client: audio_client,
-            capturing: capturing_clone,
-        };
-
-        Ok((rx, native_sample_rate, guard))
-    }
-
-    pub fn loopback_device_name() -> String {
-        "WASAPI Loopback (系统声音)".to_string()
-    }
-}
 
 #[cfg(test)]
 mod tests {
