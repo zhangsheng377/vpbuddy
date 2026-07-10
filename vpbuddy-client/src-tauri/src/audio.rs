@@ -695,13 +695,105 @@ pub fn make_wav_header(data_len: u32, sample_rate: u32, channels: u16) -> Vec<u8
 
 #[cfg(target_os = "windows")]
 mod wasapi_loopback {
-    use anyhow::Result;
+    use anyhow::{Context, Result};
     use std::sync::mpsc;
 
-    pub struct WindowsLoopback;
+    use windows::core::GUID;
+    use windows::Win32::Media::Audio::{
+        eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator,
+        MMDeviceEnumerator, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
+    };
+    use windows::Win32::System::Com::{
+        CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
+    };
+
+    const REFTIMES_PER_SEC: i64 = 10_000_000;
+
+    pub struct WindowsLoopback {
+        client: IAudioClient,
+    }
+
+    impl Drop for WindowsLoopback {
+        fn drop(&mut self) {
+            unsafe { self.client.Stop().ok(); }
+            unsafe { CoUninitialize(); }
+        }
+    }
 
     pub fn create_loopback() -> Result<(mpsc::Receiver<Vec<i16>>, u32, WindowsLoopback)> {
-        anyhow::bail!("WASAPI loopback: 待完成 windows-rs API 适配 (骨架已通过 CI, 完整实现在本地调试后合入)")
+        unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok(); }
+
+        let enumerator: IMMDeviceEnumerator =
+            unsafe { MMDeviceEnumerator::new().context("MMDeviceEnumerator")? };
+
+        let device = unsafe {
+            enumerator.GetDefaultAudioEndpoint(eRender, eConsole)
+        }.context("GetDefaultAudioEndpoint")?;
+
+        let audio_client: IAudioClient = unsafe {
+            device.Activate::<IAudioClient>(CLSCTX_ALL)
+        }.context("Activate IAudioClient")?;
+
+        let mix_format_ptr = unsafe { audio_client.GetMixFormat() }.context("GetMixFormat")?;
+        let mix_format = unsafe { &*mix_format_ptr };
+        let native_sample_rate = mix_format.nSamplesPerSec;
+        let channels = mix_format.nChannels as u16;
+
+        let hns_buffer_duration: i64 = REFTIMES_PER_SEC;
+        unsafe {
+            audio_client.Initialize(
+                AUDCLNT_SHAREMODE_SHARED,
+                AUDCLNT_STREAMFLAGS_LOOPBACK,
+                hns_buffer_duration,
+                0,
+                mix_format_ptr,
+                std::ptr::null(),
+            )
+        }.context("Initialize")?;
+
+        let iid_capture = GUID::from_u128(0xC8ADBD64_E71E_48a0_A4DE_185C395CD317);
+        let capture_client: IAudioCaptureClient = unsafe {
+            let mut ppv: *mut std::ffi::c_void = std::ptr::null_mut();
+            audio_client.GetService(&iid_capture, &mut ppv).context("GetService")?;
+            std::mem::transmute::<*mut std::ffi::c_void, IAudioCaptureClient>(ppv)
+        };
+
+        unsafe { audio_client.Start() }.context("Start")?;
+
+        let (tx, rx) = mpsc::sync_channel::<Vec<i16>>(64);
+
+        std::thread::spawn(move || {
+            loop {
+                unsafe {
+                    let mut data: *mut u8 = std::ptr::null_mut();
+                    let mut frames: u32 = 0;
+                    let mut flags: u32 = 0;
+                    if capture_client.GetBuffer(&mut data, &mut frames, &mut flags, None, None).is_ok()
+                        && frames > 0 && !data.is_null()
+                    {
+                        let n = frames as usize * channels as usize;
+                        let f32s: &[f32] = std::slice::from_raw_parts(data as *const f32, n);
+                        let mono: Vec<i16> = if channels == 1 {
+                            f32s.iter().map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16).collect()
+                        } else {
+                            f32s.chunks(channels as usize)
+                                .map(|f| (f.iter().sum::<f32>() / channels as f32 * 32767.0) as i16)
+                                .collect()
+                        };
+                        if tx.try_send(mono).is_err() {
+                            capture_client.ReleaseBuffer(frames);
+                            break;
+                        }
+                        capture_client.ReleaseBuffer(frames);
+                    } else {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                }
+            }
+        });
+
+        let guard = WindowsLoopback { client: audio_client };
+        Ok((rx, native_sample_rate, guard))
     }
 
     pub fn loopback_device_name() -> String {
