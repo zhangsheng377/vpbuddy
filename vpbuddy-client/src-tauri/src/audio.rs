@@ -702,8 +702,9 @@ mod wasapi_loopback {
 
     use windows::core::GUID;
     use windows::Win32::Media::Audio::{
-        eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDevice, IMMDeviceEnumerator,
-        MMDeviceEnumerator, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, WAVEFORMATEX,
+        eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator,
+        MMDeviceEnumerator, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
+
     };
     use windows::Win32::System::Com::{
         CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
@@ -728,28 +729,21 @@ mod wasapi_loopback {
         unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok(); }
 
         let enumerator: IMMDeviceEnumerator =
-            unsafe { MMDeviceEnumerator::new() }.context("无法创建 MMDeviceEnumerator")?;
+            unsafe { MMDeviceEnumerator::new() }.context("MMDeviceEnumerator")?;
 
-        let device: IMMDevice = unsafe {
+        let device = unsafe {
             enumerator.GetDefaultAudioEndpoint(eRender, eConsole)
-        }
-        .context("无法获取默认音频渲染端点")?;
+        }.context("GetDefaultAudioEndpoint")?;
 
         let audio_client: IAudioClient = unsafe {
-            let mut ppv: *mut std::ffi::c_void = std::ptr::null_mut();
-            device.Activate(
-                &IAudioClient::IID,
-                CLSCTX_ALL,
-                None,
-                &mut ppv,
-            ).context("Activate IAudioClient 失败")?;
-            IAudioClient::from(ppv)
-        };
+            device.Activate::<IAudioClient>(CLSCTX_ALL)
+        }.context("Activate IAudioClient")?;
 
-        let mix_format: *mut WAVEFORMATEX = unsafe { audio_client.GetMixFormat() }
-            .context("GetMixFormat 失败")?;
-        let native_sample_rate = unsafe { (*mix_format).nSamplesPerSec };
-        let channels = unsafe { (*mix_format).nChannels as u16 };
+        let mix_format_ptr =
+            unsafe { audio_client.GetMixFormat() }.context("GetMixFormat")?;
+        let mix_format = unsafe { &*mix_format_ptr };
+        let native_sample_rate = mix_format.nSamplesPerSec;
+        let channels = mix_format.nChannels as u16;
 
         let hns_buffer_duration: i64 = REFTIMES_PER_SEC;
         unsafe {
@@ -758,65 +752,49 @@ mod wasapi_loopback {
                 AUDCLNT_STREAMFLAGS_LOOPBACK,
                 hns_buffer_duration,
                 0,
-                mix_format,
+                mix_format_ptr,
                 std::ptr::null(),
             )
-        }
-        .context("IAudioClient::Initialize 失败")?;
+        }.context("Initialize")?;
 
+        let iid_capture = GUID::from_u128(0xC8ADBD64_E71E_48a0_A4DE_185C395CD317);
         let capture_client: IAudioCaptureClient = unsafe {
             let mut ppv: *mut std::ffi::c_void = std::ptr::null_mut();
-            let iid_capture = GUID::from_u128(0xC8ADBD64_E71E_48a0_A4DE_185C395CD317);
-            audio_client
-                .GetService(&iid_capture, &mut ppv)
-                .context("GetService 失败")?;
+            audio_client.GetService(&iid_capture, &mut ppv).context("GetService")?;
             IAudioCaptureClient::from(ppv)
         };
 
-        unsafe { audio_client.Start() }.context("IAudioClient::Start 失败")?;
+        unsafe { audio_client.Start() }.context("Start")?;
 
         let (tx, rx) = mpsc::sync_channel::<Vec<i16>>(64);
         let capturing = Arc::new(AtomicBool::new(true));
         let capturing_clone = Arc::clone(&capturing);
 
         std::thread::spawn(move || {
-            let _keep_alive = capturing;
-
-            while _keep_alive.load(Ordering::SeqCst) {
+            let _alive = capturing;
+            while _alive.load(Ordering::SeqCst) {
                 unsafe {
-                    let mut data_ptr: *mut u8 = std::ptr::null_mut();
-                    let mut frames_available: u32 = 0;
+                    let mut data: *mut u8 = std::ptr::null_mut();
+                    let mut frames: u32 = 0;
                     let mut flags: u32 = 0;
-                    let mut device_pos: u64 = 0;
-                    let mut qpc_pos: u64 = 0;
-
-                    let hr = capture_client.GetBuffer(
-                        &mut data_ptr,
-                        &mut frames_available,
-                        &mut flags,
-                        Some(&mut device_pos),
-                        Some(&mut qpc_pos),
-                    );
-
-                    if hr.is_ok() && frames_available > 0 && !data_ptr.is_null() {
-                        let sample_count = frames_available as usize * channels as usize;
-                        let f32_data: &[f32] =
-                            std::slice::from_raw_parts(data_ptr as *const f32, sample_count);
-
+                    if capture_client.GetBuffer(&mut data, &mut frames, &mut flags, None, None).is_ok()
+                        && frames > 0
+                        && !data.is_null()
+                    {
+                        let n = frames as usize * channels as usize;
+                        let f32s: &[f32] = std::slice::from_raw_parts(data as *const f32, n);
                         let mono: Vec<i16> = if channels == 1 {
-                            f32_data.iter().map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16).collect()
+                            f32s.iter().map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16).collect()
                         } else {
-                            f32_data
-                                .chunks(channels as usize)
-                                .map(|frame| {
-                                    let sum: f32 = frame.iter().sum::<f32>() / channels as f32;
-                                    (sum.clamp(-1.0, 1.0) * 32767.0) as i16
+                            f32s.chunks(channels as usize)
+                                .map(|f| {
+                                    let avg = f.iter().sum::<f32>() / channels as f32;
+                                    (avg.clamp(-1.0, 1.0) * 32767.0) as i16
                                 })
                                 .collect()
                         };
-
                         let _ = tx.try_send(mono);
-                        capture_client.ReleaseBuffer(frames_available);
+                        capture_client.ReleaseBuffer(frames);
                     } else {
                         std::thread::sleep(std::time::Duration::from_millis(10));
                     }
@@ -824,11 +802,7 @@ mod wasapi_loopback {
             }
         });
 
-        let guard = WindowsLoopback {
-            _client: audio_client,
-            capturing: capturing_clone,
-        };
-
+        let guard = WindowsLoopback { _client: audio_client, capturing: capturing_clone };
         Ok((rx, native_sample_rate, guard))
     }
 
