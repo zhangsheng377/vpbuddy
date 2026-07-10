@@ -695,13 +695,45 @@ pub fn make_wav_header(data_len: u32, sample_rate: u32, channels: u16) -> Vec<u8
 
 #[cfg(target_os = "windows")]
 mod wasapi_loopback {
-    use anyhow::Result;
+    use anyhow::{Context, Result};
     use std::sync::mpsc;
 
-    pub struct WindowsLoopback;
-    pub fn create_loopback() -> Result<(mpsc::Receiver<Vec<i16>>, u32, WindowsLoopback)> {
-        anyhow::bail!("WASAPI loopback TODO")
+    use windows::core::GUID;
+    use windows::Win32::Media::Audio::{
+        eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator,
+        MMDeviceEnumerator, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
+    };
+    use windows::Win32::System::Com::{
+        CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
+    };
+
+    const REFTIMES_PER_SEC: i64 = 10_000_000;
+
+    pub struct WindowsLoopback {
+        client: IAudioClient,
     }
+
+    impl Drop for WindowsLoopback {
+        fn drop(&mut self) {
+            unsafe { self.client.Stop().ok(); }
+            unsafe { CoUninitialize(); }
+        }
+    }
+
+    pub fn create_loopback() -> Result<(mpsc::Receiver<Vec<i16>>, u32, WindowsLoopback)> {
+        unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok(); }
+
+        let enumerator: IMMDeviceEnumerator =
+            unsafe { MMDeviceEnumerator::new().context("MMDeviceEnumerator")? };
+
+        let device = unsafe {
+            enumerator.GetDefaultAudioEndpoint(eRender, eConsole)
+        }.context("GetDefaultAudioEndpoint")?;
+
+        // TODO: more API calls
+        anyhow::bail!("WASAPI loopback WIP")
+    }
+
     pub fn loopback_device_name() -> String {
         "WASAPI Loopback (系统声音)".to_string()
     }
