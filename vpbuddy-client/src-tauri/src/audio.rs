@@ -698,15 +698,12 @@ mod wasapi_loopback {
     use anyhow::{Context, Result};
     use std::sync::mpsc;
 
-    use windows::core::GUID;
     use windows::Win32::Media::Audio::{
-        eConsole, eRender, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator,
+        eConsole, eRender, IAudioClient,
     };
     use windows::Win32::System::Com::{
-        CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
+        CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED,
     };
-
-    const REFTIMES_PER_SEC: i64 = 10_000_000;
 
     pub struct WindowsLoopback {
         client: IAudioClient,
@@ -721,16 +718,7 @@ mod wasapi_loopback {
 
     pub fn create_loopback() -> Result<(mpsc::Receiver<Vec<i16>>, u32, WindowsLoopback)> {
         unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok(); }
-
-        let enumerator: IMMDeviceEnumerator =
-            unsafe { MMDeviceEnumerator::new().context("MMDeviceEnumerator")? };
-
-        let device = unsafe {
-            enumerator.GetDefaultAudioEndpoint(eRender, eConsole)
-        }.context("GetDefaultAudioEndpoint")?;
-
-        // TODO: more API calls
-        anyhow::bail!("WASAPI loopback WIP")
+        anyhow::bail!("WIP")
     }
 
     pub fn loopback_device_name() -> String {
