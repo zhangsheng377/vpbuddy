@@ -44,13 +44,14 @@
 | **症状** | 即使文档内容无实质变化（"仅 last_updated 时间戳变化"），gkd 仍在每 6s 扫描时重复触发 agent 生成 |
 | **建议** | 对比 `demo_version` 已有版本的 content hash，只有实质变化才重新触发 |
 
-### #35 P2: SSE 反复断开重连 + subscriber 数量增长
+### #35 P2: SSE 反复断开重连 + subscriber 泄漏
 
 | 字段 | 值 |
 |------|-----|
-| **文件** | `realtime_server.py` + `main.rs` `run_sse_loop` |
-| **症状** | `SSE 断开: error decoding response body` → 重连 → subscribers=1→2→3 |
-| **建议** | 旧 SSE 连接关闭时同步清理订阅记录，客户端重连前等 1s debounce |
+| **文件** | `src/vpbuddy/realtime_server.py` + `vpbuddy-client/src-tauri/src/main.rs` |
+| **症状** | 日志中 `SSE 断开: error decoding response body` → 客户端重连 → `subscribers=1→2→3`，旧订阅残留不清理 |
+| **根因** | `_remove_subscriber` 只在 `sse_generator()` 的 `finally` 块中执行。如果 generator 的 `finally` 因某种原因没被触发（FastAPI/uvicorn generator 协程未被 GC、TCP RST 无感知等），旧队列残留。另外代码里写了 `cleanup_meetings_without_subscribers()` 但**没有任何地方定期调用它**，没有兜底清理机制。 |
+| **建议** | 两处修复: (1) 客户端收到 SSE 200 时把旧连接 `reqwest::Response` drop 掉再建新的，防止新旧并存；(2) 服务端 gkd 守护线程每次扫描时顺带调 `cleanup_meetings_without_subscribers()` 清理孤儿队列 |
 
 ---
 
