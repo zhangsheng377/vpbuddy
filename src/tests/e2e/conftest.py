@@ -420,10 +420,15 @@ def playwright_browser():
 
 @pytest.fixture
 def page(playwright_browser, vite_preview_url):
-    """单 page 上下文, 注入 Tauri stub. 不依赖 GPU server (UI-only 测试用)."""
+    """单 page 上下文, 注入 Tauri stub + E2E token. 不依赖 GPU server (UI-only 测试用)."""
+    token = _e2e_token()
     ctx = playwright_browser.new_context()
     ctx.add_init_script(
-        f"window.__VP_E2E_GPU_URL__ = {GPU_SERVER_URL!r};\n{TAURI_STUB_SCRIPT}"
+        f"window.__VP_E2E_GPU_URL__ = {GPU_SERVER_URL!r};\n"
+        f"window.__VP_E2E_TOKEN__ = {token!r};\n"
+        f"localStorage.setItem('vpbuddy-token', {token!r});\n"
+        f"localStorage.setItem('vpbuddy-email', 'e2e_auto@vpbuddy.test');\n"
+        f"{TAURI_STUB_SCRIPT}"
     )
     pg = ctx.new_page()
     pg.on("console", lambda msg: print(f"[BROWSER {msg.type}] {msg.text}"))
