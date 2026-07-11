@@ -386,8 +386,7 @@ pub async fn run_realtime_loop(
                 .collect();
             let frame_len = pcm_bytes.len() as u64;
             if let Err(e) = ws.send_frame(pcm_bytes).await {
-                log::error!("实时模式: WS 发送失败: {e}");
-                let _ = app_stats.emit("error", format!("实时转写连接断开: {e}"));
+                log::warn!("实时模式: WS 发送失败: {e}");
                 capturing.store(false, Ordering::SeqCst);
                 break;
             }

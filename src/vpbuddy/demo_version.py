@@ -30,6 +30,8 @@ from datetime import datetime, timezone
 UTC = timezone.utc
 from pathlib import Path
 
+from .ui_server import DOCS_DIR
+
 logger = logging.getLogger(__name__)
 
 
@@ -39,9 +41,8 @@ logger = logging.getLogger(__name__)
 def _meeting_dir(meeting_id: str, docs_dir: Path | None = None) -> Path:
     """获取会议文档目录."""
     if docs_dir is None:
-        from .ui_server import DOCS_DIR
         docs_dir = DOCS_DIR
-    return Path(docs_dir) / meeting_id
+    return Path(docs_dir).resolve() / meeting_id
 
 
 def _manifest_path(meeting_id: str, docs_dir: Path | None = None) -> Path:

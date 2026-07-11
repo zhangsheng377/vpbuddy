@@ -316,22 +316,17 @@ def _meeting_context_for_chat(meeting_id: str) -> dict[str, Any]:
     except Exception:
         pass
 
-    # 上传目录下的文本文件内容（直接从磁盘读，不从 KB 搜）
+    # 上传目录下的文件列表（只给路径，agent 自己用 read_file 读）
     recent_uploads: list[dict[str, Any]] = []
     try:
         upload_dir = DATA_DIR / "uploads" / meeting_id
         if upload_dir.is_dir():
-            for f in sorted(upload_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)[:5]:
+            for f in sorted(upload_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)[:10]:
                 if not f.is_file():
                     continue
-                content = ""
-                try:
-                    content = f.read_text(encoding="utf-8", errors="replace")
-                except Exception:
-                    content = f"(二进制文件，{f.stat().st_size} bytes)"
                 recent_uploads.append({
                     "filename": f.name,
-                    "content": content[:5000],
+                    "path": str(f),
                     "size": f.stat().st_size,
                 })
     except Exception:

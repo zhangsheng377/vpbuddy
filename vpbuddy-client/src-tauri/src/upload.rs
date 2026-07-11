@@ -63,13 +63,32 @@ impl BailianWsHandle {
         let disconnected_send = disconnected.clone();
 
         let send_handle = tokio::spawn(async move {
-            while let Some(data) = rx.recv().await {
-                if stop2.load(std::sync::atomic::Ordering::Relaxed) {
-                    break;
-                }
-                if write.send(Message::Binary(data)).await.is_err() {
-                    disconnected_send.store(true, std::sync::atomic::Ordering::SeqCst);
-                    break;
+            let mut ping_tick = tokio::time::interval(std::time::Duration::from_secs(30));
+            loop {
+                tokio::select! {
+                    data = rx.recv() => {
+                        match data {
+                            Some(data) => {
+                                if stop2.load(std::sync::atomic::Ordering::Relaxed) {
+                                    break;
+                                }
+                                if write.send(Message::Binary(data)).await.is_err() {
+                                    disconnected_send.store(true, std::sync::atomic::Ordering::SeqCst);
+                                    break;
+                                }
+                            }
+                            None => break,
+                        }
+                    }
+                    _ = ping_tick.tick() => {
+                        if stop2.load(std::sync::atomic::Ordering::Relaxed) {
+                            break;
+                        }
+                        let ping = serde_json::json!({"type": "ping"});
+                        if write.send(Message::Text(ping.to_string())).await.is_err() {
+                            break;
+                        }
+                    }
                 }
             }
             let _ = write
