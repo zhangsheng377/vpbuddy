@@ -788,6 +788,7 @@ mod wasapi_loopback {
     use std::sync::{mpsc, Arc};
 
     use windows::core::GUID;
+    use windows::core::IUnknown;
     use windows::Win32::Media::Audio::{
         eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDevice, IMMDeviceEnumerator,
         AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
@@ -821,7 +822,7 @@ mod wasapi_loopback {
 
     fn immdevice_activate(device: &IMMDevice, iid: &GUID, clsctx: u32) -> Result<IAudioClient> {
         unsafe {
-            let this: *mut std::ffi::c_void = std::mem::transmute_copy(device);
+            let this = *(device as *const IMMDevice as *const *mut std::ffi::c_void);
             let vtbl = *(this as *const *const *const ());
             let fptr: *const () = *((*vtbl).add(3));
             let activate: RawActivate = std::mem::transmute_copy(&fptr);
@@ -840,7 +841,7 @@ mod wasapi_loopback {
 
     fn iaudioclient_getservice(client: &IAudioClient, iid: &GUID) -> Result<IAudioCaptureClient> {
         unsafe {
-            let this: *mut std::ffi::c_void = std::mem::transmute_copy(client);
+            let this = *(client as *const IAudioClient as *const *mut std::ffi::c_void);
             let vtbl = *(this as *const *const *const ());
             let fptr: *const () = *((*vtbl).add(14));
             let gs: RawGetService = std::mem::transmute_copy(&fptr);
@@ -867,7 +868,7 @@ mod wasapi_loopback {
         audio_session_guid: Option<&GUID>,
     ) -> Result<()> {
         unsafe {
-            let this: *mut std::ffi::c_void = std::mem::transmute_copy(client);
+            let this = *(client as *const IAudioClient as *const *mut std::ffi::c_void);
             let vtbl = *(this as *const *const *const ());
             let fptr: *const () = *((*vtbl).add(7));
             let init: RawInitialize = std::mem::transmute_copy(&fptr);
@@ -888,7 +889,7 @@ mod wasapi_loopback {
         unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok(); }
 
         let enumerator: IMMDeviceEnumerator = unsafe {
-            CoCreateInstance(&CLSID_MMDEVICE_ENUMERATOR, std::ptr::null_mut(), CLSCTX_ALL)
+            CoCreateInstance(&CLSID_MMDEVICE_ENUMERATOR, None::<&IUnknown>, CLSCTX_ALL)
         }.context("CoCreateInstance(MMDeviceEnumerator) 失败")?;
 
         let device: IMMDevice = unsafe {
