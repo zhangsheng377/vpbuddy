@@ -171,62 +171,61 @@ async def startup_warmup():
         logger.warning("材料存储初始化失败: %s", e)
         print(f"[fastapi_app] 材料存储初始化失败: {e}", flush=True)
 
-    # 全局文档踢动器 (独立于 WS 生命周期)
-    import asyncio as _asyncio2
+    # 全局文档踢动器 (独立于 WS 生命周期) — 用 daemon thread 兜底
+    import threading as _threading
+    import hashlib as _hashlib_gkd
+    import time as _time_gkd
+    from ..task_manager import get_task_manager as _get_tm
+    from ..storage import MeetingStorage as _MS_gkd
+    from ..sub_session_controller import _dispatch_kind as _dk, BATCH_DOCS_KIND as _bk, DEMO_KIND as _dmk
 
-    async def _global_kick_docs():
-        import hashlib as _hashlib
+    _gkd_st = _MS_gkd(DATA_DIR)
+    _gkd_last: dict[str, str] = {}
+
+    def _gkd_runner(mid: str):
+        from concurrent.futures import ThreadPoolExecutor
         try:
-            from ..task_manager import get_task_manager
-            from ..storage import MeetingStorage
-            from ..sub_session_controller import _dispatch_kind, BATCH_DOCS_KIND, DEMO_KIND
-
-            _meeting_last_hash: dict[str, str] = {}
-            _first_pass = True
-            _st = MeetingStorage(DATA_DIR)
-
-            def _runner(mid: str):
-                from concurrent.futures import ThreadPoolExecutor
-                kinds = [BATCH_DOCS_KIND, DEMO_KIND]
-                with ThreadPoolExecutor(max_workers=2) as ex:
-                    futures = {}
-                    for k in kinds:
-                        futures[k] = ex.submit(_dispatch_kind, mid, k, False)
-                    for k, f in futures.items():
-                        try:
-                            f.result(timeout=300)
-                        except Exception:
-                            pass
-
-            while True:
-                await _asyncio2.sleep(6)
-                try:
-                    all_mids = _st.list_meetings()
-                    recent = [m for m in all_mids if not m.endswith((".chat", ".stream"))][:20]
-                    logger.info("[global_kick_docs] scanning %d recent meetings", len(recent))
-                    for mid in recent:
-                        if not _st.exists(mid):
-                            continue
-                        try:
-                            state = _st.load(mid)
-                        except Exception:
-                            continue
-                        cur = state.cleaned_text or ""
-                        if len(cur) <= 10:
-                            continue
-                        cur_hash = _hashlib.md5(cur.encode()).hexdigest()
-                        prev = _meeting_last_hash.get(mid, "")
-                        if cur_hash != prev or _first_pass:
-                            _meeting_last_hash[mid] = cur_hash
-                            logger.info("[global_kick_docs] triggering docs for %s len=%d", mid, len(cur))
-                            get_task_manager().submit(mid, _runner)
-                    _first_pass = False
-                except Exception:
-                    logger.warning("global_kick_docs loop error", exc_info=True)
+            kinds = [_bk, _dmk]
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                futures = {k: ex.submit(_dk, mid, k, False) for k in kinds}
+                for f in futures.values():
+                    try:
+                        f.result(timeout=300)
+                    except Exception:
+                        pass
         except Exception:
-            logger.warning("global_kick_docs init failed", exc_info=True)
+            pass
 
-    _asyncio2.create_task(_global_kick_docs())
+    def _gkd_loop():
+        _first = True
+        _tm = _get_tm()
+        while True:
+            _time_gkd.sleep(6)
+            try:
+                all_mids = _gkd_st.list_meetings()
+                recent = [m for m in all_mids if not m.endswith((".chat", ".stream"))][:20]
+                logger.info("[global_kick_docs] scanning %d recent meetings", len(recent))
+                for mid in recent:
+                    try:
+                        state = _gkd_st.load(mid)
+                    except Exception:
+                        continue
+                    cur = state.cleaned_text or ""
+                    if len(cur) <= 10:
+                        continue
+                    cur_hash = _hashlib_gkd.md5(cur.encode()).hexdigest()
+                    prev = _gkd_last.get(mid, "")
+                    if cur_hash != prev or _first:
+                        _gkd_last[mid] = cur_hash
+                        logger.info("[global_kick_docs] triggering docs for %s len=%d", mid, len(cur))
+                        _tm.submit(mid, _gkd_runner)
+                _first = False
+            except Exception:
+                logger.warning("global_kick_docs loop error", exc_info=True)
+
+    _gkd_thread = _threading.Thread(target=_gkd_loop, daemon=True, name="gkd")
+    _gkd_thread.start()
+    logger.info("global_kick_docs daemon thread started")
 
 
 # =============================================================================
