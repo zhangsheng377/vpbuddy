@@ -687,9 +687,26 @@ def trigger_sub_session(meeting_id: str, doc_kind: str, dry_run: bool = False) -
                             "file": v_result["file"],
                         })
                     except Exception as e:
-                        logger.warning(f"[{mid}/{doc_kind}] push SSE demo-version failed: {e}")
+                        logger.warning(f"[{meeting_id}/{doc_kind}] push SSE demo-version failed: {e}")
                     result["demo_version"] = v_result["version"]
                     result["demo_versions_count"] = len(v_result["manifest"])
+                elif v_result.get("skipped") == "placeholder":
+                    # v0.22.5: 占位 demo (无会议内容) — 不推 SSE doc-update, 避免前端看到 v1="等待更多会议内容"
+                    logger.info(f"[{meeting_id}/demo] 跳过占位版本: {v_result.get('error')}")
+                    result["demo_placeholder_skipped"] = True
+                    # 推 doc-update 用 status=placeholder 告知前端可以忽略
+                    try:
+                        from .realtime_server import push_event
+                        push_event(meeting_id, "doc-update", {
+                            "kind": doc_kind,
+                            "status": "placeholder",
+                            "meeting_id": meeting_id,
+                            "updated_at": datetime.now().isoformat(),
+                            "is_demo": True,
+                        })
+                    except Exception as e:
+                        logger.warning(f"[{meeting_id}/demo] push SSE placeholder failed: {e}")
+                    return result
                 else:
                     logger.warning(f"[{meeting_id}/demo] 写新版本失败: {v_result.get('error')}")
             except Exception as e:

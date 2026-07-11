@@ -182,7 +182,7 @@ def _gkd_loop():
                 except Exception:
                     continue
                 cur = state.cleaned_text or ""
-                if len(cur) <= 10:
+                if len(cur) <= 50:
                     continue
                 cur_hash = _hashlib_gkd.md5(cur.encode()).hexdigest()
                 prev = _gkd_last.get(mid, "")

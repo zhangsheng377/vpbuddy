@@ -182,6 +182,14 @@ def write_demo_version(
     if not html or not html.strip():
         return {"ok": False, "error": "html 为空"}
 
+    # v0.22.5: 禁止占位 demo 写入版本 — 无会议内容时 LLM/fallback 返 "等待更多会议内容" / "暂无会议内容"
+    html_check = html.strip()
+    if (
+        len(html_check) < 3000
+        and ("暂无会议内容" in html_check or "等待更多会议内容" in html_check)
+    ):
+        return {"ok": False, "error": "demo 内容为占位 (等待更多会议内容)", "skipped": "placeholder"}
+
     try:
         md = _meeting_dir(meeting_id, docs_dir)
         md.mkdir(parents=True, exist_ok=True)
