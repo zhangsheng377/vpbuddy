@@ -1,7 +1,7 @@
 # VPBuddy 问题跟踪
 
 > 创建: 2026-07-04
-> 最后更新: 2026-07-12
+> 最后更新: 2026-07-12 (v0.22.6 全收口)
 > 来源: 代码审查报告 [CODE_REVIEW.md](./CODE_REVIEW.md) + GitHub Issues #32–#37
 
 ---
@@ -14,62 +14,40 @@
 
 ---
 
-## ✅ 已完成 (v0.22.4–v0.22.5)
+## ✅ 已完成 (v0.22.4–v0.22.6)
 
-| # | 问题 | 状态 | 效果 |
+| # | 问题 | 修复 | 提交 |
 |---|------|------|------|
-| #33 P0-2 | WS 失败设 `capturing=false` 连带杀 SSE → demo 消失 | ✅ v0.22.5 | WS 失败只 break，不碰 flag |
-| #35 P0-1 | `_gkd_runner(mid: str)` 签名不匹配 task_manager 的 `runner(gen_id, mid)` | ✅ 707a50e | gkd 文档调度正常触发 |
-| SSE-lifetime | SSE 与音频采集绑死 (停采集=断 SSE)，demo-new-version 在 SSE 断开后才生成 | ✅ v0.22.4 | sse_active 独立 flag，close 后保持 30s |
-| demo-placeholder | 空会议生成 v1="等待更多会议内容"占位 demo，真实 demo 到 v3/v4 但版本列表不刷新 | ✅ v0.22.5 | 占位拒绝写入 + demo-new-version 事件链路完整 |
-| bailian-key | 服务端 `nohup vpbuddy ui` 启动无百炼 key → ASR 报 401 | ✅ v0.22.4 | 必须 `bash run.sh` 启动，文档已更新 |
+| **#32 P0-1** WS断连→杀SSE | WS `send_frame()` 失败只 break, 不设 `capturing=false` | v0.22.5 |
+| **#32 P0-2** SSE与采集耦合 | 新增 `sse_active` 独立 flag, 停采集后保持30s | v0.22.4 |
+| **#33 P0-1** `_gkd_runner(mid)` 签名错误 | 改为 `_gkd_runner(gen_id, mid)` 匹配 task_manager | v0.22.5 |
+| **#33 P0-2** WS失败设 `capturing=false` | 同 #32 P0-1 | v0.22.5 |
+| **#33 P0-3** SSE `doc-update` 推全量文档 | 去掉 `content` 字段, 只推 `{kind, status, doc_size}` | v0.22.6 |
+| **#33 P0-4** KB content_hash 跨用户误判重复 | `rag.get(where=)` 加 `user_id` 过滤 | v0.22.6 |
+| **#35 P0-1** `_gkd_runner` 签名错误 | 同 #33 P0-1 | v0.22.5 |
+| **#35 P1** 相同内容重复调度 Agent | `_gkd_loop` 结合 `cleaned_text` + `latest_demo_content_hash()` 双重 hash | v0.22.6 |
+| **#35 P2** SSE subscriber 泄漏 | `_gkd_loop` 每轮扫描后调 `cleanup_meetings_without_subscribers()` | v0.22.6 |
+| demo占位版本 | 空会议生成 v1="等待更多会议内容", 真实 demo 到 v3/v4 但版本列表不刷新 | `write_demo_version` 拒绝占位写入 + `demo-new-version` 事件链路完整 | v0.22.5 |
+| 百炼 API key 丢失 | `nohup vpbuddy ui` 无 key → ASR 401 | 必须 `bash run.sh` 启动 | v0.22.4 |
+| chat 上传污染 prompt | 文本文件内容完整塞进 prompt | 改为只放文件路径, agent 用 read_file 按需读取 | v0.22.6 |
 
 ---
 
-## 🟡 P2 — 仍存在 (GitHub Issues #32/#33/#35 剩余项)
+## 🟢 已关闭 (不修)
 
-### #33 P0-3: SSE `doc-update` 推送全量文档内容
-
-| 字段 | 值 |
-|------|-----|
-| **文件** | `sub_session_controller.py` L698-709 |
-| **症状** | 每个 doc-update 的 `content` 字段包含完整 markdown/HTML（单条 18KB+），频繁生成时日志爆炸 + 前端全量解析 |
-| **建议** | SSE 只推 `{kind, status, doc_size}` 元信息，客户端按需 `GET /api/meetings/{id}/docs/{kind}` |
-
-### #35 P1: 相同内容重复调度 Agent
-
-| 字段 | 值 |
-|------|-----|
-| **文件** | `fastapi_app.py` _gkd_loop |
-| **症状** | 即使文档内容无实质变化（"仅 last_updated 时间戳变化"），gkd 仍在每 6s 扫描时重复触发 agent 生成 |
-| **建议** | 对比 `demo_version` 已有版本的 content hash，只有实质变化才重新触发 |
-
-### #35 P2: SSE 反复断开重连 + subscriber 泄漏
-
-| 字段 | 值 |
-|------|-----|
-| **文件** | `src/vpbuddy/realtime_server.py` + `vpbuddy-client/src-tauri/src/main.rs` |
-| **症状** | 日志中 `SSE 断开: error decoding response body` → 客户端重连 → `subscribers=1→2→3`，旧订阅残留不清理 |
-| **根因** | `_remove_subscriber` 只在 `sse_generator()` 的 `finally` 块中执行。如果 generator 的 `finally` 因某种原因没被触发（FastAPI/uvicorn generator 协程未被 GC、TCP RST 无感知等），旧队列残留。另外代码里写了 `cleanup_meetings_without_subscribers()` 但**没有任何地方定期调用它**，没有兜底清理机制。 |
-| **建议** | 两处修复: (1) 客户端收到 SSE 200 时把旧连接 `reqwest::Response` drop 掉再建新的，防止新旧并存；(2) 服务端 gkd 守护线程每次扫描时顺带调 `cleanup_meetings_without_subscribers()` 清理孤儿队列 |
-
----
-
-## 🟢 P3 — 可优化 (GitHub Issues #34/#36/#37)
-
-| # | 问题 | 来源 |
-|---|------|------|
-| #36 | ASR 降噪后转写未闭环 + 图片/PDF 材料无法驱动 Demo Agent | [issue](https://github.com/zhangsheng377/vpbuddy/issues/36) |
-| #34 | 请求发布版本化 API、OpenAPI 契约、WS/SSE 协议与兼容性策略 | [issue](https://github.com/zhangsheng377/vpbuddy/issues/34) |
-| #37 | 语音指定历史版本修改 + Agent 自主检索决策 + 个性化经验闭环 | [issue](https://github.com/zhangsheng377/vpbuddy/issues/37) |
+| # | 问题 | 关闭理由 |
+|---|------|----------|
+| #36 | ASR 降噪 + 材料→Demo | chat 上传已走路径注入（不塞内容）；材料→Demo Agent 通过 `parent_session_id` fork 自动继承上下文；噪音过滤是现有链路的优化项非 bug |
+| #37 | 语音版本 + Agent 记忆 | 新 feature 大功能，不在当前 milestone 范围 |
+| #34 | API 契约稳定性 | `docs/api-reference.md` v0.22.6 已是最新，api 契约属非阻塞项 |
 
 ---
 
 ## 统计
 
-| 级别 | 已完成 | 待处理 |
-|------|--------|--------|
-| 🔴 P0/P1 | 4 (#33-P0-2, #33-P0-1, SSE-lifetime, demo-placeholder) | 2 (#33 P0-3 SSE全量, #35 P1 重复调度) |
-| 🟡 P2 | 1 (bailian-key) | 1 (#35 P2 SSE subscriber 泄漏) |
-| 🟢 P3 | — | 3 (#34 API契约, #36 ASR/材料, #37 语音版本) |
-| **合计** | **5** | **6** |
+| 级别 | 已修复 | 已关闭(不修) | 仍待处理 |
+|------|--------|-------------|----------|
+| 🔴 P0/P1 | 5 (#32-P0-1, #32-P0-2, #33-P0-1~4) | — | 0 |
+| 🟡 P2 | 4 (#35-P1, #35-P2, chat污染, KB去重) | #34, #36 | 0 |
+| 🟢 P3 | — | #37 | 0 |
+| **合计** | **12** | **3** | **0** |

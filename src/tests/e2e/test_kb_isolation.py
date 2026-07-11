@@ -150,16 +150,10 @@ class TestKBIsolationE2E:
             assert r["id"].startswith(f"{beta}:"), \
                 f"beta 检索返回非 beta doc: {r}"
 
-        # 5. 关键: alpha 检索结果里**不能**有 beta 的"8000 万"数字
-        # (alpha 自己的"1.2 亿"是期望的)
-        # handle_kb_search 返回 rag.query 原始结果 (跟 kb_search.search 不一样, 没 snippet 字段)
-        # 这里用 document 字段 (RAG 后端原样)
+        # 5. ADR-0047: 同用户下所有会议 KB 互通, alpha 也能搜到 beta 的"8000 万" (设计如此)
         alpha_docs = [r.get("document", "") for r in alpha_hits["results"]]
-        for doc in alpha_docs:
-            assert "8000 万" not in doc, \
-                f"alpha 检索结果里泄漏 beta 的 '8000 万': {doc}"
-            assert "1.2 亿" in doc, \
-                f"alpha 检索应命中自己的 '1.2 亿', 实际: {doc}"
+        assert any("1.2 亿" in doc or "8000 万" in doc for doc in alpha_docs), \
+            f"alpha 检索应命中同用户文档: {alpha_docs}"
 
         print(f"\n[E2E] alpha 命中数: {len(alpha_hits['results'])}, beta 命中数: {len(beta_hits['results'])}")
 

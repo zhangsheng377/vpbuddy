@@ -47,28 +47,29 @@ def fake_rag(monkeypatch):
 
 
 def test_search_returns_results(fake_rag):
-    out = kb_search.search("mtg1", "Q4 营收")
+    out = kb_search.search("mtg1", "Q4 营收", user_id="user_abc")
     assert out["ok"] is True
     assert out["count"] == 2
     assert out["results"][0]["source"] == "upload:report.pdf"
     assert "Q4 营收" in out["results"][0]["snippet"]
 
 
-def test_search_forces_meeting_id_filter(fake_rag):
-    """强隔离: where 必须带 meeting_id (防 agent 漏传)."""
-    kb_search.search("mtg1", "anything")
-    assert fake_rag.calls[0]["where"] == {"meeting_id": "mtg1"}
+def test_search_forces_user_id_filter(fake_rag):
+    """ADR-0047: where 必须带 user_id (按用户隔离, 不再按 meeting_id)."""
+    kb_search.search("mtg1", "anything", user_id="user_abc")
+    assert "user_id" in fake_rag.calls[0]["where"]
+    assert fake_rag.calls[0]["where"]["user_id"] == "user_abc"
 
 
 def test_search_rejects_empty_meeting_id(fake_rag):
-    out = kb_search.search("", "anything")
+    out = kb_search.search("", "anything", user_id="user_abc")
     assert out["ok"] is False
     assert "meeting_id" in out["error"]
     assert fake_rag.calls == []  # 没真去查
 
 
 def test_search_rejects_empty_query(fake_rag):
-    out = kb_search.search("mtg1", "   ")
+    out = kb_search.search("mtg1", "   ", user_id="user_abc")
     assert out["ok"] is False
     assert "query" in out["error"]
     assert fake_rag.calls == []
@@ -76,9 +77,9 @@ def test_search_rejects_empty_query(fake_rag):
 
 def test_search_clamps_top_k(fake_rag):
     """top_k 越界要 clamp 到 [1, 20]."""
-    kb_search.search("mtg1", "x", top_k=999)
+    kb_search.search("mtg1", "x", user_id="user_abc", top_k=999)
     assert fake_rag.calls[0]["k"] == 20
-    kb_search.search("mtg1", "x", top_k=0)
+    kb_search.search("mtg1", "x", user_id="user_abc", top_k=0)
     assert fake_rag.calls[1]["k"] == 1
 
 
@@ -89,13 +90,13 @@ def test_search_handles_rag_exception(monkeypatch):
             raise RuntimeError("chroma 连不上")
 
     monkeypatch.setattr(rag_backend, "_rag", _Boom())
-    out = kb_search.search("mtg1", "x")
+    out = kb_search.search("mtg1", "x", user_id="user_abc")
     assert out["ok"] is False
     assert "chroma 连不上" in out["error"]
 
 
 def test_snippet_truncated_to_500(fake_rag):
     """snippet 不超过 500 字符 (防 LLM context 爆炸)."""
-    out = kb_search.search("mtg1", "x")
+    out = kb_search.search("mtg1", "x", user_id="user_abc")
     for r in out["results"]:
         assert len(r["snippet"]) <= 500
