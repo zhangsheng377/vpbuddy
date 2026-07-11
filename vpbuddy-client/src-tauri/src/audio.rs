@@ -130,7 +130,8 @@ impl AudioCapture {
             "both" => {
                 #[cfg(target_os = "windows")]
                 {
-                    return Self::new_with_wasapi_both(device_id);
+                    log::warn!("Windows both→mic-only: raw WASAPI COM loopback blocked by windows crate 0.52/0.58 API compat in CI");
+                    return Self::new_with_device_inner(device_id);
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
@@ -778,222 +779,101 @@ pub fn make_wav_header(data_len: u32, sample_rate: u32, channels: u16) -> Vec<u8
 }
 
 // =============================================================================
-// Windows WASAPI Loopback (v0.22.2 — raw COM with manual GUID/WAVEFORMATEX, windows 0.52)
+// Windows WASAPI Loopback (cpal fallback — 等 raw COM 编译成功后替换)
 // =============================================================================
 
 #[cfg(target_os = "windows")]
 mod wasapi_loopback {
     use anyhow::{Context, Result};
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{mpsc, Arc};
-
-    use windows::core::GUID;
-    use windows::core::IUnknown;
-    use windows::Win32::Media::Audio::{
-        eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDevice, IMMDeviceEnumerator,
-        AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
-    };
-    use windows::Win32::System::Com::{CoInitializeEx, CoCreateInstance, CLSCTX_ALL, COINIT_MULTITHREADED};
-
-    const CLSID_MMDEVICE_ENUMERATOR: GUID = GUID::from_values(
-        0xBCDE0395, 0xE52F, 0x467C, [0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E],
-    );
-    const IID_IAUDIO_CLIENT: GUID = GUID::from_values(
-        0x1CB9AD4C, 0xDBFA, 0x4C32, [0xB1, 0x78, 0xC2, 0xF5, 0x68, 0xA7, 0x03, 0xB2],
-    );
-    const IID_IAUDIO_CAPTURE_CLIENT: GUID = GUID::from_values(
-        0xC8ADBD64, 0xE71E, 0x48A0, [0xA4, 0xDE, 0x18, 0x5C, 0x39, 0x5C, 0xD3, 0x17],
-    );
-
-    #[repr(C)]
-    struct WAVEFORMATEX {
-        wFormatTag: u16,
-        nChannels: u16,
-        nSamplesPerSec: u32,
-        nAvgBytesPerSec: u32,
-        nBlockAlign: u16,
-        wBitsPerSample: u16,
-        cbSize: u16,
-    }
-
-    type RawActivate = unsafe extern "system" fn(
-        *mut std::ffi::c_void, *const GUID, u32, *const std::ffi::c_void, *mut *mut std::ffi::c_void,
-    ) -> i32;
-
-    fn immdevice_activate(device: &IMMDevice, iid: &GUID, clsctx: u32) -> Result<IAudioClient> {
-        unsafe {
-            let this = *(device as *const IMMDevice as *const *mut std::ffi::c_void);
-            let vtbl = *(this as *const *const *const ());
-            let fptr: *const () = *((*vtbl).add(3));
-            let activate: RawActivate = std::mem::transmute_copy(&fptr);
-            let mut ppv: *mut std::ffi::c_void = std::ptr::null_mut();
-            let hr = activate(this, iid, clsctx, std::ptr::null(), &mut ppv);
-            if hr != 0 {
-                anyhow::bail!("IMMDevice::Activate HRESULT {:#x}", hr as u32);
-            }
-            Ok(std::mem::transmute_copy(&ppv))
-        }
-    }
-
-    type RawGetService = unsafe extern "system" fn(
-        *mut std::ffi::c_void, *const GUID, *mut *mut std::ffi::c_void,
-    ) -> i32;
-
-    fn iaudioclient_getservice(client: &IAudioClient, iid: &GUID) -> Result<IAudioCaptureClient> {
-        unsafe {
-            let this = *(client as *const IAudioClient as *const *mut std::ffi::c_void);
-            let vtbl = *(this as *const *const *const ());
-            let fptr: *const () = *((*vtbl).add(14));
-            let gs: RawGetService = std::mem::transmute_copy(&fptr);
-            let mut ppv: *mut std::ffi::c_void = std::ptr::null_mut();
-            let hr = gs(this, iid, &mut ppv);
-            if hr != 0 {
-                anyhow::bail!("IAudioClient::GetService HRESULT {:#x}", hr as u32);
-            }
-            Ok(std::mem::transmute_copy(&ppv))
-        }
-    }
-
-    type RawInitialize = unsafe extern "system" fn(
-        *mut std::ffi::c_void, u32, u32, i64, i64, *const WAVEFORMATEX, *const GUID,
-    ) -> i32;
-
-    fn iaudioclient_initialize(
-        client: &IAudioClient,
-        mode: u32,
-        flags: u32,
-        buf_dur: i64,
-        periodicity: i64,
-        wfx: &WAVEFORMATEX,
-        audio_session_guid: Option<&GUID>,
-    ) -> Result<()> {
-        unsafe {
-            let this = *(client as *const IAudioClient as *const *mut std::ffi::c_void);
-            let vtbl = *(this as *const *const *const ());
-            let fptr: *const () = *((*vtbl).add(7));
-            let init: RawInitialize = std::mem::transmute_copy(&fptr);
-            let session_ptr = audio_session_guid.map(|g| g as *const GUID).unwrap_or(std::ptr::null());
-            let hr = init(this, mode, flags, buf_dur, periodicity, wfx, session_ptr);
-            if hr != 0 {
-                anyhow::bail!("IAudioClient::Initialize HRESULT {:#x}", hr as u32);
-            }
-            Ok(())
-        }
-    }
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+    use std::sync::mpsc;
 
     pub struct WindowsLoopback {
-        _client: IAudioClient,
+        _stream: cpal::Stream,
     }
 
     pub fn create_loopback() -> Result<(mpsc::Receiver<Vec<i16>>, u32, WindowsLoopback)> {
-        unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok(); }
+        let host = cpal::default_host();
+        let device = host
+            .default_output_device()
+            .context("找不到默认输出设备用于 loopback")?;
+        let name = device.name().unwrap_or_default();
+        log::info!("WASAPI loopback: 输出设备={name}");
 
-        let enumerator: IMMDeviceEnumerator = unsafe {
-            CoCreateInstance(&CLSID_MMDEVICE_ENUMERATOR, None::<&IUnknown>, CLSCTX_ALL)
-        }.context("CoCreateInstance(MMDeviceEnumerator) 失败")?;
+        let supported = device
+            .supported_output_configs()
+            .context("无法读取输出设备配置")?;
+        let configs: Vec<_> = supported.collect();
+        let cfg = configs
+            .iter()
+            .find(|c| c.channels() == 1)
+            .or_else(|| configs.iter().max_by_key(|c| c.channels()))
+            .context("输出设备无可用配置")?;
 
-        let device: IMMDevice = unsafe {
-            enumerator.GetDefaultAudioEndpoint(eRender, eConsole)
-        }.context("找不到默认输出设备 (loopback)")?;
-
-        let client = immdevice_activate(&device, &IID_IAUDIO_CLIENT, CLSCTX_ALL.0)
-            .context("Activate IAudioClient 失败")?;
-
-        let sample_rate: u32 = 48000;
-        let channels: usize = 2;
-        let bits_per_sample: usize = 32;
-
-        let wfx = WAVEFORMATEX {
-            wFormatTag: 0xFFFE,
-            nChannels: channels as u16,
-            nSamplesPerSec: sample_rate,
-            nAvgBytesPerSec: sample_rate * channels as u32 * (bits_per_sample as u32 / 8),
-            nBlockAlign: channels as u16 * (bits_per_sample as u16 / 8),
-            wBitsPerSample: bits_per_sample as u16,
-            cbSize: 22,
+        let native_sample_rate = cfg.max_sample_rate().0;
+        let config = cpal::StreamConfig {
+            channels: cfg.channels(),
+            sample_rate: cpal::SampleRate(native_sample_rate),
+            buffer_size: cpal::BufferSize::Default,
         };
-
-        iaudioclient_initialize(
-            &client,
-            AUDCLNT_SHAREMODE_SHARED.0,
-            AUDCLNT_STREAMFLAGS_LOOPBACK,
-            0,
-            0,
-            &wfx,
-            None,
-        ).context("IAudioClient::Initialize (LOOPBACK) 失败")?;
-
-        let capture_client = iaudioclient_getservice(&client, &IID_IAUDIO_CAPTURE_CLIENT)
-            .context("GetService IAudioCaptureClient 失败")?;
-
-        unsafe { client.Start().context("IAudioClient::Start 失败")?; }
-
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop_clone = stop.clone();
+        let channels = cfg.channels() as usize;
         let (tx, rx) = mpsc::sync_channel::<Vec<i16>>(64);
-        let bits = bits_per_sample;
-        let ch = channels;
 
-        std::thread::spawn(move || {
-            while !stop_clone.load(Ordering::SeqCst) {
-                let mut packet_len = 0u32;
-                if unsafe { capture_client.GetNextPacketSize(&mut packet_len) }.is_err() {
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                    continue;
-                }
-                while packet_len > 0 {
-                    let mut data: *mut u8 = std::ptr::null_mut();
-                    let mut num_frames = 0u32;
-                    let mut flags = 0u32;
-                    if unsafe {
-                        capture_client.GetBuffer(&mut data, &mut num_frames, &mut flags, None, None)
-                    }.is_err() {
-                        break;
-                    }
-                    if flags == 0 && !data.is_null() && num_frames > 0 {
-                        let nf = num_frames as usize;
-                        let samples: Vec<i16> = if bits == 32 {
-                            downmix_f32(unsafe { std::slice::from_raw_parts(data as *const f32, nf * ch) }, ch)
-                        } else if bits == 16 {
-                            downmix_i16(unsafe { std::slice::from_raw_parts(data as *const i16, nf * ch) }, ch)
-                        } else {
-                            Vec::new()
-                        };
-                        if !samples.is_empty() {
-                            let _ = tx.try_send(samples);
+        let stream = device
+            .build_input_stream_raw(
+                &config,
+                cfg.sample_format(),
+                move |data, _info| {
+                    let samples: Vec<i16> = match data.sample_format() {
+                        cpal::SampleFormat::F32 => data
+                            .as_slice::<f32>()
+                            .unwrap()
+                            .iter()
+                            .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
+                            .collect(),
+                        cpal::SampleFormat::I16 => data.as_slice::<i16>().unwrap().to_vec(),
+                        cpal::SampleFormat::U16 => data
+                            .as_slice::<u16>()
+                            .unwrap()
+                            .iter()
+                            .map(|&s| (s as i32 - 32768) as i16)
+                            .collect(),
+                        _ => {
+                            let mut v = Vec::new();
+                            v.resize(data.len() / data.sample_format().sample_size(), 0);
+                            v
                         }
+                    };
+                    if channels == 2 {
+                        let mono: Vec<i16> = samples
+                            .chunks(2)
+                            .map(|ch| ((ch[0] as i32 + ch[1] as i32) / 2) as i16)
+                            .collect();
+                        let _ = tx.try_send(mono);
+                    } else if channels > 2 {
+                        let mono: Vec<i16> = samples
+                            .chunks(channels)
+                            .map(|ch| {
+                                let sum: i32 = ch.iter().map(|&s| s as i32).sum();
+                                (sum / channels as i32) as i16
+                            })
+                            .collect();
+                        let _ = tx.try_send(mono);
+                    } else {
+                        let _ = tx.try_send(samples);
                     }
-                    unsafe { let _ = capture_client.ReleaseBuffer(num_frames); }
-                    if unsafe { capture_client.GetNextPacketSize(&mut packet_len) }.is_err() {
-                        packet_len = 0;
-                    }
-                }
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            unsafe { let _ = client.Stop(); }
-        });
+                },
+                move |err| {
+                    log::error!("WASAPI loopback stream error: {err}");
+                },
+                None,
+            )
+            .context("构建 loopback 输入流失败")?;
 
-        Ok((rx, sample_rate, WindowsLoopback { _client: client }))
-    }
+        stream.play().context("启动 loopback 流失败")?;
 
-    fn downmix_f32(floats: &[f32], ch: usize) -> Vec<i16> {
-        match ch {
-            1 => floats.iter().map(|&s| (s.clamp(-1.0f32, 1.0f32) * 32767.0f32) as i16).collect(),
-            2 => floats.chunks(2).map(|c| (((c[0] + c[1]) * 0.5f32).clamp(-1.0f32, 1.0f32) * 32767.0f32) as i16).collect(),
-            n => floats.chunks(n).map(|c| {
-                ((c.iter().sum::<f32>() / n as f32).clamp(-1.0f32, 1.0f32) * 32767.0f32) as i16
-            }).collect(),
-        }
-    }
-
-    fn downmix_i16(ints: &[i16], ch: usize) -> Vec<i16> {
-        match ch {
-            1 => ints.to_vec(),
-            2 => ints.chunks(2).map(|c| ((c[0] as i32 + c[1] as i32) / 2) as i16).collect(),
-            n => ints.chunks(n).map(|c| {
-                (c.iter().map(|&s| s as i32).sum::<i32>() / n as i32) as i16
-            }).collect(),
-        }
+        let guard = WindowsLoopback { _stream: stream };
+        Ok((rx, native_sample_rate, guard))
     }
 
     pub fn loopback_device_name() -> String {
