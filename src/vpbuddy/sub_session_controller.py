@@ -712,7 +712,7 @@ def trigger_sub_session(meeting_id: str, doc_kind: str, dry_run: bool = False) -
             except Exception as e:
                 logger.warning(f"[{meeting_id}/demo] demo_version integration failed: {e}")
 
-        # 推送 SSE: 文档生成完成
+        # 推送 SSE: 文档生成完成 (v0.22.5: 只推元信息, 不推全量 content — #33 P0-3)
         try:
             from .realtime_server import push_event
             push_event(meeting_id, "doc-update", {
@@ -720,7 +720,6 @@ def trigger_sub_session(meeting_id: str, doc_kind: str, dry_run: bool = False) -
                 "status": "stored",
                 "doc_size": result["doc_size"],
                 "meeting_id": meeting_id,
-                "content": content,
                 "updated_at": datetime.now().isoformat(),
                 "is_demo": doc_kind == "demo",
             })

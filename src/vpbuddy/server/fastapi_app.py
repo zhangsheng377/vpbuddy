@@ -185,12 +185,27 @@ def _gkd_loop():
                 if len(cur) <= 50:
                     continue
                 cur_hash = _hashlib_gkd.md5(cur.encode()).hexdigest()
+                # v0.22.5 #35 P1: 也 hash 最新 demo 内容 — cleaned_text 微小变化不一定需要重新生成
+                try:
+                    from ..demo_version import latest_demo_content_hash as _ldh_gkd
+                    _dh = _ldh_gkd(mid) or ""
+                    cur_hash = _hashlib_gkd.md5((cur + _dh).encode()).hexdigest()
+                except Exception:
+                    pass
                 prev = _gkd_last.get(mid, "")
                 if cur_hash != prev or _gkd_first:
                     _gkd_last[mid] = cur_hash
                     print(f"[gkd] triggering docs for meeting={mid} len={len(cur)}", flush=True)
                     _tm.submit(mid, _gkd_runner)
             _gkd_first = False
+            # v0.22.5 #35 P2: 每轮扫描顺便清理孤儿 SSE subscriber
+            try:
+                from ..realtime_server import cleanup_meetings_without_subscribers as _cu_gkd
+                _orphan = _cu_gkd()
+                if _orphan:
+                    print(f"[gkd] cleaned {_orphan} orphan subscribers", flush=True)
+            except Exception:
+                pass
         except Exception:
             _gkd_logger.warning("loop error", exc_info=True)
             print(f"[gkd] loop error", flush=True)

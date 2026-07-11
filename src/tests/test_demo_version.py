@@ -293,3 +293,78 @@ def test_sub_session_pushes_demo_new_version_event(tmp_path, monkeypatch):
     # 但 manifest 此时不存在于文件, 所以 write_demo_version 自己 load → 触发迁移 → v1 入 manifest,
     # 但 next_version 在 write 开头调, 返回 2 ... 具体实现见源码)
     assert pushed[0][2]["version"] in (1, 2)
+
+
+# ── v0.22.5: placeholder 拒绝 ──
+
+
+def test_placeholder_html_rejected_1(docs_dir):
+    """HTML < 3KB 且含"暂无会议内容" → 拒绝写入版本."""
+    html = "<html><body><h1>暂无会议内容</h1><p>等待更多发言</p></body></html>"
+    out = demo_version.write_demo_version("m1", html, docs_dir=docs_dir)
+    assert out["ok"] is False
+    assert out.get("skipped") == "placeholder"
+
+
+def test_placeholder_html_rejected_2(docs_dir):
+    """HTML < 3KB 且含"等待更多会议内容" → 拒绝写入版本."""
+    html = "<html><body><p>等待更多会议内容，无法制作 demo</p></body></html>"
+    out = demo_version.write_demo_version("m1", html, docs_dir=docs_dir)
+    assert out["ok"] is False
+    assert out.get("skipped") == "placeholder"
+
+
+def test_placeholder_html_not_rejected_if_large(docs_dir):
+    """HTML > 3KB 即使含 placeholder 关键词, 也不拒绝 (可能是真 demo + 偶然含词)."""
+    html = "<html><body><h1>等待更多会议内容</h1>" + "x" * 3000 + "</body></html>"
+    out = demo_version.write_demo_version("m1", html, docs_dir=docs_dir)
+    assert out["ok"] is True
+
+
+def test_placeholder_html_not_rejected_if_no_keyword(docs_dir):
+    """HTML < 3KB 但不含 placeholder 关键词 → 正常写入."""
+    html = "<html><body><h1>正常会议 demo</h1></body></html>"
+    out = demo_version.write_demo_version("m1", html, docs_dir=docs_dir)
+    assert out["ok"] is True
+
+
+def test_placeholder_rejected_does_not_create_file(docs_dir):
+    """被拒绝的版本不创建文件."""
+    html = "<html><body>暂无会议内容</body></html>"
+    demo_version.write_demo_version("m1", html, docs_dir=docs_dir)
+    assert not (docs_dir / "m1" / "demo_v1.html").exists()
+
+
+# ── v0.22.5: latest_demo_content_hash ──
+
+
+def test_latest_demo_content_hash_no_versions(docs_dir):
+    """无版本时返回 None."""
+    assert demo_version.latest_demo_content_hash("m1", docs_dir=docs_dir) is None
+
+
+def test_latest_demo_content_hash_returns_md5(docs_dir):
+    """返回最新版本的 md5 hex string."""
+    html = _make_html("v1 test")
+    demo_version.write_demo_version("m1", html, docs_dir=docs_dir)
+    h = demo_version.latest_demo_content_hash("m1", docs_dir=docs_dir)
+    assert isinstance(h, str)
+    assert len(h) == 32
+
+
+def test_latest_demo_content_hash_changes_with_content(docs_dir):
+    """不同内容 → 不同 hash."""
+    demo_version.write_demo_version("m1", _make_html("aaa"), docs_dir=docs_dir)
+    h1 = demo_version.latest_demo_content_hash("m1", docs_dir=docs_dir)
+    demo_version.write_demo_version("m1", _make_html("bbb"), docs_dir=docs_dir)
+    h2 = demo_version.latest_demo_content_hash("m1", docs_dir=docs_dir)
+    assert h1 != h2
+
+
+def test_latest_demo_content_hash_stable_with_same_content(docs_dir):
+    """相同内容 → 稳定 hash."""
+    html = _make_html("stable test")
+    demo_version.write_demo_version("m1", html, docs_dir=docs_dir)
+    h1 = demo_version.latest_demo_content_hash("m1", docs_dir=docs_dir)
+    h2 = demo_version.latest_demo_content_hash("m1", docs_dir=docs_dir)
+    assert h1 == h2

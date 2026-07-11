@@ -552,3 +552,68 @@ class TestTriggerWritesFile:
         assert r["agent_path"] == "direct"
         assert "doc_path" in r
 
+    def test_doc_update_sse_has_no_content_field(self, populated_meeting, monkeypatch):
+        """v0.22.5 #33 P0-3: SSE doc-update 不推全量 content, 只推元信息."""
+        import vpbuddy.sub_session_controller as ctrl
+        from vpbuddy.sub_session_controller import trigger_sub_session
+
+        pushed = []
+        monkeypatch.setattr("vpbuddy.realtime_server.push_event", lambda mid, t, p: pushed.append((mid, t, p)))
+        monkeypatch.setattr(ctrl, "_AGENT_AVAILABLE", True)
+
+        # 模拟 agent 写了文件 (需要足够大以通过 placeholder 检查)
+        doc_path = ctrl.get_doc_path(populated_meeting, "demo")
+        doc_path.parent.mkdir(parents=True, exist_ok=True)
+        doc_path.write_text("<html><body><h1>真实 Demo</h1>" + "x" * 3000 + "</body></html>", encoding="utf-8")
+
+        def fake_aiagent(prompt, meeting_id, doc_kind):
+            return {
+                "triggered": True,
+                "session_id": f"meeting:{meeting_id}:{doc_kind}",
+                "agent_response": "OK — wrote demo.html",
+                "agent_path": "in-process",
+                "error": None,
+            }
+        monkeypatch.setattr(ctrl, "_trigger_via_aiagent", fake_aiagent)
+
+        r = trigger_sub_session(populated_meeting, "demo", dry_run=False)
+
+        # demo 写入版本成功 → 推 doc-update
+        doc_updates = [p for _, t, p in pushed if t == "doc-update"]
+        assert len(doc_updates) >= 1
+        for du in doc_updates:
+            assert "content" not in du, f"doc-update 不应含 content 字段: {list(du.keys())}"
+            assert "doc_size" in du
+            assert du.get("kind") == "demo"
+            assert du.get("status") == "stored"
+
+    def test_doc_update_has_no_content_for_batch_docs(self, populated_meeting, monkeypatch):
+        """batch_docs (req 等 5 文档) 的 doc-update 也不推 content."""
+        import vpbuddy.sub_session_controller as ctrl
+        from vpbuddy.sub_session_controller import trigger_sub_session
+
+        pushed = []
+        monkeypatch.setattr("vpbuddy.realtime_server.push_event", lambda mid, t, p: pushed.append((mid, t, p)))
+        monkeypatch.setattr(ctrl, "_AGENT_AVAILABLE", True)
+
+        doc_path = ctrl.get_doc_path(populated_meeting, "req")
+        doc_path.parent.mkdir(parents=True, exist_ok=True)
+        doc_path.write_text("# 需求\n- R1: 测试需求\n", encoding="utf-8")
+
+        def fake_aiagent(prompt, meeting_id, doc_kind):
+            return {
+                "triggered": True,
+                "session_id": f"meeting:{meeting_id}:{doc_kind}",
+                "agent_response": "OK",
+                "agent_path": "in-process",
+                "error": None,
+            }
+        monkeypatch.setattr(ctrl, "_trigger_via_aiagent", fake_aiagent)
+
+        trigger_sub_session(populated_meeting, "req", dry_run=False)
+
+        doc_updates = [p for _, t, p in pushed if t == "doc-update"]
+        assert len(doc_updates) >= 1
+        for du in doc_updates:
+            assert "content" not in du, f"batch doc-update 不应含 content: {list(du.keys())}"
+

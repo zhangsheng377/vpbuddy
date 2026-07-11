@@ -161,6 +161,19 @@ def _update_latest_symlink(meeting_id: str, version: int, docs_dir: Path | None 
 # ── 主 API: 写新版本 ──
 
 
+def latest_demo_content_hash(meeting_id: str, docs_dir: Path | None = None) -> str | None:
+    """返回最新 demo 版本的 content md5, 无版本时返 None (v0.22.5 #35 P1)"""
+    import hashlib
+    manifest = load_manifest(meeting_id, docs_dir)
+    if not manifest:
+        return None
+    latest_v = manifest[-1]["version"]
+    path = _version_path(meeting_id, latest_v, docs_dir)
+    if not path.exists():
+        return None
+    return hashlib.md5(path.read_bytes()).hexdigest()
+
+
 def write_demo_version(
     meeting_id: str,
     html: str,
