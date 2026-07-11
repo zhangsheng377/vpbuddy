@@ -820,9 +820,9 @@ mod wasapi_loopback {
             .GetDefaultAudioEndpoint(eRender, eConsole)
             .context("找不到默认输出设备 (loopback)")?;
 
-        let client: IAudioClient = device
-            .Activate(&IAudioClient::IID, CLSCTX_ALL, None)
-            .context("激活 IAudioClient 失败")?;
+        let client: IAudioClient = unsafe {
+            device.Activate(&IAudioClient::IID, CLSCTX_ALL, None)?.cast()?
+        };
 
         let mut pwfx: *mut WAVEFORMATEX = std::ptr::null_mut();
         unsafe {
@@ -834,13 +834,9 @@ mod wasapi_loopback {
         let sample_rate = format.nSamplesPerSec;
         let channels = format.nChannels as usize;
         let bits_per_sample = format.wBitsPerSample as usize;
-        let block_align = format.nBlockAlign as usize;
         log::info!(
-            "WASAPI raw loopback: device={}, rate={} ch={} bits={}",
-            device_name(&enumerator)?,
-            sample_rate,
-            channels,
-            bits_per_sample,
+            "WASAPI raw loopback: rate={} ch={} bits={}",
+            sample_rate, channels, bits_per_sample,
         );
 
         unsafe {
@@ -857,9 +853,7 @@ mod wasapi_loopback {
         }
 
         let capture_client: IAudioCaptureClient = unsafe {
-            client
-                .GetService(&IAudioCaptureClient::IID)
-                .context("GetService(IAudioCaptureClient) 失败")?
+            client.GetService(&IAudioCaptureClient::IID)?.cast()?
         };
 
         unsafe { client.Start().context("IAudioClient::Start 失败")?; }
@@ -959,11 +953,6 @@ mod wasapi_loopback {
                 })
                 .collect(),
         }
-    }
-
-    fn device_name(_enumerator: &IMMDeviceEnumerator) -> Result<String> {
-        // DEVPROPKEY 需要额外 winmd feature, 直接用简单字符串
-        Ok("默认扬声器".into())
     }
 
     pub fn loopback_device_name() -> String {
