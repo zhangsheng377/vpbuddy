@@ -1,6 +1,6 @@
 # VPBuddy HTTP API 参考
 
-> **版本**: v0.21.7 · `@ 2026-07-11`
+> **版本**: v0.21.8 · `@ 2026-07-11`
 > **Base URL**: `http://47.100.182.3:28765`（公网 GPU 服务器）
 > **协议**: HTTP/1.1 · WebSocket 实时 ASR · SSE 实时推送 · Multipart 上传
 > **编码**: 所有请求/响应使用 UTF-8
@@ -891,10 +891,11 @@ GET /api/timeline
 | `/data/vpbuddy/server/src/` | 服务端 Python 源码 |
 | `/data/vpbuddy/server/data/experiences/` | 经验蒸馏 JSON |
 
-### 近期变更 (v0.21.1–v0.21.7)
+### 近期变更 (v0.21.1–v0.21.8)
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| v0.21.8 | 2026-07-11 | 双流重采16kHz防ASR混音错乱 + RAG检索去重 + docs面板补齐doc-update + Chat超时120→300s+retry |
 | v0.21.7 | 2026-07-11 | 麦克风+内录混合比例 (mic 100%+loopback 30%) 防ASR干扰 + demo版本路径 fix + Chat注入上传文件路径 + WS 30s keepalive + WS失败静默退出 |
 | v0.21.6 | 2026-07-11 | Win both→mic+WASAPI loopback 双流混合 + demo 恢复与 batch_docs 并行触发 |
 | v0.21.5 | 2026-07-11 | KB检索改 user_id 隔离 (不再限 meeting_id) + WS 断连优雅退出 (break) + stop_capture 超时 10s→3s |
