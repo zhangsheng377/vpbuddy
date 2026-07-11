@@ -392,7 +392,6 @@ pub async fn run_realtime_loop(
             let frame_len = pcm_bytes.len() as u64;
             if let Err(e) = ws.send_frame(pcm_bytes).await {
                 log::warn!("实时模式: WS 发送失败: {e}");
-                capturing.store(false, Ordering::SeqCst);
                 break;
             }
             total_bytes_sent += frame_len;
