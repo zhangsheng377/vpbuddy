@@ -628,7 +628,7 @@ pub fn mix_two_streams(mic: &[i16], loopback: &[i16]) -> Vec<i16> {
     for i in 0..max_len {
         let m = mic.get(i).copied().unwrap_or(0) as f32;
         let l = loopback.get(i).copied().unwrap_or(0) as f32;
-        let mixed = ((m + l) * 0.5).clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+        let mixed = (m + l * 0.3).clamp(i16::MIN as f32, i16::MAX as f32) as i16;
         out.push(mixed);
     }
     out

@@ -307,12 +307,44 @@ def _meeting_context_for_chat(meeting_id: str) -> dict[str, Any]:
             "content_preview": doc["content"][:1200],
         })
     meta = _load_stream_meta(meeting_id)
+
+    # 最近 chat history（含 material-upload 事件）
+    recent_chat: list[dict[str, Any]] = []
+    try:
+        history = _load_chat_history(meeting_id)
+        recent_chat = history[-10:]
+    except Exception:
+        pass
+
+    # 上传目录下的文本文件内容（直接从磁盘读，不从 KB 搜）
+    recent_uploads: list[dict[str, Any]] = []
+    try:
+        upload_dir = DATA_DIR / "uploads" / meeting_id
+        if upload_dir.is_dir():
+            for f in sorted(upload_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)[:5]:
+                if not f.is_file():
+                    continue
+                content = ""
+                try:
+                    content = f.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    content = f"(二进制文件，{f.stat().st_size} bytes)"
+                recent_uploads.append({
+                    "filename": f.name,
+                    "content": content[:5000],
+                    "size": f.stat().st_size,
+                })
+    except Exception:
+        pass
+
     return {
         "meeting_id": meeting_id,
         "state": state_payload,
         "docs": docs,
         "recent_transcript": meta.get("transcript_segments", [])[-20:],
         "recent_metrics": meta.get("metrics", [])[-5:],
+        "recent_chat_history": recent_chat,
+        "recent_uploads": recent_uploads,
     }
 
 
