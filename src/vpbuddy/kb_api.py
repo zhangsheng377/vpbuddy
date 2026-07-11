@@ -188,9 +188,11 @@ def handle_kb_upload(body: bytes, content_type: str, user_id: str = "") -> dict:
     content_md5 = hashlib.md5(text.encode()).hexdigest()
 
     # 检查是否已有相同内容的文档 (防重复插入)
-    existing = rag.get(where={"user_id": user_id, "content_hash": content_md5}, limit=1)
-    if existing.get("ids"):
-        logger.info("KB upload: dup skip meeting=%s file=%s hash=%s", meeting_id, filename, content_md5[:8])
+    existing = rag.get(where={"content_hash": content_md5}, limit=1)
+    if existing.get("ids") and existing.get("metadatas"):
+        dup_meta = existing["metadatas"][0] if existing["metadatas"] else {}
+        if dup_meta.get("user_id") == user_id:
+            logger.info("KB upload: dup skip meeting=%s file=%s hash=%s", meeting_id, filename, content_md5[:8])
         return {
             "status": 200,
             "doc_id": existing["ids"][0],
@@ -294,14 +296,21 @@ def handle_chat_upload(body: bytes, content_type: str, meeting_id: str, user_id:
                 rag = get_rag()
 
                 # 检查是否已有相同内容的文档
-                existing = rag.get(where={"user_id": user_id, "content_hash": content_md5}, limit=1)
-                if existing.get("ids"):
-                    results.append({"filename": fname, "status": "duplicate", "doc_id": existing["ids"][0], "chars": len(content)})
-                    continue
+                existing = rag.get(where={"content_hash": content_md5}, limit=1)
+                if existing.get("ids") and existing.get("metadatas"):
+                    dup_meta = existing["metadatas"][0] if existing["metadatas"] else {}
+                    if dup_meta.get("user_id") == user_id:
+                        results.append({"filename": fname, "status": "duplicate", "doc_id": existing["ids"][0], "chars": len(content)})
+                        continue
 
                 file_uuid = uuid.uuid4().hex[:12]
                 doc_id = f"{meeting_id}:chat-upload:{file_uuid}"
                 now = datetime.now(UTC).isoformat()
+                # 原始文件持久化到 uploads 目录（供 Chat prompt 直接读取路径）
+                upload_dir = UPLOADS_DIR / meeting_id
+                upload_dir.mkdir(parents=True, exist_ok=True)
+                raw_path = upload_dir / f"{file_uuid}_{fname}"
+                raw_path.write_bytes(data)
                 rag.add(
                     ids=[doc_id],
                     documents=[content],
