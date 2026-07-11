@@ -10,8 +10,8 @@
 """
 from __future__ import annotations
 
+import concurrent.futures
 import json
-import subprocess
 import time
 import uuid
 import urllib.request
@@ -78,18 +78,25 @@ class TestRateLimit:
     def test_api_rate_limit(self):
         """快速连续请求应触发速率限制 (429)."""
         token, _ = _register_user()
-        
-        cmd = [
-            'bash', '-c',
-            f'''seq 1 200 | xargs -P 20 -I {{}} curl -s -o /dev/null -w "%{{http_code}}\\n" http://127.0.0.1:8765/api/status -H "Authorization: Bearer {token}" --max-time 3'''
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        raw = result.stdout.strip()
+
+        def _fire(url, token):
+            req = urllib.request.Request(
+                url, headers={"Authorization": f"Bearer {token}"}
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=3) as r:
+                    return r.status
+            except urllib.error.HTTPError as e:
+                return e.code
+            except Exception:
+                return 0
+
         codes = []
-        for i in range(0, len(raw), 3):
-            chunk = raw[i:i+3]
-            if chunk.isdigit():
-                codes.append(int(chunk))
+        url = f"{GPU_URL}/api/status"
+        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+            futures = [executor.submit(_fire, url, token) for _ in range(200)]
+            for future in concurrent.futures.as_completed(futures):
+                codes.append(future.result())
         assert 429 in codes, f"未触发速率限制, 响应码: {set(codes)}, 总数: {len(codes)}"
 
     def test_auth_rate_limit_stricter(self):

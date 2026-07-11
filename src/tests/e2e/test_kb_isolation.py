@@ -32,14 +32,13 @@ pytestmark = pytest.mark.e2e
 
 # === Helpers ===
 
-def _http_post_multipart(url: str, fields: list[tuple[str, str, bytes | None, str | None]], timeout: float = 10):
+def _http_post_multipart(url: str, fields: list[tuple[str, str, bytes | None, str | None]], timeout: float = 10, token: str = ""):
     """手搓 multipart POST (跟 kb_api._parse_multipart 兼容)."""
     boundary = "----e2e-kb-boundary-98765"
     body = b""
     for name, filename_or_value, content, content_type in fields:
         body += f"--{boundary}\r\n".encode()
         if content is None:
-            # 普通字段
             body += f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode()
             body += filename_or_value.encode() + b"\r\n"
         else:
@@ -49,18 +48,20 @@ def _http_post_multipart(url: str, fields: list[tuple[str, str, bytes | None, st
             body += content + b"\r\n"
     body += f"--{boundary}--\r\n".encode()
 
-    req = urllib.request.Request(
-        url,
-        data=body,
-        method="POST",
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-    )
+    headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, data=body, method="POST", headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.status, json.loads(r.read())
 
 
-def _http_get_json(url: str, timeout: float = 5):
-    with urllib.request.urlopen(url, timeout=timeout) as r:
+def _http_get_json(url: str, timeout: float = 5, token: str = ""):
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.status, json.loads(r.read())
 
 
@@ -99,7 +100,7 @@ import time
 class TestKBIsolationE2E:
     """真 Chroma + 真 sentence-transformers + GPU 真 server."""
 
-    def test_upload_text_then_search_meeting_only(self, gpu_server, unique_meetings):
+    def test_upload_text_then_search_meeting_only(self, gpu_server, unique_meetings, e2e_token):
         """上传到 A → A 搜命中, 不带 meeting_id (代表搜全表) 也能找到; 带 B 过滤搜不到."""
         alpha = unique_meetings["alpha"]
         beta = unique_meetings["beta"]
@@ -112,6 +113,7 @@ class TestKBIsolationE2E:
                 ("meeting_id", alpha, None, None),
                 ("file", "alpha_finance.md", alpha_doc, "text/markdown"),
             ],
+            token=e2e_token,
         )
         assert status == 200, f"upload alpha failed: {body}"
         assert body["doc_id"].startswith(f"{alpha}:"), f"doc_id 缺 meeting_id 前缀: {body}"
@@ -124,11 +126,12 @@ class TestKBIsolationE2E:
                 ("meeting_id", beta, None, None),
                 ("file", "beta_strategy.md", beta_doc, "text/markdown"),
             ],
+            token=e2e_token,
         )
         assert status == 200, f"upload beta failed: {body}"
 
         # 3. alpha 检索 → 命中 alpha 那条
-        _, alpha_hits = _http_get_json(_search_url(gpu_server, "revenue", alpha))
+        _, alpha_hits = _http_get_json(_search_url(gpu_server, "revenue", alpha), token=e2e_token)
         # handle_kb_search 返回 {"results": [{"id", "source", "snippet", "distance", "meeting_id"}], ...}
         # 也可能含 error
         if "error" in alpha_hits:
@@ -140,7 +143,7 @@ class TestKBIsolationE2E:
                 f"alpha 检索返回非 alpha doc: {r}"
 
         # 4. beta 检索 → 命中 beta 那条
-        _, beta_hits = _http_get_json(_search_url(gpu_server, "revenue", beta))
+        _, beta_hits = _http_get_json(_search_url(gpu_server, "revenue", beta), token=e2e_token)
         assert "error" not in beta_hits, f"beta search 报错: {beta_hits.get('error')}"
         assert len(beta_hits["results"]) >= 1, f"beta 检索应至少 1 条: {beta_hits}"
         for r in beta_hits["results"]:
@@ -160,42 +163,27 @@ class TestKBIsolationE2E:
 
         print(f"\n[E2E] alpha 命中数: {len(alpha_hits['results'])}, beta 命中数: {len(beta_hits['results'])}")
 
-    def test_search_without_meeting_id_returns_all(self, gpu_server):
-        """不带 meeting_id 的 search → server 端 `scope=current` 默认 → 返回全表 (Chroma where=None).
-
-        注: 当前 server 行为 (handle_kb_search scope=current + 无 meeting_id → where=None → 全表扫描).
-        这是有意设计 (允许 admin debug), 不是 bug. 我们只验证会议隔离在带 meeting_id 时
-        真生效 (主用例 test_upload_text_then_search_meeting_only 已覆盖).
-
-        真正的强制隔离 (用户原话: '不同会议要做隔离') 来自 UI 调用链永远带 meeting_id,
-        在 e2e UI 测试 test_through_ui_stub_kb_search_filters_meeting 验.
-        """
-        # 不带 meeting_id 搜 —— server 走 where=None, 全表
-        status, body = _http_get_json(f"{gpu_server}/api/kb/search?q=revenue")
+    def test_search_without_meeting_id_returns_all(self, gpu_server, e2e_token):
+        status, body = _http_get_json(f"{gpu_server}/api/kb/search?q=revenue", token=e2e_token)
         assert status == 200, f"应 200: {status} {body}"
         # scope 字段会显示 "none" (因为没 meeting_id)
         assert body.get("scope") == "none", f"scope 应 'none', 实际 {body.get('scope')}"
         assert body.get("meeting_id") is None
         # results 可能是空 (KB 没东西) 或非空, 不约束, 看 GPU 上有没数据
 
-    def test_kb_list_per_meeting(self, gpu_server, unique_meetings):
-        """GET /api/kb/list?meeting_id=A 只返回 A 的 doc, 不带 meeting_id 返全 / 或拒绝."""
+    def test_kb_list_per_meeting(self, gpu_server, unique_meetings, e2e_token):
         alpha = unique_meetings["alpha"]
         beta = unique_meetings["beta"]
-
-        # 上传 1 个 alpha + 1 个 beta (fixture 设 unique 后这 ts 唯一)
         alpha_doc = _make_fixture_md("Alpha", "5 千万", "新方向")
         beta_doc = _make_fixture_md("Beta", "3 千万", "B 端")
-
         for mid, doc in [(alpha, alpha_doc), (beta, beta_doc)]:
             status, body = _http_post_multipart(
                 f"{gpu_server}/api/kb/upload",
                 [("meeting_id", mid, None, None), ("file", f"{mid}.md", doc, "text/markdown")],
+                token=e2e_token,
             )
             assert status == 200
-
-        # list alpha
-        _, alpha_list = _http_get_json(f"{gpu_server}/api/kb/list?meeting_id={alpha}")
+        _, alpha_list = _http_get_json(f"{gpu_server}/api/kb/list?meeting_id={alpha}", token=e2e_token)
         # 期望: list 只含 alpha 的 doc
         if "documents" in alpha_list:
             for d in alpha_list["documents"]:
@@ -208,20 +196,13 @@ class TestKBIsolationE2E:
         # 兼容其他 key, 主要断言: 不能混 beta
         print(f"\n[E2E] kb/list alpha: {alpha_list}")
 
-    def test_through_ui_stub_kb_search_filters_meeting(self, page, gpu_server, unique_meetings):
-        """端到端通过 vite UI (Playwright) 调 invoke('kb_search') → 验证 stub + GPU server 真链路.
-
-        因为 main.js 调 invoke('kb_search', {...}) 不传 meetingId (Rust 端知道),
-        但我们没 Rust 端, stub 拿不到 meetingId. 解法: 让 stub 用前端 start_capture
-        时存的 currentMeetingId (UI 里全局 var). e2e 注入让 stub 知道 meeting.
-        """
+    def test_through_ui_stub_kb_search_filters_meeting(self, page, gpu_server, unique_meetings, e2e_token):
         alpha = unique_meetings["alpha"]
-
-        # 灌 alpha KB
         alpha_doc = _make_fixture_md("Alpha", "1 亿", "GLM 模型")
         status, body = _http_post_multipart(
             f"{gpu_server}/api/kb/upload",
             [("meeting_id", alpha, None, None), ("file", "alpha_glm.md", alpha_doc, "text/markdown")],
+            token=e2e_token,
         )
         assert status == 200, f"upload failed: {body}"
 

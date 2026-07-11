@@ -32,14 +32,21 @@ pytestmark = pytest.mark.e2e
 
 # === Helpers ===
 
-def _http_get_json(url, timeout: float = 5):
-    with urllib.request.urlopen(url, timeout=timeout) as r:
+def _http_get_json(url, timeout: float = 5, token: str = ""):
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.status, json.loads(r.read())
 
 
-def _http_post(url, data=None, timeout: float = 5):
+def _http_post(url, data=None, timeout: float = 5, token: str = ""):
     body = json.dumps(data or {}).encode()
-    req = urllib.request.Request(url, data=body, method="POST", headers={"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, data=body, method="POST", headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.status, json.loads(r.read())
 

@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import math
 import os
+from functools import lru_cache
 import random
 import socket
 import struct
@@ -85,25 +86,31 @@ def _http_ready(url: str, timeout: float = 5.0, method: str = "GET",
 
 
 def http_post(url: str, data: bytes | None = None, content_type: str = "application/octet-stream",
-              timeout: float = 300.0) -> dict:
+              timeout: float = 300.0, token: str = "") -> dict:
     """POST JSON/二进制 → 解析 JSON 响应."""
     req = urllib.request.Request(url, data=data, method="POST")
     if content_type:
         req.add_header("Content-Type", content_type)
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())
 
 
-def http_get(url: str, timeout: float = 10.0) -> dict:
+def http_get(url: str, timeout: float = 10.0, token: str = "") -> dict:
     """GET → 解析 JSON 响应."""
     req = urllib.request.Request(url, method="GET")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())
 
 
-def http_get_text(url: str, timeout: float = 10.0) -> str:
-    """GET → 返回纯文本 (如 HTML/doc 内容)."""
+def http_get_text(url: str, timeout: float = 10.0, token: str = "") -> str:
+    """GET → 返回纯文本."""
     req = urllib.request.Request(url, method="GET")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read().decode("utf-8", errors="replace")
 
@@ -226,6 +233,33 @@ def gpu_server() -> str:
     if not _http_ready(f"{GPU_SERVER_URL}/api/auth/login", method="POST", data=b'{"email":"test@test.com","password":"wrong"}', content_type="application/json", expected_status=401):
         pytest.skip(f"GPU server 不通: {GPU_SERVER_URL} (部署路径不通, e2e 跳过)")
     return GPU_SERVER_URL
+
+
+@lru_cache(maxsize=1)
+def _e2e_token() -> str:
+    """注册/登录 E2E 测试用户, 返回 Bearer token (session 级缓存)."""
+    import json as _json
+    email = "e2e_auto@vpbuddy.test"
+    password = "e2e_test_123456"
+    try:
+        data = _json.dumps({"email": email, "password": password}).encode()
+        resp = json.loads(urllib.request.urlopen(
+            urllib.request.Request(f"{GPU_SERVER_URL}/api/auth/login", data=data, method="POST",
+                                    headers={"Content-Type": "application/json"}),
+            timeout=10,
+        ).read())
+        return resp["token"]
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            # 注册
+            data = _json.dumps({"email": email, "password": password}).encode()
+            resp = json.loads(urllib.request.urlopen(
+                urllib.request.Request(f"{GPU_SERVER_URL}/api/auth/register", data=data, method="POST",
+                                        headers={"Content-Type": "application/json"}),
+                timeout=10,
+            ).read())
+            return resp["token"]
+        raise
 
 
 @pytest.fixture(scope="session")
@@ -400,12 +434,22 @@ def page(playwright_browser, vite_preview_url):
     ctx.close()
 
 
+@pytest.fixture(scope="session")
+def e2e_token() -> str:
+    """E2E 测试用户 Bearer token (session 级缓存)."""
+    return _e2e_token()
+
 @pytest.fixture
 def page_with_gpu(playwright_browser, vite_preview_url, gpu_server):
-    """单 page 上下文, 注入 Tauri stub + 真 GPU URL. 依赖 GPU server."""
+    """单 page 上下文, 注入 Tauri stub + E2E token + 真 GPU URL. 依赖 GPU server."""
+    token = _e2e_token()
     ctx = playwright_browser.new_context()
     ctx.add_init_script(
-        f"window.__VP_E2E_GPU_URL__ = {gpu_server!r};\n{TAURI_STUB_SCRIPT}"
+        f"window.__VP_E2E_GPU_URL__ = {gpu_server!r};\n"
+        f"window.__VP_E2E_TOKEN__ = {token!r};\n"
+        f"localStorage.setItem('vpbuddy-token', {token!r});\n"
+        f"localStorage.setItem('vpbuddy-email', 'e2e_auto@vpbuddy.test');\n"
+        f"{TAURI_STUB_SCRIPT}"
     )
     pg = ctx.new_page()
     pg.on("console", lambda msg: print(f"[BROWSER {msg.type}] {msg.text}"))

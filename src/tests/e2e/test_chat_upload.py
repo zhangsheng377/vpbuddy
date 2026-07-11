@@ -31,7 +31,7 @@ pytestmark = pytest.mark.e2e
 
 # === Helpers (跟 test_kb_isolation 共享) ===
 
-def _http_post_multipart(url, fields, timeout: float = 10):
+def _http_post_multipart(url, fields, timeout: float = 10, token: str = ""):
     """手搓 multipart POST. fields: [(name, filename_or_value, content, content_type), ...]"""
     boundary = "----e2e-chat-boundary-54321"
     body = b""
@@ -46,16 +46,20 @@ def _http_post_multipart(url, fields, timeout: float = 10):
             body += f"Content-Type: {ct}\r\n\r\n".encode()
             body += content + b"\r\n"
     body += f"--{boundary}--\r\n".encode()
-    req = urllib.request.Request(
-        url, data=body, method="POST",
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-    )
+    headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, data=body, method="POST", headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.status, json.loads(r.read())
 
 
-def _http_get_json(url, timeout: float = 5):
-    with urllib.request.urlopen(url, timeout=timeout) as r:
+def _http_get_json(url, timeout: float = 5, token: str = ""):
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.status, json.loads(r.read())
 
 
@@ -147,7 +151,7 @@ class TestChatUploadUI:
 class TestChatUploadE2E:
     """真 GPU server (kb_api.handle_chat_upload) 链路."""
 
-    def test_upload_text_file_via_ui_then_search_meeting(self, page, gpu_server):
+    def test_upload_text_file_via_ui_then_search_meeting(self, page, gpu_server, e2e_token):
         """端到端: UI 点 📎 (实际我们用 evaluate 模拟, 因为 headless 不能弹 file picker) →
         set chatAttachments + click chat-send → 真 multipart POST 到 GPU server →
         KB 真灌库 → server 检索能找到.
@@ -212,7 +216,7 @@ class TestChatUploadE2E:
 
         # 7. 端到端验证: GPU server 检索 meeting_id 看到我灌的内容
         search_url = f"{gpu_server}/api/kb/search?q={urllib.parse.quote('revenue')}&meeting_id={urllib.parse.quote(meeting_id)}"
-        status, body = _http_get_json(search_url)
+        status, body = _http_get_json(search_url, token=e2e_token)
         # 隔离验证: 真检索能命中
         assert status == 200, f"search 失败: {status} {body}"
         if "error" in body:
@@ -237,7 +241,7 @@ class TestChatUploadE2E:
             "上传 1 个附件", "Hermes 已回复", "Chat 失败", "Hermes 正在思考"
         )), f"chat_status 应被 sendChat 更新, 实际: {chat_status!r}"
 
-    def test_upload_rejected_file_type_via_server(self, gpu_server):
+    def test_upload_rejected_file_type_via_server(self, gpu_server, e2e_token):
         """端到端: server 端拒不支持的文件类型 (.exe).
 
         这是 handle_chat_upload 防线测试, 跟 UI 无关, 但能验证 server 真在过滤.
@@ -252,6 +256,7 @@ class TestChatUploadE2E:
                 ("text", "test question", None, None),
                 ("files", "evil.exe", b"MZ\x90\x00\x03\x00", "application/octet-stream"),
             ],
+            token=e2e_token,
         )
         # 应 200 (handle_chat_upload 返 200 + 每文件 status, 不是 4xx)
         # 但 files[i].status 应是 "rejected", 带 error
@@ -267,7 +272,7 @@ class TestChatUploadE2E:
         assert "只支持" in (rejected[0].get("error") or ""), \
             f"error 应说 '只支持', 实际: {rejected[0].get('error')}"
 
-    def test_upload_text_and_image_together(self, gpu_server):
+    def test_upload_text_and_image_together(self, gpu_server, e2e_token):
         """端到端: 文本 + 图片一起传, 文本入 KB, 图片转 base64 (kb_api 不入 Chroma).
 
         handle_chat_upload 行为: 文件类 (.txt/.md/.pdf) → 入库; 图片 → data URI 列表.
@@ -289,6 +294,7 @@ class TestChatUploadE2E:
                 ("files", "notes.md", "# notes (e2e mix test)\n\nThis is a text attachment for KB ingest.".encode("utf-8"), "text/markdown"),
                 ("files", "pixel.png", png_bytes, "image/png"),
             ],
+            token=e2e_token,
         )
         assert status == 200, f"应 200: {status} {body}"
 

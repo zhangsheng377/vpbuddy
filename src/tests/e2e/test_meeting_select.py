@@ -45,13 +45,14 @@ def test_input_only_enables_rec_btn(page):
         f"输入后 title 应清空, 实际: {btn.get_attribute('title')!r}"
 
 
-def test_select_existing_meeting_enables_rec_btn(page, gpu_server):
+def test_select_existing_meeting_enables_rec_btn(page, gpu_server, e2e_token):
     """选中已有会议 (下拉) → 按钮 enabled."""
     import json
     import urllib.request
 
-    # 拿真 GPU server 上的会议列表, 填进下拉
-    with urllib.request.urlopen(f"{gpu_server}/api/meetings", timeout=3) as r:
+    req = urllib.request.Request(f"{gpu_server}/api/meetings")
+    req.add_header("Authorization", f"Bearer {e2e_token}")
+    with urllib.request.urlopen(req, timeout=5) as r:
         body = json.loads(r.read())
 
     if not body["meetings"]:
@@ -102,16 +103,13 @@ def test_end_meeting_btn_visible_during_record(page):
     assert end_btn.is_visible(), "录音开始后, '结束会议' 按钮应可见 (Req #4)"
 
 
-def test_stop_does_not_call_close_endpoint(page, gpu_server):
-    """端到端: 停止录音 → 不触发 server close (用户原话: 停止录音≠结束会议).
-
-    检测方法: 拿 start + stop 前后的 GPU /api/meetings, meeting 数不变. (close 会让
-    'closed' 状态出现在 meeting record 里, 而不删除 meeting.)
-    """
+def test_stop_does_not_call_close_endpoint(page, gpu_server, e2e_token):
     import json
     import urllib.request
 
-    with urllib.request.urlopen(f"{gpu_server}/api/meetings", timeout=3) as r:
+    req = urllib.request.Request(f"{gpu_server}/api/meetings")
+    req.add_header("Authorization", f"Bearer {e2e_token}")
+    with urllib.request.urlopen(req, timeout=5) as r:
         before = json.loads(r.read())
     before_count = before["count"]
 
