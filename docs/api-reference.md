@@ -1,6 +1,6 @@
 # VPBuddy HTTP API 参考
 
-> **版本**: v0.21.5 · `@ 2026-07-11`
+> **版本**: v0.21.6 · `@ 2026-07-11`
 > **Base URL**: `http://47.100.182.3:28765`（公网 GPU 服务器）
 > **协议**: HTTP/1.1 · WebSocket 实时 ASR · SSE 实时推送 · Multipart 上传
 > **编码**: 所有请求/响应使用 UTF-8
@@ -891,11 +891,12 @@ GET /api/timeline
 | `/data/vpbuddy/server/src/` | 服务端 Python 源码 |
 | `/data/vpbuddy/server/data/experiences/` | 经验蒸馏 JSON |
 
-### 近期变更 (v0.21.1–v0.21.5)
+### 近期变更 (v0.21.1–v0.21.6)
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
-| v0.21.5 | 2026-07-11 | KB检索改 user_id 隔离 (不再限 meeting_id) + Win "both" 模式改走麦克风 + WS 断连优雅退出 (break) + demo 等 batch_docs 写盘后再跑 + stop_capture 超时 10s→3s |
+| v0.21.6 | 2026-07-11 | Win both→mic+WASAPI loopback 双流混合 + demo 恢复与 batch_docs 并行触发 |
+| v0.21.5 | 2026-07-11 | KB检索改 user_id 隔离 (不再限 meeting_id) + WS 断连优雅退出 (break) + stop_capture 超时 10s→3s |
 | v0.21.4 | 2026-07-11 | 回归测试全覆盖 (#28/#29/#30/#31) + ASR降噪修复 + bailian签名修复 |
 | v0.21.3 | 2026-07-11 | WS断线不误关会议 (_stop_received 状态机) + ASR降噪第一层 (填充词/设备测试/重复过滤) + hash文档调度 debounce 6s + speaker_id UNKNOWN + recording_session_id |
 | v0.21.2 | 2026-07-10 | 客户端日志"打开目录"路径修复 + WS mpsc buffer 256→1024 |
