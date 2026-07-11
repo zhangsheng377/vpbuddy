@@ -1515,7 +1515,7 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
                 _log.error("[ws_realtime_asr] close_meeting failed: %s", _ce)
         else:
             _log.info("[ws_realtime_asr] connection lost, meeting %s kept open for potential reconnect", meeting_id)
-            from ..sub_session_controller import push_event
+            from ..realtime_server import push_event
             try:
                 push_event(meeting_id, "recording-disconnected", {
                     "meeting_id": meeting_id,
