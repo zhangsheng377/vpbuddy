@@ -843,14 +843,14 @@ async def post_meeting_material(meeting_id: str, request: Request, user: dict = 
 
     if file_type == "text":
         content, truncated, err = material_storage.read_text_content(meta.material_id)
+        file_path_on_disk = material_storage.get_file_path(meta.material_id)
+        disk_path = str(file_path_on_disk) if file_path_on_disk else "(unknown)"
         if content:
             size_note = f"{len(content)} 字" + ("(截断)" if truncated else "")
             chat_message = (
-                f"用户上传了会议材料：{filename}\n"
-                f"\n---文件内容 ({size_note})---\n"
-                f"{content}\n"
-                f"---文件内容结束---\n"
-                f"\n请将以上内容纳入会议上下文。"
+                f"用户上传了会议材料：{filename} ({size_note})\n"
+                f"文件路径：{disk_path}\n"
+                f"你可以用 read_file 工具查看完整内容。"
             )
         else:
             chat_message = f"用户上传了会议材料：{filename}，已存入知识库。"
