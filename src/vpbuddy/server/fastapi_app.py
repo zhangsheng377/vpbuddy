@@ -204,7 +204,12 @@ async def startup_warmup():
                     for mid in _st.list_meetings():
                         if not _st.exists(mid):
                             continue
-                        state = _st.load(mid)
+                        if mid.endswith((".chat", ".stream")):
+                            continue
+                        try:
+                            state = _st.load(mid)
+                        except Exception:
+                            continue
                         cur = state.cleaned_text or ""
                         if len(cur) <= 10:
                             continue
