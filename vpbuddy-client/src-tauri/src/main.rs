@@ -640,7 +640,9 @@ pub async fn run_sse_loop(
                 }
             }
             _ = wait_capturing_false(capturing.clone()) => {
-                log::info!("SSE loop 检测到 capturing=false, 立即退出");
+                // v0.22.4: capturing=false 不立即退出, 留给服务端 ~15s 推送 demo-new-version 等事后事件
+                log::info!("SSE loop 检测到 capturing=false, 等待 15s 以接收 demo/事后事件...");
+                tokio::time::sleep(std::time::Duration::from_secs(15)).await;
                 break;
             }
         }
