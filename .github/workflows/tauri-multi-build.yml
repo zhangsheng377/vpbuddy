@@ -6,9 +6,6 @@ name: VPBuddy Tauri Multi-Platform Build
 "on":
   push:
     branches: [main]
-    paths:
-      - 'vpbuddy-client/**'
-      - '.github/workflows/tauri-multi-build.yml'
     tags:
       - 'v*'
   pull_request:
