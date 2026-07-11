@@ -50,6 +50,25 @@ def check_all_docs_stored_notify(meeting_id: str, doc_kinds: list[str] | None = 
         f"[{meeting_id}] 6 docs 全部 stored ({sum(sizes.values())} bytes), "
         f"返 True 不推 docs-complete SSE 不关会议 (ADR-0022 + 2026-07-02 删 docs-complete 死代码)"
     )
+    # Issue #3 修复: 先推 doc-update SSE 事件, 确保前端面板已更新再发 banner
+    try:
+        from .realtime_server import push_event as _push_event
+        from datetime import datetime as _dt
+        for kind in doc_kinds:
+            path = _doc_path(meeting_id, kind)
+            if path.exists() and path.stat().st_size > 0:
+                content = path.read_text(encoding="utf-8", errors="replace")
+                _push_event(meeting_id, "doc-update", {
+                    "kind": kind,
+                    "status": "stored",
+                    "doc_size": path.stat().st_size,
+                    "meeting_id": meeting_id,
+                    "content": content,
+                    "updated_at": _dt.now().isoformat(),
+                    "is_demo": kind == "demo",
+                })
+    except Exception as e:
+        logger.warning(f"[{meeting_id}] push SSE doc-update failed: {e}")
     # 2026-07-01 ADR-0023 Phase 5: 6 docs 全部生成 → agent 主动 chat 通知
     # (保留 — 主动 chat 是 _append_chat_message + push_event("chat-message", ...) 走的另一条路,
     #  跟 docs-complete 死代码无关, 不在本轮清理范围)

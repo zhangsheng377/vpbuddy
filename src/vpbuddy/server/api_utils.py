@@ -392,29 +392,53 @@ def _run_vp_chat(meeting_id: str, message: str, client_context: dict[str, Any] |
         "如果 VP 的意图是修改某个交付物,请明确指出目标 kind(req/arch/tasks/api/risk/demo),并给出下一步建议。",
     ])
 
-    holder: dict[str, Any] = {"done": False, "response": None, "error": None}
+    timeout = int(os.environ.get("VPBUDDY_CHAT_TIMEOUT", "300"))
 
-    def _runner():
-        try:
-            agent = _get_chat_agent(meeting_id)
-            holder["response"] = agent.chat(prompt)
-        except Exception as e:
-            holder["error"] = e
-        finally:
-            holder["done"] = True
+    def _do_chat(p: str) -> dict[str, Any]:
+        holder: dict[str, Any] = {"done": False, "response": None, "error": None}
 
-    t = threading.Thread(target=_runner, daemon=True)
-    t.start()
-    t.join(timeout=int(os.environ.get("VPBUDDY_CHAT_TIMEOUT", "120")))
+        def _runner():
+            try:
+                agent = _get_chat_agent(meeting_id)
+                holder["response"] = agent.chat(p)
+            except Exception as e:
+                holder["error"] = e
+            finally:
+                holder["done"] = True
 
-    if not holder["done"]:
+        t = threading.Thread(target=_runner, daemon=True)
+        t.start()
+        t.join(timeout=timeout)
+
+        if not holder["done"]:
+            return {"status": "timeout", "error": "AIAgent timeout"}
+        if holder["error"]:
+            return {"status": "error", "error": f"{type(holder['error']).__name__}: {str(holder['error'])[:300]}"}
+        return {"status": "ok", "content": str(holder["response"] or "").strip()}
+
+    result = _do_chat(prompt)
+
+    if result["status"] == "timeout":
+        fallback_prompt = "\n".join([
+            "VP 输入了下面这句话。请直接回答，不需要过多上下文推理。",
+            f"VP 输入:\n{message}",
+            "如果问题跟会议内容相关,简要回答即可;如果无法确定,直接说不知道。",
+        ])
+        retry_result = _do_chat(fallback_prompt)
+        if retry_result["status"] == "ok":
+            return {
+                "status": "ok",
+                "source": "hermes-retry",
+                "content": retry_result.get("content", ""),
+                "error": None,
+            }
         return {
             "status": "fallback",
             "source": "fallback",
             "content": "Hermes VP Chat 暂时超时。当前输入已记录,但未完成 Hermes 上下文推理或子 agent 调度。",
-            "error": "AIAgent timeout",
+            "error": "AIAgent timeout (retry also failed)",
         }
-    if holder["error"]:
+    if result["status"] == "error":
         return {
             "status": "fallback",
             "source": "fallback",
@@ -422,12 +446,12 @@ def _run_vp_chat(meeting_id: str, message: str, client_context: dict[str, Any] |
                 "Hermes VP Chat 当前不可用。输入已记录,服务端没有静默执行外部动作。"
                 "请确认 run_agent/AIAgent 或 hermes 运行环境可用后重试。"
             ),
-            "error": f"{type(holder['error']).__name__}: {str(holder['error'])[:300]}",
+            "error": result.get("error", "unknown"),
         }
     return {
         "status": "ok",
         "source": "hermes",
-        "content": str(holder["response"] or "").strip(),
+        "content": result.get("content", ""),
         "error": None,
     }
 

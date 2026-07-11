@@ -12,6 +12,7 @@ Endpoint 签名(被 ui_server.py 调用):
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import uuid
@@ -307,6 +308,21 @@ def handle_chat_upload(body: bytes, content_type: str, meeting_id: str, user_id:
     }
 
 
+def _dedup_results(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for r in raw:
+        doc = r.get("document", "")
+        if not doc:
+            out.append(r)
+            continue
+        key = str(hashlib.md5(doc.encode()).hexdigest())
+        if key not in seen:
+            seen.add(key)
+            out.append(r)
+    return out
+
+
 def handle_kb_search(params: dict[str, list[str]], body_bytes: bytes, user_id: str = "") -> dict:
     """POST /api/kb/search — 检索 KB (ADR-0047: 按 user_id 过滤)."""
     if body_bytes.strip():
@@ -331,7 +347,8 @@ def handle_kb_search(params: dict[str, list[str]], body_bytes: bytes, user_id: s
         where["user_id"] = user_id
 
     rag = get_rag()
-    results = rag.query(query, top_k=top_k, where=where if where else None)
+    raw_results = rag.query(query, top_k=top_k, where=where if where else None)
+    results = _dedup_results(raw_results)
 
     return {
         "results": results,

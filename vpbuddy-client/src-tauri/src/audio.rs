@@ -44,6 +44,34 @@ enum StreamGuard {
     },
 }
 
+/// 线性重采样器：输入任意 sample rate 的 i16 样本，输出到目标 rate
+struct StreamResampler {
+    src_rate: f64,
+    dst_rate: f64,
+    frac: f64,
+    last: f64,
+}
+
+impl StreamResampler {
+    fn new(src_rate: u32, dst_rate: u32) -> Self {
+        Self { src_rate: src_rate as f64, dst_rate: dst_rate as f64, frac: 0.0, last: 0.0 }
+    }
+
+    fn push(&mut self, src: &[i16], dst: &mut Vec<i16>) {
+        let ratio = self.src_rate / self.dst_rate;
+        for &s in src {
+            self.frac += 1.0;
+            while self.frac >= ratio {
+                self.frac -= ratio;
+                let t = self.frac / ratio;
+                let v = self.last * (1.0 - t) + (s as f64) * t;
+                dst.push(v.clamp(i16::MIN as f64, i16::MAX as f64) as i16);
+            }
+            self.last = s as f64;
+        }
+    }
+}
+
 pub struct AudioCapture {
     _stream: StreamGuard,
     rx: mpsc::Receiver<Vec<i16>>,
@@ -154,9 +182,9 @@ impl AudioCapture {
         let AudioCapture { rx: mic_rx, _stream: mic_guard, native_sample_rate: mic_rate, .. } =
             Self::new_with_device_inner(device_id)?;
         let (loopback_rx, loopback_rate, loopback_guard) = wasapi_loopback::create_loopback()?;
-        let unified_rate = mic_rate.max(loopback_rate);
-        log::info!("Phase 7 Win both: mic={}Hz + loopback={}Hz → unified={}Hz",
-            mic_rate, loopback_rate, unified_rate);
+        let target_rate: u32 = 16000;
+        log::info!("Phase 7 Win both: mic={}Hz + loopback={}Hz → resample both → {}Hz",
+            mic_rate, loopback_rate, target_rate);
 
         let mic_stream = match mic_guard {
             StreamGuard::Single(s) => Arc::new(s),
@@ -164,21 +192,27 @@ impl AudioCapture {
         };
 
         let (out_tx, out_rx) = mpsc::sync_channel::<Vec<i16>>(64);
-        let chunk_target = unified_rate as usize;
+        let chunk_target = (target_rate as usize) / 10; // 100ms frames
         std::thread::spawn(move || {
+            let mut mic_resampler = StreamResampler::new(mic_rate, target_rate);
+            let mut loop_resampler = StreamResampler::new(loopback_rate, target_rate);
             let mut mic_buf: Vec<i16> = Vec::new();
             let mut loop_buf: Vec<i16> = Vec::new();
             loop {
                 while mic_buf.len() < chunk_target {
                     match mic_rx.recv_timeout(Duration::from_millis(500)) {
-                        Ok(mut chunk) => mic_buf.append(&mut chunk),
+                        Ok(mut chunk) => {
+                            mic_resampler.push(&chunk, &mut mic_buf);
+                        }
                         Err(mpsc::RecvTimeoutError::Timeout) => { mic_buf.resize(chunk_target, 0); break; }
                         Err(_) => return,
                     }
                 }
                 while loop_buf.len() < chunk_target {
                     match loopback_rx.recv_timeout(Duration::from_millis(500)) {
-                        Ok(mut chunk) => loop_buf.append(&mut chunk),
+                        Ok(mut chunk) => {
+                            loop_resampler.push(&chunk, &mut loop_buf);
+                        }
                         Err(mpsc::RecvTimeoutError::Timeout) => { loop_buf.resize(chunk_target, 0); break; }
                         Err(_) => return,
                     }
@@ -194,7 +228,7 @@ impl AudioCapture {
         Ok(Self {
             _stream: StreamGuard::WasapiBoth { _mic: mic_stream, _loopback: loopback_guard },
             rx: out_rx,
-            native_sample_rate: unified_rate,
+            native_sample_rate: target_rate,
             is_loopback: true,
         })
     }
