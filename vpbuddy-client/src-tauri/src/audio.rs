@@ -811,7 +811,7 @@ mod wasapi_loopback {
     }
 
     pub fn create_loopback() -> Result<(mpsc::Receiver<Vec<i16>>, u32, WindowsLoopback)> {
-        unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok(); }
+        unsafe { CoInitializeEx(std::ptr::null(), COINIT_MULTITHREADED).ok(); }
 
         let enumerator: IMMDeviceEnumerator =
             MMDeviceEnumerator::new().context("创建 MMDeviceEnumerator 失败")?;
@@ -821,7 +821,7 @@ mod wasapi_loopback {
             .context("找不到默认输出设备 (loopback)")?;
 
         let client: IAudioClient = unsafe {
-            device.Activate(&IAudioClient::IID, CLSCTX_ALL, None)?.cast()?
+            device.Activate(&IAudioClient::IID, CLSCTX_ALL, std::ptr::null())?.cast()?
         };
 
         let mut pwfx: *mut WAVEFORMATEX = std::ptr::null_mut();
@@ -844,8 +844,8 @@ mod wasapi_loopback {
                 .Initialize(
                     AUDCLNT_SHAREMODE_SHARED,
                     AUDCLNT_STREAMFLAGS_LOOPBACK,
-                    0,
-                    0,
+                    0i64,
+                    0i64,
                     pwfx,
                     std::ptr::null(),
                 )
