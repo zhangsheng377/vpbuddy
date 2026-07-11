@@ -139,62 +139,64 @@ async def _unhandled_exception_handler(request: Request, exc: Exception):
     )
 
 
-# ── 全局文档踢动器 (daemon thread, 独立于 WS 生命周期) ──
-def _gkd_setup(logger):
-    from ..task_manager import get_task_manager
-    from ..storage import MeetingStorage
-    from ..sub_session_controller import _dispatch_kind, BATCH_DOCS_KIND, DEMO_KIND
+# ── 全局文档踢动器 (模块级 daemon thread, 独立于 WS 生命周期) ──
+import threading as _threading_gkd
+import hashlib as _hashlib_gkd
+import time as _time_gkd
+import logging as _logging_gkd
+from concurrent.futures import ThreadPoolExecutor as _TPE_gkd
+from ..task_manager import get_task_manager as _get_tm_gkd
+from ..storage import MeetingStorage as _MS_gkd
+from ..sub_session_controller import _dispatch_kind as _dk_gkd, BATCH_DOCS_KIND as _bk_gkd, DEMO_KIND as _dmk_gkd
 
-    import threading
-    import hashlib
-    import time
-    from concurrent.futures import ThreadPoolExecutor
+_gkd_logger = _logging_gkd.getLogger("vpbuddy.gkd")
+_gkd_st = _MS_gkd(DATA_DIR)
+_gkd_last: dict[str, str] = {}
+_gkd_first = True
 
-    _st = MeetingStorage(DATA_DIR)
-    _last: dict[str, str] = {}
+def _gkd_runner(mid: str):
+    try:
+        with _TPE_gkd(max_workers=2) as ex:
+            futures = {k: ex.submit(_dk_gkd, mid, k, False) for k in [_bk_gkd, _dmk_gkd]}
+            for f in futures.values():
+                try:
+                    f.result(timeout=300)
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
-    def _runner(mid: str):
+def _gkd_loop():
+    global _gkd_first
+    _tm = _get_tm_gkd()
+    while True:
+        _time_gkd.sleep(6)
         try:
-            with ThreadPoolExecutor(max_workers=2) as ex:
-                futures = {k: ex.submit(_dispatch_kind, mid, k, False) for k in [BATCH_DOCS_KIND, DEMO_KIND]}
-                for f in futures.values():
-                    try:
-                        f.result(timeout=300)
-                    except Exception:
-                        pass
+            all_mids = _gkd_st.list_meetings()
+            recent = [m for m in all_mids if not m.endswith((".chat", ".stream"))][:20]
+            _gkd_logger.info("scanning %d recent meetings", len(recent))
+            for mid in recent:
+                try:
+                    state = _gkd_st.load(mid)
+                except Exception:
+                    continue
+                cur = state.cleaned_text or ""
+                if len(cur) <= 10:
+                    continue
+                cur_hash = _hashlib_gkd.md5(cur.encode()).hexdigest()
+                prev = _gkd_last.get(mid, "")
+                if cur_hash != prev or _gkd_first:
+                    _gkd_last[mid] = cur_hash
+                    _gkd_logger.info("triggering docs for meeting=%s len=%d", mid, len(cur))
+                    _tm.submit(mid, _gkd_runner)
+            _gkd_first = False
         except Exception:
-            pass
+            _gkd_logger.warning("loop error", exc_info=True)
 
-    def _loop():
-        _first = True
-        _tm = get_task_manager()
-        while True:
-            time.sleep(6)
-            try:
-                all_mids = _st.list_meetings()
-                recent = [m for m in all_mids if not m.endswith((".chat", ".stream"))][:20]
-                logger.info("[global_kick_docs] scanning %d recent meetings", len(recent))
-                for mid in recent:
-                    try:
-                        state = _st.load(mid)
-                    except Exception:
-                        continue
-                    cur = state.cleaned_text or ""
-                    if len(cur) <= 10:
-                        continue
-                    cur_hash = hashlib.md5(cur.encode()).hexdigest()
-                    prev = _last.get(mid, "")
-                    if cur_hash != prev or _first:
-                        _last[mid] = cur_hash
-                        logger.info("[global_kick_docs] triggering docs for %s len=%d", mid, len(cur))
-                        _tm.submit(mid, _runner)
-                _first = False
-            except Exception:
-                logger.warning("global_kick_docs loop error", exc_info=True)
-
-    t = threading.Thread(target=_loop, daemon=True, name="gkd")
-    t.start()
-    logger.info("global_kick_docs daemon thread started")
+_gkd_thread = _threading_gkd.Thread(target=_gkd_loop, daemon=True, name="gkd")
+_gkd_thread.start()
+_gkd_logger.info("daemon thread started, scanning every 6s")
+print("[fastapi_app] global_kick_docs daemon thread started", flush=True)
 
 # ── uvicorn startup event: warmup 日志 ──
 @app.on_event("startup")
@@ -227,13 +229,6 @@ async def startup_warmup():
     except Exception as e:
         logger.warning("材料存储初始化失败: %s", e)
         print(f"[fastapi_app] 材料存储初始化失败: {e}", flush=True)
-
-    # 全局文档踢动器 (daemon thread, 在 _gkd_setup 里启动)
-    try:
-        _gkd_setup(logger)
-    except Exception as _e:
-        logger.warning("gkd_setup 失败: %s", _e)
-        print(f"[fastapi_app] gkd_setup 失败: {_e}", flush=True)
 
 
 # =============================================================================
