@@ -787,7 +787,7 @@ mod wasapi_loopback {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{mpsc, Arc};
 
-    use windows::core::{GUID, Interface};
+    use windows::core::{GUID, Interface, IUnknown};
     use windows::Win32::Media::Audio::{
         eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDevice, IMMDeviceEnumerator,
         AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
@@ -815,6 +815,71 @@ mod wasapi_loopback {
         cbSize: u16,
     }
 
+    type RawActivate = unsafe extern "system" fn(
+        *mut std::ffi::c_void, *const GUID, u32, *const std::ffi::c_void, *mut *mut std::ffi::c_void,
+    ) -> i32;
+
+    fn immdevice_activate(device: &IMMDevice, iid: &GUID, clsctx: u32) -> Result<IUnknown> {
+        unsafe {
+            let this = device.as_raw();
+            let vtbl = *(this as *const *const *const ());
+            let fptr: *const () = *((*vtbl).add(3));
+            let activate: RawActivate = std::mem::transmute(fptr);
+            let mut ppv: *mut std::ffi::c_void = std::ptr::null_mut();
+            let hr = activate(this, iid, clsctx, std::ptr::null(), &mut ppv);
+            if hr != 0 {
+                anyhow::bail!("IMMDevice::Activate HRESULT {:#x}", hr as u32);
+            }
+            Ok(IUnknown::from_raw(ppv))
+        }
+    }
+
+    type RawGetService = unsafe extern "system" fn(
+        *mut std::ffi::c_void, *const GUID, *mut *mut std::ffi::c_void,
+    ) -> i32;
+
+    fn iaudioclient_getservice(client: &IAudioClient, iid: &GUID) -> Result<IUnknown> {
+        unsafe {
+            let this = client.as_raw();
+            let vtbl = *(this as *const *const *const ());
+            let fptr: *const () = *((*vtbl).add(14));
+            let gs: RawGetService = std::mem::transmute(fptr);
+            let mut ppv: *mut std::ffi::c_void = std::ptr::null_mut();
+            let hr = gs(this, iid, &mut ppv);
+            if hr != 0 {
+                anyhow::bail!("IAudioClient::GetService HRESULT {:#x}", hr as u32);
+            }
+            Ok(IUnknown::from_raw(ppv))
+        }
+    }
+
+    type RawInitialize = unsafe extern "system" fn(
+        *mut std::ffi::c_void, u32, u32, i64, i64, *const WAVEFORMATEX, *const GUID,
+    ) -> i32;
+
+    fn iaudioclient_initialize(
+        client: &IAudioClient,
+        mode: u32,
+        flags: u32,
+        buf_dur: i64,
+        periodicity: i64,
+        wfx: &WAVEFORMATEX,
+        audio_session_guid: Option<&GUID>,
+    ) -> Result<()> {
+        unsafe {
+            let this = client.as_raw();
+            let vtbl = *(this as *const *const *const ());
+            let fptr: *const () = *((*vtbl).add(7));
+            let init: RawInitialize = std::mem::transmute(fptr);
+            let session_ptr = audio_session_guid.map(|g| g as *const GUID).unwrap_or(std::ptr::null());
+            let hr = init(this, mode, flags, buf_dur, periodicity, wfx, session_ptr);
+            if hr != 0 {
+                anyhow::bail!("IAudioClient::Initialize HRESULT {:#x}", hr as u32);
+            }
+            Ok(())
+        }
+    }
+
     pub struct WindowsLoopback {
         _client: IAudioClient,
     }
@@ -830,19 +895,16 @@ mod wasapi_loopback {
             enumerator.GetDefaultAudioEndpoint(eRender, eConsole)
         }.context("找不到默认输出设备 (loopback)")?;
 
-        let client_unk = unsafe {
-            device.Activate(&IID_IAUDIO_CLIENT, CLSCTX_ALL, None)
-        }.context("Activate IAudioClient 失败")?;
+        let client_unk = immdevice_activate(&device, &IID_IAUDIO_CLIENT, CLSCTX_ALL as u32)
+            .context("Activate IAudioClient 失败")?;
         let client: IAudioClient = unsafe { client_unk.cast()? };
 
-        // 跳过 GetMixFormat (windows 0.52 中 WAVEFORMATEX 类型导入不稳定)
-        // 直接用默认立体声 float32 格式 — 现代 Windows 设备均兼容
         let sample_rate: u32 = 48000;
         let channels: usize = 2;
         let bits_per_sample: usize = 32;
 
         let wfx = WAVEFORMATEX {
-            wFormatTag: 0xFFFE, // WAVE_FORMAT_EXTENSIBLE
+            wFormatTag: 0xFFFE,
             nChannels: channels as u16,
             nSamplesPerSec: sample_rate,
             nAvgBytesPerSec: sample_rate * channels as u32 * (bits_per_sample as u32 / 8),
@@ -851,22 +913,18 @@ mod wasapi_loopback {
             cbSize: 22,
         };
 
-        unsafe {
-            client
-                .Initialize(
-                    AUDCLNT_SHAREMODE_SHARED,
-                    AUDCLNT_STREAMFLAGS_LOOPBACK,
-                    0,
-                    0,
-                    &wfx as *const WAVEFORMATEX as *const _,
-                    None,
-                )
-                .context("IAudioClient::Initialize (LOOPBACK) 失败")?;
-        }
+        iaudioclient_initialize(
+            &client,
+            AUDCLNT_SHAREMODE_SHARED as u32,
+            AUDCLNT_STREAMFLAGS_LOOPBACK as u32,
+            0,
+            0,
+            &wfx,
+            None,
+        ).context("IAudioClient::Initialize (LOOPBACK) 失败")?;
 
-        let cap_unk = unsafe {
-            client.GetService(&IID_IAUDIO_CAPTURE_CLIENT)
-        }.context("GetService IAudioCaptureClient 失败")?;
+        let cap_unk = iaudioclient_getservice(&client, &IID_IAUDIO_CAPTURE_CLIENT)
+            .context("GetService IAudioCaptureClient 失败")?;
         let capture_client: IAudioCaptureClient = unsafe { cap_unk.cast()? };
 
         unsafe { client.Start().context("IAudioClient::Start 失败")?; }
