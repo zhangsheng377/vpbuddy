@@ -121,6 +121,8 @@
 | 飞书子 session prompt 泄露 VPBuddy 身份 | 子 agent prompt 改为"你是本次会议的助手"+ 数据隔离 | commit `c412abe` |
 | 客户端 `gpu.zhangshengdong.com` IPv6-only 域名在 V 家网 (IPv4 单栈) 解析不到 | LAN 直连 `http://192.168.10.63:8765` | 2026-07-01 |
 | Chroma 第一次 query 加载 embedding 模型 ~1s | 启动时预热 `get_rag().count()` | ADR-0019 |
+| 服务端手动 `vpbuddy ui` 重启 → 百炼 API key 丢失 → ASR 报 401 Unauthorized | **必须用 `bash run.sh` 启动** (注入 DASHSCOPE_API_KEY/BAILIAN_API_KEY) | 2026-07-12 |
+| WS `send_frame()` 失败时 `capturing.store(false)` 连带杀 SSE → demo 送达失败 | **SSE 独立 sse_active flag** + WS 失败只 break | 2026-07-12 |
 
 ---
 

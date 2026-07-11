@@ -1,13 +1,13 @@
 # VPBuddy HTTP API 参考
 
-> **版本**: v0.21.12 · `@ 2026-07-11`
+> **版本**: v0.22.5 · `@ 2026-07-12`
 > **Base URL**: `http://47.100.182.3:28765`（公网 GPU 服务器）
 > **协议**: HTTP/1.1 · WebSocket 实时 ASR · SSE 实时推送 · Multipart 上传
 > **编码**: 所有请求/响应使用 UTF-8
 > **CORS**: 所有端点返回 `Access-Control-Allow-Origin: *`
 > **认证 (ADR-0047)**: 除 `/healthz` 和 `/api/auth/*` 外所有端点要求 `Authorization: Bearer <token>`。WebSocket 端点通过 `?token=<JWT>` query param 认证。
 > **会议隔离 (ADR-0050)**: 所有单会议端点 (state/docs/events/aggregate/collab/chat/close/materials) 仅 owner 可访问, 非 owner 返回 `403`
-> **百炼 ASR (ADR-0051)**: API Key 从 `DASHSCOPE_API_KEY` 环境变量读取, 仓库不存明文
+> **百炼 ASR (ADR-0051)**: API Key 从 `DASHSCOPE_API_KEY` 环境变量读取, 仓库不存明文; 服务端**必须**通过 `bash run.sh` 启动以注入 key。
 > **⚠️ Breaking in v0.20**: `upload_audio`、`stream_chunk`、`stream_stop` 已移除，30s 切片模式已废弃，请使用 WebSocket 实时 ASR。
 
 ---
@@ -481,15 +481,19 @@ GET /api/meetings/{id}/docs
 | risk | 风险评估 | 含 RISK-XXXXXX 唯一编号 |
 | demo | HTML 原型 | 可交互 HTML 页面 (多版本) |
 
-**文档生成生命周期** (v0.16+):
+**文档生成生命周期** (v0.16+, v0.22.5 更新):
+
 ```
 WebSocket ASR 连接建立
   → 每句完成 → 写入 MeetingState.cleaned_text
-  → 15s 后 → 自驱动 poll 提交第一轮 task_manager 任务
+  → gkd 守护线程每 6s 扫描, cleaned_text >50 字时触发文档生成
      → batch_docs agent (5 文档, 1 次 LLM 调用)
-     → demo agent (HTML 原型, 独立 session)
-  → 之后每 30s 检查 cleaned_text 增量, >50 字自动重触发
+     → demo agent (HTML 原型, 独立 session, 并行)
+  → cleaned_text 有增量变化 → 自动重触发
   → 文档就绪 (总 ~25-60s)
+
+⚠️ v0.22.5: demo 写入版本时检查内容合法性—HTML <3KB 且含"等待更多会议内容"/"暂无会议内容" → 拒绝写入版本
+⚠️ v0.22.4: SSE 生命周期与音频采集解耦 — 停采集后 SSE 保持 30s 以接收 demo-new-version 等事后事件
 ```
 
 ---
@@ -582,7 +586,7 @@ GET /api/meetings/{id}/events
 | `asr_complete` | `{sentence_count, full_text}` | 识别完成 |
 | `asr_error` | `{error}` | 百炼错误 |
 | `doc-update` | `{kind, status, doc_size, content?}` | 某个文档生成完成 |
-| `demo-new-version` | `{version, summary}` | 新 demo 版本写入 |
+| `demo-new-version` | `{version, summary, file_size, file}` | 新 demo 版本写入 (v0.22.5: 客户端自动刷新版本列表) |
 | `chat-message` | `{role, content, source, ...}` | Chat 助理消息 |
 | `collab-update` | `{action, qid, section, question, answer?}` | 协作提问/回答 |
 | `meeting-complete` | `{status: "user_closed"}` | 会议结束 |
@@ -891,16 +895,10 @@ GET /api/timeline
 | `/data/vpbuddy/server/src/` | 服务端 Python 源码 |
 | `/data/vpbuddy/server/data/experiences/` | 经验蒸馏 JSON |
 
-### 近期变更 (v0.21.1–v0.21.8)
+### 近期变更 (v0.22.4–v0.22.5)
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
-| v0.21.8 | 2026-07-11 | 双流重采16kHz防ASR混音错乱 + RAG检索去重 + docs面板补齐doc-update + Chat超时120→300s+retry |
-| v0.21.7 | 2026-07-11 | 麦克风+内录混合比例 (mic 100%+loopback 30%) 防ASR干扰 + demo版本路径 fix + Chat注入上传文件路径 + WS 30s keepalive + WS失败静默退出 |
-| v0.21.6 | 2026-07-11 | Win both→mic+WASAPI loopback 双流混合 + demo 恢复与 batch_docs 并行触发 |
-| v0.21.5 | 2026-07-11 | KB检索改 user_id 隔离 (不再限 meeting_id) + WS 断连优雅退出 (break) + stop_capture 超时 10s→3s |
-| v0.21.4 | 2026-07-11 | 回归测试全覆盖 (#28/#29/#30/#31) + ASR降噪修复 + bailian签名修复 |
-| v0.21.3 | 2026-07-11 | WS断线不误关会议 (_stop_received 状态机) + ASR降噪第一层 (填充词/设备测试/重复过滤) + hash文档调度 debounce 6s + speaker_id UNKNOWN + recording_session_id |
-| v0.21.2 | 2026-07-10 | 客户端日志"打开目录"路径修复 + WS mpsc buffer 256→1024 |
-| v0.21.1 | 2026-07-10 | 后端鉴权补齐: 12处 owner 校验 (BFF+路由/collab) + KB delete user_id 归属校验 + `/api/status` 需要认证 |
-| v0.20.0 | 2026-07-08 | 废弃旧 ASR 接口，新增 WebSocket 实时百炼 ASR + SSE 事件流重写 |
+| v0.22.5 | 2026-07-12 | demo版本占位拒绝 (write_demo_version 拦截"等待更多会议内容") + gkd阈值 10→50字 + demo-new-version SSE链路完整 (Rust显式分支 + 前端自动刷新版本列表) |
+| v0.22.4 | 2026-07-12 | SSE生命周期与采集解耦 (sse_active独立flag, 停采集后保持30s) + WS发送失败不再设capturing=false (防止服务端断百炼WS时误杀SSE) + 服务端必须bash run.sh启动 (注入BAILIAN_API_KEY/DASHSCOPE_API_KEY) |
+| v0.21.12 | 2026-07-11 | (基线) |
