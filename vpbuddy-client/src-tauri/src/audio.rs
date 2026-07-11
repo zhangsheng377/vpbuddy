@@ -787,7 +787,7 @@ mod wasapi_loopback {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{mpsc, Arc};
 
-    use windows::core::{GUID, Interface, IUnknown};
+    use windows::core::{GUID, IUnknown};
     use windows::Win32::Media::Audio::{
         eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDevice, IMMDeviceEnumerator,
         AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
@@ -824,7 +824,7 @@ mod wasapi_loopback {
             let this = device.as_raw();
             let vtbl = *(this as *const *const *const ());
             let fptr: *const () = *((*vtbl).add(3));
-            let activate: RawActivate = std::mem::transmute(fptr);
+            let activate: RawActivate = std::mem::transmute_copy(&fptr);
             let mut ppv: *mut std::ffi::c_void = std::ptr::null_mut();
             let hr = activate(this, iid, clsctx, std::ptr::null(), &mut ppv);
             if hr != 0 {
@@ -843,7 +843,7 @@ mod wasapi_loopback {
             let this = client.as_raw();
             let vtbl = *(this as *const *const *const ());
             let fptr: *const () = *((*vtbl).add(14));
-            let gs: RawGetService = std::mem::transmute(fptr);
+            let gs: RawGetService = std::mem::transmute_copy(&fptr);
             let mut ppv: *mut std::ffi::c_void = std::ptr::null_mut();
             let hr = gs(this, iid, &mut ppv);
             if hr != 0 {
@@ -870,7 +870,7 @@ mod wasapi_loopback {
             let this = client.as_raw();
             let vtbl = *(this as *const *const *const ());
             let fptr: *const () = *((*vtbl).add(7));
-            let init: RawInitialize = std::mem::transmute(fptr);
+            let init: RawInitialize = std::mem::transmute_copy(&fptr);
             let session_ptr = audio_session_guid.map(|g| g as *const GUID).unwrap_or(std::ptr::null());
             let hr = init(this, mode, flags, buf_dur, periodicity, wfx, session_ptr);
             if hr != 0 {
@@ -895,9 +895,9 @@ mod wasapi_loopback {
             enumerator.GetDefaultAudioEndpoint(eRender, eConsole)
         }.context("找不到默认输出设备 (loopback)")?;
 
-        let client_unk = immdevice_activate(&device, &IID_IAUDIO_CLIENT, CLSCTX_ALL as u32)
+        let client_unk = immdevice_activate(&device, &IID_IAUDIO_CLIENT, CLSCTX_ALL.0)
             .context("Activate IAudioClient 失败")?;
-        let client: IAudioClient = unsafe { client_unk.cast()? };
+        let client: IAudioClient = unsafe { std::mem::transmute_copy(&client_unk) };
 
         let sample_rate: u32 = 48000;
         let channels: usize = 2;
@@ -915,8 +915,8 @@ mod wasapi_loopback {
 
         iaudioclient_initialize(
             &client,
-            AUDCLNT_SHAREMODE_SHARED as u32,
-            AUDCLNT_STREAMFLAGS_LOOPBACK as u32,
+            AUDCLNT_SHAREMODE_SHARED.0,
+            AUDCLNT_STREAMFLAGS_LOOPBACK,
             0,
             0,
             &wfx,
@@ -925,7 +925,7 @@ mod wasapi_loopback {
 
         let cap_unk = iaudioclient_getservice(&client, &IID_IAUDIO_CAPTURE_CLIENT)
             .context("GetService IAudioCaptureClient 失败")?;
-        let capture_client: IAudioCaptureClient = unsafe { cap_unk.cast()? };
+        let capture_client: IAudioCaptureClient = unsafe { std::mem::transmute_copy(&cap_unk) };
 
         unsafe { client.Start().context("IAudioClient::Start 失败")?; }
 
