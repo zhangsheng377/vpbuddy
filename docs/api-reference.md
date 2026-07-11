@@ -1,6 +1,6 @@
 # VPBuddy HTTP API 参考
 
-> **版本**: v0.20.1 · `@ 2026-07-10`
+> **版本**: v0.21.4 · `@ 2026-07-11`
 > **Base URL**: `http://47.100.182.3:28765`（公网 GPU 服务器）
 > **协议**: HTTP/1.1 · WebSocket 实时 ASR · SSE 实时推送 · Multipart 上传
 > **编码**: 所有请求/响应使用 UTF-8
@@ -156,7 +156,7 @@ data: {json_string}
 
 ```
 
-事件类型: `transcript` / `asr_status` / `asr_complete` / `asr_error` / `doc-update` / `chat-message` / `collab-update` / `meeting-complete` / `demo-new-version`
+事件类型: `asr_status` / `asr_complete` / `asr_error` / `transcript` / `recording-disconnected` / `doc-update` / `chat-message` / `collab-update` / `meeting-complete` / `demo-new-version`
 
 ---
 
@@ -381,22 +381,22 @@ WS /api/meetings/{id}/realtime_asr
 
 **音频帧**: binary, 16kHz mono 16-bit PCM little-endian。推荐每帧 20ms (= 640 bytes)。
 
-**停止**: 发 `{"type": "stop"}` 或关闭 WebSocket。
+**停止**: 发 `{"type": "stop"}` 结束录制。**v0.21.3 变更**: 只有客户端显式发送 `stop` 才会触发会议 finalize (文档生成+经验蒸馏)。WebSocketDisconnect (网络断连/切网/代理 502) 不再错误地 close meeting。断连时服务端推送 `recording-disconnected` SSE 事件。
 
 **服务端推送** (服务端 → 客户端):
 
 | type | 说明 |
 |------|------|
 | `asr_status` | `{"status": "connected"/"closed"}` — 百炼连接状态 |
-| `transcript` | `{"text": "...", "begin_time": ms, "end_time": ms, "is_sentence_end": bool}` — 转写结果 |
+| `transcript` | `{"text": "...", "begin_time": ms, "end_time": ms, "is_sentence_end": bool, "is_noise": bool, "speaker_id": "UNKNOWN"}` — v0.21.3 新增 `is_noise` (噪声标记) 和 `speaker_id` (当前固定 "UNKNOWN"，百炼不做说话人分离) |
 | `asr_complete` | `{"sentence_count": N, "full_text": "..."}` — 识别完成 |
 | `asr_error` | `{"error": "..."}` — 百炼错误 |
 
 **特点**:
 - 百炼 fun-asr-realtime 全程同一条 WebSocket 双工流，模型内部利用上文语音特征提升下文识别
-- 每句完成时自动写入 `MeetingState.cleaned_text`，文档生成 agent 实时读取
-- 15 秒后自动触发第一轮文档生成（无需等 close）
-- 持续轮询（每 30s），文本增量 >50 字自动重新触发
+- 每句完成时自动写入 `MeetingState.cleaned_text`，**v0.21.3 变更**: 写入的是经过降噪过滤的 `cleaned_accumulated_text`（过滤填充词/设备测试短语/无意义重复），非原始累积文本
+- **v0.21.3 变更**: 文档调度改为 hash-based 检测有意义变更，debounce 6s（不再使用 15s 无条件首轮 + 30s 字符增量策略）
+- **v0.21.3 变更**: 断线不误关会议，会议数据保留可用于后续重连
 
 **典型流程**:
 ```
@@ -597,7 +597,7 @@ GET /api/meetings/{id}/events
 | POST | `/api/kb/search` | JSON 搜索 `{"query":"...", "top_k":5}` |
 | POST | `/api/kb/upload` | 上传文件 (.txt/.md/.pdf, ≤50MB) |
 | GET | `/api/kb/list?meeting_id=Y` | KB 统计 + 文档列表 |
-| DELETE | `/api/kb/{doc_id}` | 删除文档 |
+| DELETE | `/api/kb/{doc_id}` | 删除文档 (v0.21.1+: 需认证+owner校验，非文件 owner 返回 403) |
 | GET | `/api/kb/{doc_id}/file` | 下载 KB 文档原始文件 |
 
 ### KB 上传参数 (v0.19.0)
@@ -890,3 +890,13 @@ GET /api/timeline
 | `/data/vpbuddy/server/docs/{mid}/` | 6 文档 + demo HTML |
 | `/data/vpbuddy/server/src/` | 服务端 Python 源码 |
 | `/data/vpbuddy/server/data/experiences/` | 经验蒸馏 JSON |
+
+### 近期变更 (v0.21.1–v0.21.4)
+
+| 版本 | 日期 | 变更 |
+|------|------|------|
+| v0.21.4 | 2026-07-11 | 回归测试全覆盖 (#28/#29/#30/#31) + ASR降噪修复 + bailian签名修复 |
+| v0.21.3 | 2026-07-11 | WS断线不误关会议 (_stop_received 状态机) + ASR降噪第一层 (填充词/设备测试/重复过滤) + hash文档调度 debounce 6s + speaker_id UNKNOWN + recording_session_id |
+| v0.21.2 | 2026-07-10 | 客户端日志"打开目录"路径修复 + WS mpsc buffer 256→1024 |
+| v0.21.1 | 2026-07-10 | 后端鉴权补齐: 12处 owner 校验 (BFF+路由/collab) + KB delete user_id 归属校验 + `/api/status` 需要认证 |
+| v0.20.0 | 2026-07-08 | 废弃旧 ASR 接口，新增 WebSocket 实时百炼 ASR + SSE 事件流重写 |
