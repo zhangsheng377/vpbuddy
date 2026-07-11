@@ -97,8 +97,8 @@ impl AudioCapture {
             "both" => {
                 #[cfg(target_os = "windows")]
                 {
-                    log::warn!("Windows both 路径 v0.21.0 暂简化为 WASAPI loopback-only (待 v0.22 mic+loopback 混合)");
-                    return Self::new_wasapi_loopback();
+                    log::warn!("Windows both 路径暂用 microphone (WASAPI loopback 不可用)");
+                    return Self::new_with_device_inner(device_id);
                 }
                 #[cfg(not(target_os = "windows"))]
                 {

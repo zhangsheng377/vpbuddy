@@ -1423,16 +1423,46 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
         _doc_running[0] = True
 
         def _doc_runner(gen_id: int, mid: str) -> dict:
-            """一次性文档 runner (被 task_manager 调度)."""
+            """一次性文档 runner (被 task_manager 调度).
+
+            batch_docs 先跑, 等 5 文档都写盘后再跑 demo.
+            """
+            import time as _time
             from ..sub_session_controller import _dispatch_kind, BATCH_DOCS_KIND, DEMO_KIND
-            kinds = [BATCH_DOCS_KIND, DEMO_KIND]
+
             results = {}
-            for kind in kinds:
-                try:
-                    r = _dispatch_kind(mid, kind, dry_run=False)
-                    results[kind] = {"triggered": r.get("triggered"), "error": r.get("error")}
-                except Exception as e:
-                    results[kind] = {"triggered": False, "error": str(e)}
+
+            try:
+                r = _dispatch_kind(mid, BATCH_DOCS_KIND, dry_run=False)
+                results[BATCH_DOCS_KIND] = {"triggered": r.get("triggered"), "error": r.get("error")}
+            except Exception as e:
+                results[BATCH_DOCS_KIND] = {"triggered": False, "error": str(e)}
+
+            batch_doc_kinds = ["req", "arch", "tasks", "api", "risk"]
+            timeout = 60
+            poll_interval = 1
+            deadline = _time.time() + timeout
+            all_ready = False
+            while _time.time() < deadline:
+                all_ready = True
+                for kind in batch_doc_kinds:
+                    dp = _doc_path(mid, kind)
+                    if not dp.exists() or dp.stat().st_size == 0:
+                        all_ready = False
+                        break
+                if all_ready:
+                    break
+                _time.sleep(poll_interval)
+
+            if not all_ready:
+                _log.warning("[_doc_runner] batch_docs 5 docs 未全部就绪 (timeout=60s), 仍尝试跑 demo")
+
+            try:
+                r = _dispatch_kind(mid, DEMO_KIND, dry_run=False)
+                results[DEMO_KIND] = {"triggered": r.get("triggered"), "error": r.get("error")}
+            except Exception as e:
+                results[DEMO_KIND] = {"triggered": False, "error": str(e)}
+
             return results
 
         # Issue #31: 自驱动文档调度 — hash-based 检测有意义变更, debounce 6s

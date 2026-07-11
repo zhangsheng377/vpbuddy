@@ -179,7 +179,7 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
     log::info!("  capturing={} (设 false 中)", state.capturing.load(Ordering::SeqCst));
     state.capturing.store(false, Ordering::SeqCst);
     if let Some(h) = state.capture_handle.lock().await.take() {
-        match tokio::time::timeout(std::time::Duration::from_secs(10), h).await {
+        match tokio::time::timeout(std::time::Duration::from_secs(3), h).await {
             Ok(Ok(())) => log::info!("  采集 task 已优雅退出"),
             Ok(Err(e)) => log::warn!("  采集 task 异常结束: {e}"),
             Err(_) => log::warn!("  采集 task 退出超时"),
@@ -389,7 +389,7 @@ pub async fn run_realtime_loop(
                 log::error!("实时模式: WS 发送失败: {e}");
                 let _ = app_stats.emit("error", format!("实时转写连接断开: {e}"));
                 capturing.store(false, Ordering::SeqCst);
-                anyhow::bail!("WS send failed: {e}");
+                break;
             }
             total_bytes_sent += frame_len;
             bytes.store(total_bytes_sent, Ordering::SeqCst);

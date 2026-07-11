@@ -82,3 +82,13 @@ data/
 *.parquet
 docs/PHASE2_TEST/
 .github_token
+.playwright/
+_check_*.py
+_deploy*.py
+_debug*.py
+_run_*.py
+_run_*.bat
+_test_*.py
+diff_*.txt
+e2e_test_results.txt
+_standalone_e2e/
