@@ -168,13 +168,14 @@ def _gkd_runner(mid: str):
 
 def _gkd_loop():
     global _gkd_first
+    print("[gkd] loop started", flush=True)
     _tm = _get_tm_gkd()
     while True:
         _time_gkd.sleep(6)
         try:
             all_mids = _gkd_st.list_meetings()
             recent = [m for m in all_mids if not m.endswith((".chat", ".stream"))][:20]
-            _gkd_logger.info("scanning %d recent meetings", len(recent))
+            print(f"[gkd] scanning {len(recent)} meetings (of {len(all_mids)} total)", flush=True)
             for mid in recent:
                 try:
                     state = _gkd_st.load(mid)
@@ -187,11 +188,12 @@ def _gkd_loop():
                 prev = _gkd_last.get(mid, "")
                 if cur_hash != prev or _gkd_first:
                     _gkd_last[mid] = cur_hash
-                    _gkd_logger.info("triggering docs for meeting=%s len=%d", mid, len(cur))
+                    print(f"[gkd] triggering docs for meeting={mid} len={len(cur)}", flush=True)
                     _tm.submit(mid, _gkd_runner)
             _gkd_first = False
         except Exception:
             _gkd_logger.warning("loop error", exc_info=True)
+            print(f"[gkd] loop error", flush=True)
 
 _gkd_thread = _threading_gkd.Thread(target=_gkd_loop, daemon=True, name="gkd")
 _gkd_thread.start()
