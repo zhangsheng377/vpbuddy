@@ -681,11 +681,16 @@ listen("chat-message", (e) => {
   renderChatMessage(e.payload);
 });
 
+// v0.22.5: demo-new-version 事件 — 重新拉取版本列表
+listen("demo-new-version", (e) => {
+  console.log("demo-new-version:", e.payload);
+  loadDemoVersions();
+});
+
 // 2026-07-01 ADR-0028 Commit 4: SSE `collab-update` 推流 — 实时刷新疑问面板
 // payload: { action: "ask"|"answer", qid, section, question, answer, status, asker, answerer }
 // 注: ask_question/answer_question 端点用 asker/answerer, 但 GET /collab 返 asked_by/answered_by
-listen("collab-update", (e) => {
-  const p = e.payload || {};
+listen("collab-update", (e) => {  const p = e.payload || {};
   if (p.action === "ask") {
     upsertPendingQuestion({
       qid: p.qid,

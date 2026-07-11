@@ -764,6 +764,13 @@ fn handle_sse_event(app: &AppHandle, event_str: &str, last_event_id: &mut Option
             log::info!("🎉 meeting-complete: 6 docs 全 stored, SSE 即将关闭");
             let _ = app.emit("meeting-complete", &payload);
         }
+        "demo-new-version" => {
+            log::info!("🔄 demo-new-version v{}: {} ({} bytes)",
+                payload.get("version").and_then(|v| v.as_u64()).unwrap_or(0),
+                payload.get("summary").and_then(|v| v.as_str()).unwrap_or(""),
+                payload.get("file_size").and_then(|v| v.as_u64()).unwrap_or(0));
+            let _ = app.emit("demo-new-version", &payload);
+        }
         "chat-message" => {
             log::info!("💬 chat-message");
             let _ = app.emit("chat-message", &payload);
