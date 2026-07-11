@@ -67,6 +67,14 @@ class RAGBackend:
         """统计文档数 (可选过滤)."""
         ...
 
+    def get(
+        self,
+        where: dict[str, str] | None = None,
+        limit: int = 1000,
+    ) -> dict[str, Any]:
+        """按 where 条件查文档, 返回 Chroma raw dict {ids, documents, metadatas}."""
+        ...
+
 
 class ChromaRAG(RAGBackend):
     """Chroma 嵌入式实现 (ADR-0019).
@@ -152,6 +160,14 @@ class ChromaRAG(RAGBackend):
             return
         self._collection.delete(ids=ids)
         logger.debug("ChromaRAG deleted %d docs", len(ids))
+
+    def get(
+        self,
+        where: dict[str, str] | None = None,
+        limit: int = 1000,
+    ) -> dict[str, Any]:
+        """按 where 条件查文档, 返回 Chroma raw dict {ids, documents, metadatas}."""
+        return self._collection.get(where=where, limit=limit)
 
     def list_docs(
         self,

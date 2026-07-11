@@ -185,6 +185,22 @@ def handle_kb_upload(body: bytes, content_type: str, user_id: str = "") -> dict:
 
     # 入库 Chroma (ADR-0047: metadata 加 user_id; #20: 加 scope/labels/meeting_callable)
     rag = get_rag()
+    content_md5 = hashlib.md5(text.encode()).hexdigest()
+
+    # 检查是否已有相同内容的文档 (防重复插入)
+    existing = rag.get(where={"user_id": user_id, "content_hash": content_md5}, limit=1)
+    if existing.get("ids"):
+        logger.info("KB upload: dup skip meeting=%s file=%s hash=%s", meeting_id, filename, content_md5[:8])
+        return {
+            "status": 200,
+            "doc_id": existing["ids"][0],
+            "meeting_id": meeting_id,
+            "filename": filename,
+            "chunks": 1,
+            "char_count": len(text),
+            "duplicate": True,
+        }
+
     doc_id = f"{meeting_id}:{file_uuid}"
     now = datetime.now(UTC).isoformat()
     rag.add(
@@ -198,6 +214,7 @@ def handle_kb_upload(body: bytes, content_type: str, user_id: str = "") -> dict:
             "chunk_index": 0,
             "file_size": len(file_bytes),
             "file_ext": Path(filename).suffix.lower().lstrip("."),
+            "content_hash": content_md5,
             "scope": scope,
             "labels": labels,
             "meeting_callable": meeting_callable,
@@ -273,9 +290,17 @@ def handle_chat_upload(body: bytes, content_type: str, meeting_id: str, user_id:
                 if not content.strip():
                     results.append({"filename": fname, "status": "empty"})
                     continue
+                content_md5 = hashlib.md5(content.encode()).hexdigest()
+                rag = get_rag()
+
+                # 检查是否已有相同内容的文档
+                existing = rag.get(where={"user_id": user_id, "content_hash": content_md5}, limit=1)
+                if existing.get("ids"):
+                    results.append({"filename": fname, "status": "duplicate", "doc_id": existing["ids"][0], "chars": len(content)})
+                    continue
+
                 file_uuid = uuid.uuid4().hex[:12]
                 doc_id = f"{meeting_id}:chat-upload:{file_uuid}"
-                rag = get_rag()
                 now = datetime.now(UTC).isoformat()
                 rag.add(
                     ids=[doc_id],
@@ -288,6 +313,7 @@ def handle_chat_upload(body: bytes, content_type: str, meeting_id: str, user_id:
                         "chunk_index": 0,
                         "file_size": len(data),
                         "file_ext": Path(fname).suffix.lower().lstrip("."),
+                        "content_hash": content_md5,
                     }],
                 )
                 kb_doc_ids.append(doc_id)
@@ -306,21 +332,6 @@ def handle_chat_upload(body: bytes, content_type: str, meeting_id: str, user_id:
         "image_count": len(image_data_uris),
         # 图片不直接返 data URI (太大), 由调用方按需从 chat 上下文拿
     }
-
-
-def _dedup_results(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    seen: set[str] = set()
-    out: list[dict[str, Any]] = []
-    for r in raw:
-        doc = r.get("document", "")
-        if not doc:
-            out.append(r)
-            continue
-        key = str(hashlib.md5(doc.encode()).hexdigest())
-        if key not in seen:
-            seen.add(key)
-            out.append(r)
-    return out
 
 
 def handle_kb_search(params: dict[str, list[str]], body_bytes: bytes, user_id: str = "") -> dict:
@@ -347,8 +358,7 @@ def handle_kb_search(params: dict[str, list[str]], body_bytes: bytes, user_id: s
         where["user_id"] = user_id
 
     rag = get_rag()
-    raw_results = rag.query(query, top_k=top_k, where=where if where else None)
-    results = _dedup_results(raw_results)
+    results = rag.query(query, top_k=top_k, where=where if where else None)
 
     return {
         "results": results,
