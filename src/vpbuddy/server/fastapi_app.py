@@ -154,7 +154,7 @@ _gkd_st = _MS_gkd(DATA_DIR)
 _gkd_last: dict[str, str] = {}
 _gkd_first = True
 
-def _gkd_runner(mid: str):
+def _gkd_runner(gen_id: int, mid: str):
     try:
         with _TPE_gkd(max_workers=2) as ex:
             futures = {k: ex.submit(_dk_gkd, mid, k, False) for k in [_bk_gkd, _dmk_gkd]}
