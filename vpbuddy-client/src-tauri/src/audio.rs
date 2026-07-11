@@ -37,6 +37,11 @@ enum StreamGuard {
     },
     #[cfg(target_os = "windows")]
     WasapiLoopback(wasapi_loopback::WindowsLoopback),
+    #[cfg(target_os = "windows")]
+    WasapiBoth {
+        _mic: Arc<cpal::Stream>,
+        _loopback: wasapi_loopback::WindowsLoopback,
+    },
 }
 
 pub struct AudioCapture {
@@ -97,8 +102,7 @@ impl AudioCapture {
             "both" => {
                 #[cfg(target_os = "windows")]
                 {
-                    log::warn!("Windows both 路径暂用 microphone (WASAPI loopback 不可用)");
-                    return Self::new_with_device_inner(device_id);
+                    return Self::new_with_wasapi_both(device_id);
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
@@ -141,6 +145,56 @@ impl AudioCapture {
             _stream: StreamGuard::WasapiLoopback(guard),
             rx,
             native_sample_rate: native_rate,
+            is_loopback: true,
+        })
+    }
+
+    #[cfg(target_os = "windows")]
+    fn new_with_wasapi_both(device_id: Option<String>) -> Result<Self> {
+        let AudioCapture { rx: mic_rx, _stream: mic_guard, native_sample_rate: mic_rate, .. } =
+            Self::new_with_device_inner(device_id)?;
+        let (loopback_rx, loopback_rate, loopback_guard) = wasapi_loopback::create_loopback()?;
+        let unified_rate = mic_rate.max(loopback_rate);
+        log::info!("Phase 7 Win both: mic={}Hz + loopback={}Hz → unified={}Hz",
+            mic_rate, loopback_rate, unified_rate);
+
+        let mic_stream = match mic_guard {
+            StreamGuard::Single(s) => Arc::new(s),
+            _ => anyhow::bail!("内部错误: mic 端必须是 Single variant"),
+        };
+
+        let (out_tx, out_rx) = mpsc::sync_channel::<Vec<i16>>(64);
+        let chunk_target = unified_rate as usize;
+        std::thread::spawn(move || {
+            let mut mic_buf: Vec<i16> = Vec::new();
+            let mut loop_buf: Vec<i16> = Vec::new();
+            loop {
+                while mic_buf.len() < chunk_target {
+                    match mic_rx.recv_timeout(Duration::from_millis(500)) {
+                        Ok(mut chunk) => mic_buf.append(&mut chunk),
+                        Err(mpsc::RecvTimeoutError::Timeout) => { mic_buf.resize(chunk_target, 0); break; }
+                        Err(_) => return,
+                    }
+                }
+                while loop_buf.len() < chunk_target {
+                    match loopback_rx.recv_timeout(Duration::from_millis(500)) {
+                        Ok(mut chunk) => loop_buf.append(&mut chunk),
+                        Err(mpsc::RecvTimeoutError::Timeout) => { loop_buf.resize(chunk_target, 0); break; }
+                        Err(_) => return,
+                    }
+                }
+                let take = chunk_target.min(mic_buf.len()).min(loop_buf.len());
+                let mixed = mix_two_streams(&mic_buf[..take], &loop_buf[..take]);
+                if out_tx.send(mixed).is_err() { return; }
+                mic_buf.drain(..take);
+                loop_buf.drain(..take);
+            }
+        });
+
+        Ok(Self {
+            _stream: StreamGuard::WasapiBoth { _mic: mic_stream, _loopback: loopback_guard },
+            rx: out_rx,
+            native_sample_rate: unified_rate,
             is_loopback: true,
         })
     }
