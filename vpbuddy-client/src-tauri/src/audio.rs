@@ -821,7 +821,7 @@ mod wasapi_loopback {
             .context("找不到默认输出设备 (loopback)")?;
 
         let client: IAudioClient = unsafe {
-            device.Activate(&IAudioClient::IID, CLSCTX_ALL, std::ptr::null())?.cast()?
+            device.Activate::<IAudioClient>(CLSCTX_ALL, None)?.cast()?
         };
 
         let mut pwfx: *mut WAVEFORMATEX = std::ptr::null_mut();
@@ -853,7 +853,7 @@ mod wasapi_loopback {
         }
 
         let capture_client: IAudioCaptureClient = unsafe {
-            client.GetService(&IAudioCaptureClient::IID)?.cast()?
+            client.GetService::<IAudioCaptureClient>()?.cast()?
         };
 
         unsafe { client.Start().context("IAudioClient::Start 失败")?; }
