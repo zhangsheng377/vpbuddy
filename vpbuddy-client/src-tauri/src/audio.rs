@@ -790,12 +790,10 @@ mod wasapi_loopback {
     use windows::core::Interface;
     use windows::Win32::Media::Audio::{
         eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator,
-        AUDCLNT_SHAREMODE_SHARED,
+        AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
     };
     use windows::Win32::Media::Multimedia::WAVEFORMATEX;
     use windows::Win32::System::Com::{CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED};
-
-    const AUDCLNT_STREAMFLAGS_LOOPBACK: u32 = 0x00020000;
 
     pub struct WindowsLoopback {
         _client: IAudioClient,
@@ -821,7 +819,7 @@ mod wasapi_loopback {
             .context("找不到默认输出设备 (loopback)")?;
 
         let client: IAudioClient = unsafe {
-            device.Activate::<IAudioClient>(CLSCTX_ALL, None)?
+            device.Activate(&IAudioClient::IID, CLSCTX_ALL, None)?
         };
 
         let mut pwfx: *mut WAVEFORMATEX = std::ptr::null_mut();
@@ -853,7 +851,7 @@ mod wasapi_loopback {
         }
 
         let capture_client: IAudioCaptureClient = unsafe {
-            client.GetService::<IAudioCaptureClient>()?
+            client.GetService(&IAudioCaptureClient::IID)?
         };
 
         unsafe { client.Start().context("IAudioClient::Start 失败")?; }
