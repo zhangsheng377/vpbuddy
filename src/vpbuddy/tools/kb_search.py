@@ -20,13 +20,14 @@ from ..rag_backend import get_rag
 logger = logging.getLogger(__name__)
 
 
-def search(meeting_id: str, query: str, top_k: int = 5) -> dict[str, Any]:
-    """检索当前会议 KB (Chroma RAG, 强制 meeting_id 过滤).
+def search(meeting_id: str, query: str, top_k: int = 5, user_id: str = "") -> dict[str, Any]:
+    """检索当前会议 KB (Chroma RAG, 强制 meeting_id + user_id 双重过滤).
 
     Args:
         meeting_id: 当前会议 ID (强制带 where 过滤)
         query: 检索关键词
         top_k: 返回前 N 条 (1-20)
+        user_id: 当前用户 ID (若为空则从 MeetingState 自动读取 owner_id)
 
     Returns:
         {"ok": True, "results": [{"id", "source", "snippet", "distance"}, ...], "count": N}
@@ -38,11 +39,23 @@ def search(meeting_id: str, query: str, top_k: int = 5) -> dict[str, Any]:
         return {"ok": False, "error": "query 必填"}
     top_k = max(1, min(20, int(top_k)))
 
+    if not user_id:
+        try:
+            from ..storage import MeetingStorage
+            state = MeetingStorage().load(meeting_id)
+            user_id = state.owner_id
+        except Exception:
+            pass
+
+    where: dict[str, str] = {"meeting_id": meeting_id}
+    if user_id:
+        where["user_id"] = user_id
+
     try:
         rag = get_rag()
-        raw = rag.query(query_text=query, top_k=top_k, where={"meeting_id": meeting_id})
+        raw = rag.query(query_text=query, top_k=top_k, where=where)
     except Exception as e:
-        logger.warning("kb_search 失败: meeting=%s err=%s", meeting_id, e)
+        logger.warning("kb_search 失败: meeting=%s user=%s err=%s", meeting_id, user_id or "?", e)
         return {"ok": False, "error": f"KB 检索失败: {str(e)[:200]}"}
 
     results = [

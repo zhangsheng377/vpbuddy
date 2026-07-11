@@ -325,12 +325,12 @@ def handle_kb_search(params: dict[str, list[str]], body_bytes: bytes, user_id: s
     meeting_id = req.get("meeting_id") or params.get("meeting_id", [None])[0]
     scope = req.get("scope", "current")
 
-    # ADR-0047: 按 user_id 过滤 (知识库跨会议共享但按用户隔离)
+    # ADR-0047: 按 user_id + meeting_id 双重过滤 (知识库按用户隔离)
     where: dict[str, str] = {}
     if user_id:
         where["user_id"] = user_id
-    elif scope == "current" and meeting_id:
-        where["meeting_id"] = meeting_id  # 向后兼容: 无 user_id 时仍按 meeting 过滤
+    if meeting_id:
+        where["meeting_id"] = meeting_id
 
     rag = get_rag()
     results = rag.query(query, top_k=top_k, where=where if where else None)
@@ -352,11 +352,11 @@ def handle_kb_list(params: dict[str, list[str]], user_id: str = "") -> dict:
     rag = get_rag()
     meeting_id = params.get("meeting_id", [None])[0]
 
-    # 构建 where 过滤
+    # 构建 where 过滤 (ADR-0047: 按 user_id + meeting_id 双重过滤)
     where: dict[str, str] = {}
     if user_id:
         where["user_id"] = user_id
-    elif meeting_id:
+    if meeting_id:
         where["meeting_id"] = meeting_id
 
     docs = rag.list_docs(where=where if where else None)
