@@ -22,9 +22,9 @@ pub struct AppState {
     /// 2026-07-02 Phase 7: 当前会议 audio_source (microphone/loopback/both)
     /// start_capture 写, run_capture_loop 读后传给 AudioCapture.
     pub audio_source: Arc<Mutex<Option<String>>>,
+    /// v0.22.4: SSE 独立生命周期 — 停采集后仍保持连接以接收 demo-new-version 等事后事件
+    pub sse_active: Arc<AtomicBool>,
 }
-
-
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct ClientConfig {
     pub gpu_server_url: String,
@@ -161,6 +161,7 @@ impl AppState {
             native_sample_rate: Arc::new(AtomicU32::new(16000)),
             // 2026-07-02 Phase 7: 初始 None, start_capture 时填
             audio_source: Arc::new(Mutex::new(None)),
+            sse_active: Arc::new(AtomicBool::new(false)),
         }
     }
 }

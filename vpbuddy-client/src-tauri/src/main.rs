@@ -178,8 +178,10 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
     log::info!("=== stop_capture 触发 ===");
     log::info!("  capturing={} (设 false 中)", state.capturing.load(Ordering::SeqCst));
     state.capturing.store(false, Ordering::SeqCst);
+    // v0.22.4: run_realtime_loop 现在在 POST /close 后等 30s 才设 sse_active=false
+    // 所以 capture_handle 会多等 30s — 超时设为 60s
     if let Some(h) = state.capture_handle.lock().await.take() {
-        match tokio::time::timeout(std::time::Duration::from_secs(3), h).await {
+        match tokio::time::timeout(std::time::Duration::from_secs(60), h).await {
             Ok(Ok(())) => log::info!("  采集 task 已优雅退出"),
             Ok(Err(e)) => log::warn!("  采集 task 异常结束: {e}"),
             Err(_) => log::warn!("  采集 task 退出超时"),
@@ -228,21 +230,23 @@ async fn start_realtime_capture(
     *state.audio_source.lock().await = Some(audio_source_norm.clone());
 
     state.capturing.store(true, Ordering::SeqCst);
+    state.sse_active.store(true, Ordering::SeqCst);
     state.total_bytes.store(0, Ordering::SeqCst);
     state.total_uploads.store(0, Ordering::SeqCst);
 
-    // SSE 照常启动 (收文档更新)
+    // SSE 使用独立生命周期 — 停采集后仍保持连接, 等待 demo-new-version 等事后事件
     let app_sse = app.clone();
     let gpu_url_sse = gpu_url.clone();
     let mid_sse = meeting_id.clone();
-    let capturing_sse = state.capturing.clone();
+    let sse_stop = state.sse_active.clone();
     let auth_tok_sse2 = auth_token.clone();
     let sse_handle = tokio::spawn(async move {
-        run_sse_loop(app_sse, gpu_url_sse, mid_sse, capturing_sse, auth_tok_sse2).await;
+        run_sse_loop(app_sse, gpu_url_sse, mid_sse, sse_stop, auth_tok_sse2).await;
     });
     *state.sse_handle.lock().await = Some(sse_handle);
 
     let capturing2 = state.capturing.clone();
+    let sse_active2 = state.sse_active.clone();
      let bytes2 = state.total_bytes.clone();
      let native2 = state.native_sample_rate.clone();
      let mid2 = meeting_id.clone();
@@ -253,7 +257,7 @@ async fn start_realtime_capture(
      let handle = tokio::spawn(async move {
          if let Err(e) = run_realtime_loop(
              app, gpu_url, mid2,
-             capturing2, bytes2,
+             capturing2, sse_active2, bytes2,
              dev2, src2, native2,
              auth2,
          ).await {
@@ -271,6 +275,7 @@ pub async fn run_realtime_loop(
     gpu_url: String,
     meeting_id: String,
     capturing: Arc<AtomicBool>,
+    sse_active: Arc<AtomicBool>,
     bytes: Arc<AtomicU64>,
     audio_device: Option<String>,
     audio_source: String,
@@ -415,6 +420,11 @@ pub async fn run_realtime_loop(
         Ok(r) => log::warn!("close_meeting: HTTP {} (非 2xx)", r.status()),
         Err(e) => log::warn!("close_meeting 调用失败: {e}"),
     }
+
+    log::info!("实时模式: 等待 30s 让 SSE 接收 demo-new-version/doc-update 等事后事件...");
+    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+    sse_active.store(false, Ordering::SeqCst);
+    log::info!("实时模式: SSE 关闭信号已发送 (sse_active=false)");
 
     Ok(())
 }
@@ -604,14 +614,14 @@ pub async fn run_sse_loop(
     app: AppHandle,
     gpu_url: String,
     meeting_id: String,
-    capturing: Arc<AtomicBool>,
+    sse_active: Arc<AtomicBool>,
     auth_token: Option<String>,
 ) {
     let url = format!("{}/api/meetings/{}/events", gpu_url, meeting_id);
     let mut retry_count = 0u32;
     let mut last_event_id: Option<String> = None;
 
-    while capturing.load(Ordering::SeqCst) {
+    while sse_active.load(Ordering::SeqCst) {
         let connect_url = if let Some(id) = &last_event_id {
             format!("{url}?last_event_id={}", urlencoding::encode(id))
         } else {
@@ -619,9 +629,8 @@ pub async fn run_sse_loop(
         };
         log::info!("SSE 连接: {connect_url}");
 
-        // 2026-06-27: 用 tokio::select! 让 capturing=false 立即退出 (不等到 reqwest close)
         tokio::select! {
-            r = connect_and_read_sse(&app, &connect_url, capturing.clone(), &mut last_event_id, auth_token.clone()) => {
+            r = connect_and_read_sse(&app, &connect_url, sse_active.clone(), &mut last_event_id, auth_token.clone()) => {
                 match r {
                     Ok(()) => {
                         log::info!("SSE 正常断开");
@@ -632,26 +641,23 @@ pub async fn run_sse_loop(
                         log::warn!("SSE 断开: {e}, 准备重连...");
                         let _ = app.emit("connection-status", serde_json::json!({"sse": "disconnected"}));
                         retry_count += 1;
-                        // 指数退避: 1s, 2s, 4s, 8s, 最多 10s
                         let delay = (1u64 << retry_count.min(3)) * 1000;
                         let delay = delay.min(10_000);
                         tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
                     }
                 }
             }
-            _ = wait_capturing_false(capturing.clone()) => {
-                // v0.22.4: capturing=false 不立即退出, 留给服务端 ~15s 推送 demo-new-version 等事后事件
-                log::info!("SSE loop 检测到 capturing=false, 等待 15s 以接收 demo/事后事件...");
-                tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+            _ = wait_capturing_false(sse_active.clone()) => {
+                log::info!("SSE loop 检测到 sse_active=false (会议结束), 退出");
                 break;
             }
         }
     }
 }
 
-/// 2026-06-27: 等待 capturing 变 false (被 stop_capture 设) — 用于 select! 立即退出
-async fn wait_capturing_false(capturing: Arc<AtomicBool>) {
-    while capturing.load(Ordering::SeqCst) {
+/// 等待 sse_active 变 false (被 run_realtime_loop 在 close 后设) — 用于 select! 退出
+async fn wait_capturing_false(flag: Arc<AtomicBool>) {
+    while flag.load(Ordering::SeqCst) {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 }
@@ -660,7 +666,7 @@ async fn wait_capturing_false(capturing: Arc<AtomicBool>) {
 async fn connect_and_read_sse(
     app: &AppHandle,
     url: &str,
-    capturing: Arc<AtomicBool>,
+    sse_active: Arc<AtomicBool>,
     last_event_id: &mut Option<String>,
     auth_token: Option<String>,
 ) -> anyhow::Result<()> {
@@ -680,7 +686,7 @@ async fn connect_and_read_sse(
     let mut stream = resp.bytes_stream();
     let mut buf = String::new();
 
-    while capturing.load(Ordering::SeqCst) {
+    while sse_active.load(Ordering::SeqCst) {
         use futures_util::StreamExt;
         match tokio::time::timeout(std::time::Duration::from_secs(15), stream.next()).await {
             Ok(Some(Ok(chunk))) => {
