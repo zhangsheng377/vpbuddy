@@ -130,7 +130,11 @@ impl AudioCapture {
             "both" => {
                 #[cfg(target_os = "windows")]
                 {
-                    return Self::new_with_wasapi_both(device_id);
+                    log::warn!(
+                        "Windows both: WASAPI loopback 需要 AUDCLNT_STREAMFLAGS_LOOPBACK, cpal 不支持 → 退化为 mic-only.\n\
+                         v0.22 将用 raw WASAPI COM 实现真正 loopback."
+                    );
+                    return Self::new_with_device_inner(device_id);
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
