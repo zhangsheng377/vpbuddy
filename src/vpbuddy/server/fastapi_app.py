@@ -201,10 +201,11 @@ async def startup_warmup():
             while True:
                 await _asyncio2.sleep(6)
                 try:
-                    for mid in _st.list_meetings():
+                    all_mids = _st.list_meetings()
+                    recent = [m for m in all_mids if not m.endswith((".chat", ".stream"))][:20]
+                    logger.info("[global_kick_docs] scanning %d recent meetings", len(recent))
+                    for mid in recent:
                         if not _st.exists(mid):
-                            continue
-                        if mid.endswith((".chat", ".stream")):
                             continue
                         try:
                             state = _st.load(mid)
