@@ -171,6 +171,57 @@ async def startup_warmup():
         logger.warning("材料存储初始化失败: %s", e)
         print(f"[fastapi_app] 材料存储初始化失败: {e}", flush=True)
 
+    # 全局文档踢动器 (独立于 WS 生命周期)
+    import asyncio as _asyncio2
+
+    async def _global_kick_docs():
+        import hashlib as _hashlib
+        try:
+            from ..task_manager import get_task_manager
+            from ..storage import MeetingStorage
+            from ..sub_session_controller import _dispatch_kind, BATCH_DOCS_KIND, DEMO_KIND
+
+            _meeting_last_hash: dict[str, str] = {}
+            _first_pass = True
+            _st = MeetingStorage(DATA_DIR)
+
+            def _runner(mid: str):
+                from concurrent.futures import ThreadPoolExecutor
+                kinds = [BATCH_DOCS_KIND, DEMO_KIND]
+                with ThreadPoolExecutor(max_workers=2) as ex:
+                    futures = {}
+                    for k in kinds:
+                        futures[k] = ex.submit(_dispatch_kind, mid, k, False)
+                    for k, f in futures.items():
+                        try:
+                            f.result(timeout=300)
+                        except Exception:
+                            pass
+
+            while True:
+                await _asyncio2.sleep(6)
+                try:
+                    for mid in _st.list_meetings():
+                        if not _st.exists(mid):
+                            continue
+                        state = _st.load(mid)
+                        cur = state.cleaned_text or ""
+                        if len(cur) <= 10:
+                            continue
+                        cur_hash = _hashlib.md5(cur.encode()).hexdigest()
+                        prev = _meeting_last_hash.get(mid, "")
+                        if cur_hash != prev or _first_pass:
+                            _meeting_last_hash[mid] = cur_hash
+                            logger.info("[global_kick_docs] triggering docs for %s len=%d", mid, len(cur))
+                            get_task_manager().submit(mid, _runner)
+                    _first_pass = False
+                except Exception:
+                    logger.warning("global_kick_docs loop error", exc_info=True)
+        except Exception:
+            logger.warning("global_kick_docs init failed", exc_info=True)
+
+    _asyncio2.create_task(_global_kick_docs())
+
 
 # =============================================================================
 # Auth dependency
