@@ -64,6 +64,10 @@ def _compress_repetitions(text: str) -> str:
     """压缩无意义重复: '不是不是不是' → '不是'"""
     result = text
     for pattern in _NOISE_PATTERNS:
+        # Replace any N consecutive repetitions down to 1
+        for N in (5, 4, 3):
+            while pattern * N in result:
+                result = result.replace(pattern * N, pattern)
         while pattern * 2 in result:
             result = result.replace(pattern * 2, pattern)
     return result
