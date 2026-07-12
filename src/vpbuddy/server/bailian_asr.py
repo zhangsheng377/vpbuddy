@@ -252,6 +252,7 @@ def start_session(
 
     # 启动流式识别
     recognition.start()
+    print(f"[bailian_asr] session started: meeting={meeting_id} rate={sample_rate} fmt={fmt}", flush=True)
     logger.info("[bailian_asr] session started: meeting=%s rate=%d", meeting_id, sample_rate)
 
     return session

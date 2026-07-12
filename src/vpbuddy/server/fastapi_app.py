@@ -174,21 +174,9 @@ def _gkd_loop():
         _time_gkd.sleep(6)
         try:
             all_mids = _gkd_st.list_meetings()
-            candidates = []
-            for m in all_mids:
-                if m.endswith((".chat", ".stream")):
-                    continue
-                try:
-                    state = _gkd_st.load(m)
-                except Exception:
-                    continue
-                if getattr(state, "capturing", None) is True:
-                    candidates.append(m)
-                elif getattr(state, "sse_active", None) is True:
-                    candidates.append(m)
-            recent = candidates[:20]
+            recent = [m for m in all_mids if not m.endswith((".chat", ".stream"))][:20]
             if recent:
-                print(f"[gkd] scanning {len(recent)} meetings (of {len(all_mids)} total, {len(candidates)} active)", flush=True)
+                print(f"[gkd] scanning {len(recent)} meetings (of {len(all_mids)} total)", flush=True)
             for mid in recent:
                 try:
                     state = _gkd_st.load(mid)
@@ -1509,6 +1497,7 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
             fmt=format_str,
             data_dir=DATA_DIR,
         )
+        print(f"[ws_realtime_asr] bailian session created: {meeting_id}", flush=True)
 
         # 启动自驱动文档 generator: asyncio 定时轮询 ASR 文本, 有增量就提交
 
