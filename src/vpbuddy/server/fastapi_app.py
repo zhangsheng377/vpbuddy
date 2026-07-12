@@ -1420,11 +1420,14 @@ def post_collab_answer(
 @app.post("/api/kb/search")
 async def post_kb_search(request: Request, user: dict = Depends(get_current_user)):
     """POST /api/kb/search — KB 检索 (POST with JSON body, 按 user_id 隔离)"""
+    import asyncio as _asyncio_kb
     body = await request.body()
     query_params = dict(request.query_params)
     from ..kb_api import handle_kb_search
 
-    result = handle_kb_search(query_params, body, user_id=user["user_id"])
+    result = await _asyncio_kb.get_running_loop().run_in_executor(
+        None, handle_kb_search, query_params, body, user["user_id"]
+    )
     return result
 
 
