@@ -113,8 +113,8 @@ def test_search_falls_back_to_owner_id(monkeypatch, fake_rag, tmp_path):
     st.save(state)
 
     monkeypatch.setattr(
-        "vpbuddy.tools.kb_search.MeetingStorage",
-        lambda data_dir=str(tmp_path), **kw: MeetingStorage(data_dir=data_dir, **kw),
+        MeetingStorage, "load",
+        lambda self, mid: state if mid == "mtg_back" else (_ for _ in ()).throw(FileNotFoundError),
     )
 
     out = kb_search.search("mtg_back", "anything")
@@ -122,11 +122,13 @@ def test_search_falls_back_to_owner_id(monkeypatch, fake_rag, tmp_path):
     assert out["results"] is not None
 
 
-def test_search_no_user_id_no_meeting_state(monkeypatch, fake_rag, tmp_path):
+def test_search_no_user_id_no_meeting_state(monkeypatch, fake_rag):
     """v0.22.6: 不传 user_id 且 MeetingState 不存在 → 返错误."""
+    from vpbuddy.storage import MeetingStorage
+
     monkeypatch.setattr(
-        "vpbuddy.tools.kb_search.MeetingStorage",
-        lambda data_dir=str(tmp_path), **kw: __import__("vpbuddy.storage", fromlist=["MeetingStorage"]).MeetingStorage(data_dir=data_dir, **kw),
+        MeetingStorage, "load",
+        lambda self, mid: (_ for _ in ()).throw(FileNotFoundError),
     )
 
     out = kb_search.search("nonexistent_mtg", "x")
@@ -134,11 +136,13 @@ def test_search_no_user_id_no_meeting_state(monkeypatch, fake_rag, tmp_path):
     assert "用户身份" in out["error"]
 
 
-def test_search_user_id_not_in_where_for_empty_string(monkeypatch, fake_rag, tmp_path):
+def test_search_user_id_not_in_where_for_empty_string(monkeypatch, fake_rag):
     """v0.22.6: user_id='' 且 load 失败 → 返错误信息."""
+    from vpbuddy.storage import MeetingStorage
+
     monkeypatch.setattr(
-        "vpbuddy.tools.kb_search.MeetingStorage",
-        lambda data_dir=str(tmp_path), **kw: __import__("vpbuddy.storage", fromlist=["MeetingStorage"]).MeetingStorage(data_dir=data_dir, **kw),
+        MeetingStorage, "load",
+        lambda self, mid: (_ for _ in ()).throw(FileNotFoundError),
     )
 
     out = kb_search.search("no_such_meeting", "x")
