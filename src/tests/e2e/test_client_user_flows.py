@@ -333,10 +333,10 @@ def test_kb_upload_ui(page):
 # ============================================================
 
 def test_recording_pill(page):
-    """用户路径: 页面加载 → pill 显示'未录音'."""
+    """用户路径: 页面加载 → pill 显示'录音就绪'."""
     assert page.locator("#rec-pill").count() == 1
-    assert "未录音" in (page.locator("#rec-status").text_content() or ""), \
-        f"pill 应含'未录音': {page.locator('#rec-status').text_content()!r}"
+    assert "录音就绪" in (page.locator("#rec-status").text_content() or ""), \
+        f"pill 应含'录音就绪': {page.locator('#rec-status').text_content()!r}"
 
 
 # ============================================================
