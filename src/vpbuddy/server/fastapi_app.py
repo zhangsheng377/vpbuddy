@@ -174,7 +174,7 @@ def _gkd_loop():
         _time_gkd.sleep(6)
         try:
             all_mids = _gkd_st.list_meetings()
-            recent = [m for m in all_mids if not m.endswith((".chat", ".stream"))][:20]
+            recent = [m for m in all_mids if not m.endswith((".chat", ".stream"))]
             if recent:
                 print(f"[gkd] scanning {len(recent)} meetings (of {len(all_mids)} total)", flush=True)
             for mid in recent:
@@ -183,7 +183,7 @@ def _gkd_loop():
                 except Exception:
                     continue
                 cur = state.cleaned_text or ""
-                if len(cur) <= 50:
+                if len(cur) <= 20:
                     continue
                 cur_hash = _hashlib_gkd.md5(cur.encode()).hexdigest()
                 prev = _gkd_last.get(mid, "")
@@ -1545,7 +1545,7 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
                         state = st.load(meeting_id)
                         cur = state.cleaned_text if state.cleaned_text else ""
                         cur_hash = hashlib.md5(cur.encode()).hexdigest()
-                        if cur_hash != _doc_last_hash[0] and len(cur) > 50:
+                        if cur_hash != _doc_last_hash[0] and len(cur) > 20:
                             _doc_last_hash[0] = cur_hash
                             _log.info("[_kick_docs] meaningful change detected, len=%d hast=%s", len(cur), cur_hash[:8])
                             get_task_manager().submit(meeting_id, _doc_runner)
