@@ -49,6 +49,15 @@ if _env_file and _env_file.exists():
             _count += 1
     print(f"[fastapi_app] loaded {_count} vars from {_env_file}", flush=True)
 
+# v0.22.6: vision 工具依赖 OPENAI_API_KEY / OPENAI_BASE_URL 走 _try_custom_endpoint → DashScope
+# 当 .env 路径解析到旧文件或缺变量时，从 DASHSCOPE_API_KEY 兜底推导
+if not os.environ.get("OPENAI_API_KEY"):
+    _fallback = os.environ.get("DASHSCOPE_API_KEY", "")
+    if _fallback:
+        os.environ.setdefault("OPENAI_API_KEY", _fallback)
+        os.environ.setdefault("OPENAI_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+        print("[fastapi_app] OPENAI_API_KEY/BASE_URL fallback from DASHSCOPE_API_KEY", flush=True)
+
 import uvicorn
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
