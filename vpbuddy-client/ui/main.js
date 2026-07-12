@@ -181,7 +181,7 @@ function stopLatencyTicker(resetText = true) {
 
 const i18n = {
   zh: {
-    idle: "未连接", capturing: "采集中...", stopped: "已停止", noResult: "无结果",
+    idle: "录音就绪", capturing: "采集中...", stopped: "已停止", noResult: "无结果",
     sseConnected: "SSE 已连接", sseHeartbeat: "SSE 心跳正常"
   },
   en: {
