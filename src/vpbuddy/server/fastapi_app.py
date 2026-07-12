@@ -174,8 +174,21 @@ def _gkd_loop():
         _time_gkd.sleep(6)
         try:
             all_mids = _gkd_st.list_meetings()
-            recent = [m for m in all_mids if not m.endswith((".chat", ".stream"))][:20]
-            print(f"[gkd] scanning {len(recent)} meetings (of {len(all_mids)} total)", flush=True)
+            candidates = []
+            for m in all_mids:
+                if m.endswith((".chat", ".stream")):
+                    continue
+                try:
+                    state = _gkd_st.load(m)
+                except Exception:
+                    continue
+                if getattr(state, "capturing", None) is True:
+                    candidates.append(m)
+                elif getattr(state, "sse_active", None) is True:
+                    candidates.append(m)
+            recent = candidates[:20]
+            if recent:
+                print(f"[gkd] scanning {len(recent)} meetings (of {len(all_mids)} total, {len(candidates)} active)", flush=True)
             for mid in recent:
                 try:
                     state = _gkd_st.load(mid)
@@ -201,7 +214,6 @@ def _gkd_loop():
                 pass
         except Exception:
             _gkd_logger.warning("loop error", exc_info=True)
-            print(f"[gkd] loop error", flush=True)
 
 _gkd_thread = _threading_gkd.Thread(target=_gkd_loop, daemon=True, name="gkd")
 _gkd_thread.start()
