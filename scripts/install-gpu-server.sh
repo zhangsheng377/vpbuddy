@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 # install-gpu-server.sh — 生产 GPU 服务器一键部署 (2026-06-22 ADR-0009)
 #
 # 目标:从 0 起,5-10 分钟跑通端到端 VPBuddy + Hermes
@@ -31,15 +31,28 @@ echo "  Skip models:  $SKIP_MODELS"
 echo ""
 
 # ===== 0. 系统包 =====
-echo "[0/6] 系统包..."
+echo "[0/7] 系统包..."
 sudo apt-get update -qq
 sudo apt-get install -y -qq \
     git curl wget ffmpeg build-essential \
     python3-pip python3-venv python3-dev \
-    portaudio19-dev libasound2-dev
+    portaudio19-dev libasound2-dev \
+    nodejs npm
+
+# v0.22.6: mmx-cli — MiniMax 原生 VLM, vision 后备通道 (ADR-0054)
+echo "  [0a/7] mmx-cli 安装..."
+if ! command -v mmx &>/dev/null; then
+    npm install -g mmx-cli
+    echo "  ✅ mmx-cli 已安装"
+else
+    echo "  ✅ mmx-cli 已存在 ($(mmx --version | tail -1))"
+fi
+# mmx auth login 需要 API key, 需用户手动执行:
+#   mmx auth login --api-key sk-xxx
+# 详见 docs/decisions/0054-vision三层逃生通道-mmx-cli后备.md
 
 # ===== 1. NVIDIA driver + CUDA (假设已有则跳过) =====
-echo "[1/6] NVIDIA/CUDA 检查..."
+echo "[1/7] NVIDIA/CUDA 检查..."
 if ! command -v nvidia-smi &>/dev/null; then
     echo "  nvidia-smi 不存在,尝试装 NVIDIA driver 535..."
     sudo apt-get install -y -qq nvidia-driver-535 || {
@@ -53,7 +66,7 @@ fi
 echo "  ✅ $(nvidia-smi --query-gpu=name --format=csv,noheader,nounits | head -1)"
 
 # ===== 2. Miniconda =====
-echo "[2/6] Miniconda 检查..."
+echo "[2/7] Miniconda 检查..."
 if [[ ! -d "$HOME/miniconda3" ]]; then
     echo "  装 Miniconda..."
     wget -q https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh
@@ -64,7 +77,7 @@ fi
 source "$HOME/miniconda3/etc/profile.d/conda.sh"
 
 # ===== 3. 创建 vpbuddy-gpu conda env =====
-echo "[3/6] 创建 conda env (vpbuddy-gpu)..."
+echo "[3/7] 创建 conda env (vpbuddy-gpu)..."
 if ! conda env list | grep -q vpbuddy-gpu; then
     conda create -y -n vpbuddy-gpu python=3.11
 fi
@@ -75,7 +88,7 @@ pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ 2>/dev/n
 pip config set global.trusted-host mirrors.aliyun.com 2>/dev/null || true
 
 # ===== 4. 装 hermes-agent + vpbuddy =====
-echo "[4/6] 装 hermes-agent + vpbuddy[gpu]..."
+echo "[4/7] 装 hermes-agent + vpbuddy[gpu]..."
 
 # 先 hermes-agent(VPBuddy = Hermes runtime,ADR-0009 钉死)
 pip install --quiet "hermes-agent>=0.16.0,<1.0"
@@ -89,7 +102,7 @@ cd /home/zsd/vpbuddy 2>/dev/null || {
 pip install --quiet -e ".[gpu,audio]"
 
 # ===== 5. Hermes 配置 =====
-echo "[5/6] Hermes 配置..."
+echo "[5/7] Hermes 配置..."
 mkdir -p "$HOME/.hermes"
 
 # 🔒 信息隔离铁律 (2026-06-22 ADR-0010):
@@ -181,7 +194,7 @@ fi
 
 # ===== 6. 模型下载 (可选) =====
 if [[ $SKIP_MODELS -eq 0 ]]; then
-    echo "[6/6] 下 GPU 模型..."
+    echo "[6/7] 下 GPU 模型..."
     PYANNOTE_DIR="$HOME/pyannote_models"
     mkdir -p "$PYANNOTE_DIR"
     export PYANNOTE_LOCAL_DIR="$PYANNOTE_DIR"
@@ -201,11 +214,11 @@ if [[ $SKIP_MODELS -eq 0 ]]; then
     python3 -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')" 2>&1 | tail -3 || echo "  ⚠️ sentence-transformers 下失败"
     unset HF_HUB_OFFLINE
 else
-    echo "[6/6] 跳过模型下载 (--no-models)"
+    echo "[6/7] 跳过模型下载 (--no-models)"
 fi
 
 # ===== 6.5 bashrc 写 HF 离线铁律 (ADR-0011 落地) =====
-echo "[6.5/7] bashrc 写 HF 离线铁律(机器重启后仍生效)..."
+echo "[7/7] bashrc 写 HF 离线铁律(机器重启后仍生效)..."
 BASHRC="$HOME/.bashrc"
 if ! grep -q "VPBuddy HF 离线铁律" "$BASHRC" 2>/dev/null; then
     cat >> "$BASHRC" <<'EOF'
