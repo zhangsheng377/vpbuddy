@@ -28,7 +28,7 @@ from typing import Any, AsyncGenerator
 from urllib.parse import parse_qs, urlparse
 
 # ── 加载 .env 文件 (优先级低于已有的 env var) ──
-_env_file = Path(__file__).resolve().parents[1] / ".env"
+_env_file = Path(__file__).resolve().parent / ".env"
 if _env_file.exists():
     for _line in _env_file.read_text().split("\n"):
         _line = _line.strip()
