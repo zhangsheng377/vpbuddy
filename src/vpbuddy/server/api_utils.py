@@ -352,6 +352,17 @@ def _get_chat_agent(meeting_id: str):
             return _CHAT_AGENT_CACHE[session_id]
         from run_agent import AIAgent  # type: ignore
 
+        # v0.22.6: Hermes vision 路由修复 — 主 chat agent 也需要 monkeypatch
+        # 根因: resolve_runtime_provider("custom") 永远回到 OpenRouter (硬编码常量) →
+        # _try_custom_endpoint → None → Anthropic SDK → MiniMax key → 401
+        # 同 sub_session_controller.py 的修复, 但主 chat 也走这里
+        _OPENROUTER_BAK = os.environ.pop("OPENROUTER_API_KEY", None)
+        try:
+            from hermes_cli import runtime_provider as _rhp
+            _rhp.resolve_runtime_provider = lambda requested="auto", **kw: None
+        except Exception:
+            pass
+
         _CHAT_AGENT_CACHE[session_id] = AIAgent(
             session_id=session_id,
             enabled_toolsets=["terminal", "file", "vision", "web"],
