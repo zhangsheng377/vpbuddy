@@ -140,6 +140,16 @@ def _get_or_create_agent(meeting_id: str, doc_kind: str) -> Any:
             # 否则 hermes 默认走 openrouter → MiniMax-M3 也被路由过去但 openrouter
             # 不识别我们的 MiniMax API key → HTTP 401. 现在直连 MiniMax endpoint.
             #
+            # 2026-07-12: Hermes vision tool 走 Anthropic SDK，读 ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL env。
+            # 全局 OPENAI_API_KEY 是 DashScope key（VPBuddy .env 注入），Anthropic SDK 不读它。
+            # ANTHROPIC_API_KEY 未设置 → Anthropic SDK fallback 到 OPENAI_API_KEY → DashScope key
+            # 打 api.anthropic.com → 401。修复：显式设 ANTHROPIC_* env 指向 DashScope。
+            _dash_key = os.environ.get("OPENAI_API_KEY", "") or os.environ.get("ANTHROPIC_API_KEY", "")
+            _dash_url = os.environ.get("OPENAI_BASE_URL", "") or os.environ.get("ANTHROPIC_BASE_URL", "")
+            if _dash_key and _dash_url:
+                os.environ.setdefault("ANTHROPIC_API_KEY", _dash_key)
+                os.environ.setdefault("ANTHROPIC_BASE_URL", _dash_url)
+            #
             # 2026-07-04 (ADR-0041): parent_session_id fork 自主 chat session,
             # 让 doc 生成继承 chat 上下文 (chat 里讨论的内容自动注入 doc 上下文).
             #
