@@ -27,6 +27,15 @@ from pathlib import Path
 from typing import Any, AsyncGenerator
 from urllib.parse import parse_qs, urlparse
 
+# ── 加载 .env 文件 (优先级低于已有的 env var) ──
+_env_file = Path(__file__).resolve().parents[1] / ".env"
+if _env_file.exists():
+    for _line in _env_file.read_text().split("\n"):
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _v = _line.split("=", 1)
+            os.environ.setdefault(_k.strip(), _v.strip().strip("'").strip('"'))
+
 import uvicorn
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -183,8 +192,6 @@ def _gkd_loop():
                 except Exception:
                     continue
                 cur = state.cleaned_text or ""
-                if len(cur) <= 20:
-                    continue
                 cur_hash = _hashlib_gkd.md5(cur.encode()).hexdigest()
                 prev = _gkd_last.get(mid, "")
                 if cur_hash != prev or _gkd_first:
@@ -1545,7 +1552,7 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
                         state = st.load(meeting_id)
                         cur = state.cleaned_text if state.cleaned_text else ""
                         cur_hash = hashlib.md5(cur.encode()).hexdigest()
-                        if cur_hash != _doc_last_hash[0] and len(cur) > 20:
+                        if cur_hash != _doc_last_hash[0]:
                             _doc_last_hash[0] = cur_hash
                             _log.info("[_kick_docs] meaningful change detected, len=%d hast=%s", len(cur), cur_hash[:8])
                             get_task_manager().submit(meeting_id, _doc_runner)
