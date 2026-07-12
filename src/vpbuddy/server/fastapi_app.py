@@ -192,6 +192,8 @@ def _gkd_loop():
                 except Exception:
                     continue
                 cur = state.cleaned_text or ""
+                if not cur.strip():
+                    continue
                 cur_hash = _hashlib_gkd.md5(cur.encode()).hexdigest()
                 prev = _gkd_last.get(mid, "")
                 if cur_hash != prev or _gkd_first:
