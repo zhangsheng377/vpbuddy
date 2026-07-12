@@ -892,6 +892,41 @@ async def post_meeting_material(meeting_id: str, request: Request, user: dict = 
             f"已存入知识库（可搜索 KB 获取内容）。"
         )
 
+        # v0.22.6: mmx-cli 后备 — MiniMax 原生 VLM, 不依赖 Hermes 路由
+        def _try_mmx_vision(img_bytes: bytes, mime: str = "image/png") -> str:
+            import tempfile
+            import subprocess as _sp
+            _mmx = "/usr/bin/mmx"
+            if not os.path.exists(_mmx):
+                return ""
+            _tmp = None
+            try:
+                _tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+                _tmp.write(img_bytes)
+                _tmp.close()
+                _res = _sp.run(
+                    [_mmx, "vision", "describe", "--image", _tmp.name,
+                     "--prompt", "请详细描述这张图片的内容，提取所有可识别的文字信息。",
+                     "--output", "json"],
+                    capture_output=True, text=True, timeout=60,
+                    env={**os.environ, "NODE_OPTIONS": ""},
+                )
+                if _res.returncode == 0:
+                    _data = __import__("json").loads(_res.stdout)
+                    _text = _data.get("content", "") or ""
+                    if _text:
+                        print(f"[materials] mmx-cli 后备分析完成 ({len(_text)} chars)")
+                        return _text
+                print(f"[materials] mmx-cli 后备失败: rc={_res.returncode}")
+                return ""
+            except Exception as _mx_err:
+                print(f"[materials] mmx-cli 后备异常: {_mx_err}")
+                return ""
+            finally:
+                if _tmp:
+                    try: os.unlink(_tmp.name)
+                    except Exception: pass
+
         # 异步 vision 分析: 后台线程处理, 完成后追加到 chat
         def _run_vision_async():
             try:
@@ -910,8 +945,10 @@ async def post_meeting_material(meeting_id: str, request: Request, user: dict = 
                         pass
 
                 if not api_key:
-                    print(f"[materials] Vision 跳过: 无 API key")
-                    return
+                    print(f"[materials] Vision 跳过: 无 API key, 尝试 mmx-cli 后备")
+                    vision_text = _try_mmx_vision(file_data, file_ct or "image/png")
+                    if not vision_text:
+                        return
 
                 import requests as _requests
                 _vresp = _requests.post(
@@ -933,6 +970,12 @@ async def post_meeting_material(meeting_id: str, request: Request, user: dict = 
                     timeout=60,
                 )
                 vision_text = _vresp.json().get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+
+                # v0.22.6 后备: mmx vision describe (MiniMax 原生 VLM)
+                if not vision_text:
+                    print(f"[materials] Vision OpenAI 主路径无结果, 尝试 mmx-cli 后备")
+                    vision_text = _try_mmx_vision(file_data, file_ct or "image/png")
+
                 if vision_text:
                     print(f"[materials] Vision 异步分析完成: {filename} ({len(vision_text)} chars)")
                     # 追加 vision 结果到 chat
@@ -943,9 +986,31 @@ async def post_meeting_material(meeting_id: str, request: Request, user: dict = 
                     )
                     safe_push_event(meeting_id, "chat-message", vision_msg)
                 else:
-                    print(f"[materials] Vision 异步分析返回空: {filename}")
+                    print(f"[materials] Vision 异步分析返回空: {filename}, 尝试 mmx-cli 后备")
+                    vision_text = _try_mmx_vision(file_data, file_ct or "image/png")
+                    if vision_text:
+                        print(f"[materials] Vision mmx-cli 后备分析完成: {filename} ({len(vision_text)} chars)")
+                        vision_msg = _append_chat_message(
+                            meeting_id, "assistant",
+                            f"---图片 AI 分析结果 ({filename})---\n{vision_text}\n---分析结果结束---",
+                            source="vision-analysis-mmx",
+                        )
+                        safe_push_event(meeting_id, "chat-message", vision_msg)
             except Exception as e:
-                print(f"[materials] Vision 异步分析失败: {str(e)[:200]}")
+                print(f"[materials] Vision 主路径异常: {str(e)[:200]}, 尝试 mmx-cli 后备")
+                try:
+                    vision_text = _try_mmx_vision(file_data, file_ct or "image/png")
+                    if vision_text:
+                        print(f"[materials] Vision mmx-cli 后备分析完成: {filename} ({len(vision_text)} chars)")
+                        vision_msg = _append_chat_message(
+                            meeting_id, "assistant",
+                            f"---图片 AI 分析结果 ({filename})---\n{vision_text}\n---分析结果结束---",
+                            source="vision-analysis-mmx",
+                        )
+                        safe_push_event(meeting_id, "chat-message", vision_msg)
+                except Exception as _e2:
+                    print(f"[materials] Vision mmx-cli 后备也失败: {_e2}")
+                return
 
         threading.Thread(target=_run_vision_async, daemon=True).start()
 
