@@ -1,4 +1,4 @@
-"""v0.22.5: realtime_server SSE subscriber 管理测试"""
+"""v0.22.6: realtime_server SSE subscriber + get_event_history 测试"""
 
 from __future__ import annotations
 import sys
@@ -11,8 +11,11 @@ from vpbuddy.realtime_server import (
     _remove_subscriber,
     get_subscriber_count,
     cleanup_meetings_without_subscribers,
+    get_event_history,
+    push_event,
     _subscribers,
     _subscribers_lock,
+    _event_history,
     close_meeting,
 )
 
@@ -108,3 +111,50 @@ def test_orphan_subscriber_cleanup_integration():
                 del _subscribers[mid]
     # 现在应该干净了
     assert mid not in _subscribers
+
+
+class TestGetEventHistory:
+    def test_empty_history(self):
+        mid = "test_hist_empty"
+        events = get_event_history(mid)
+        assert events == []
+
+    def test_history_without_since_id(self):
+        mid = "test_hist_full"
+        _event_history.pop(mid, None)
+        push_event(mid, "test-type", {"k": "v1"})
+        push_event(mid, "test-type", {"k": "v2"})
+        events = get_event_history(mid)
+        assert len(events) == 2
+        assert events[0]["payload"]["k"] == "v1"
+        assert events[1]["payload"]["k"] == "v2"
+
+    def test_history_with_since_id(self):
+        mid = "test_hist_since"
+        _event_history.pop(mid, None)
+        push_event(mid, "t1", {"n": 1})
+        push_event(mid, "t2", {"n": 2})
+        push_event(mid, "t3", {"n": 3})
+        full = get_event_history(mid)
+        assert len(full) == 3
+        since_id = full[0]["id"]
+        partial = get_event_history(mid, since_id=since_id)
+        assert len(partial) == 2
+        assert partial[0]["payload"]["n"] == 2
+        assert partial[1]["payload"]["n"] == 3
+
+    def test_since_id_not_found_returns_all(self):
+        mid = "test_hist_badid"
+        _event_history.pop(mid, None)
+        push_event(mid, "x", {"a": 1})
+        events = get_event_history(mid, since_id="nonexistent-id")
+        assert len(events) == 1
+
+    def test_event_ids_are_strings(self):
+        mid = "test_hist_ids"
+        _event_history.pop(mid, None)
+        push_event(mid, "mytype", {"b": 2})
+        events = get_event_history(mid)
+        assert len(events) == 1
+        assert isinstance(events[0]["id"], str)
+        assert len(events[0]["id"]) > 0

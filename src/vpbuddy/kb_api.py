@@ -188,7 +188,7 @@ def handle_kb_upload(body: bytes, content_type: str, user_id: str = "") -> dict:
     content_md5 = hashlib.md5(text.encode()).hexdigest()
 
     # 检查是否已有相同内容的文档 (防重复插入, v0.22.6: 加 user_id 过滤防止跨用户误判)
-    existing = rag.get(where={"content_hash": content_md5, "user_id": user_id}, limit=1)
+    existing = rag.get(where={"$and": [{"content_hash": content_md5}, {"user_id": user_id}]}, limit=1)
     if existing.get("ids") and existing.get("metadatas"):
         dup_meta = existing["metadatas"][0] if existing["metadatas"] else {}
         if dup_meta.get("user_id") == user_id:
@@ -301,7 +301,7 @@ def handle_chat_upload(body: bytes, content_type: str, meeting_id: str, user_id:
                 rag = get_rag()
 
                 # 检查是否已有相同内容的文档 (v0.22.6: 加 user_id 过滤)
-                existing = rag.get(where={"content_hash": content_md5, "user_id": user_id}, limit=1)
+                existing = rag.get(where={"$and": [{"content_hash": content_md5}, {"user_id": user_id}]}, limit=1)
                 if existing.get("ids") and existing.get("metadatas"):
                     results.append({"filename": fname, "status": "duplicate", "doc_id": existing["ids"][0], "chars": len(content)})
                     continue

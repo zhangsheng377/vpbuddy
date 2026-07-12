@@ -359,6 +359,25 @@ class TestParallelRun:
         assert kinds == set(SCHEDULED_KINDS)
 
 
+class TestAgentToolsets:
+    def test_default_toolsets_include_vision_and_web(self):
+        from vpbuddy.sub_session_controller import _AGENT_AVAILABLE, _get_or_create_agent, _AIAgent, _AGENT_CACHE
+        from vpbuddy.sub_session_controller import BATCH_DOCS_KIND
+        _AGENT_CACHE.clear()
+        if not _AGENT_AVAILABLE or _AIAgent is None:
+            pytest.skip("AIAgent not available")
+
+        agent = _get_or_create_agent("TOOLSET_TEST_001", BATCH_DOCS_KIND)
+        if agent is None:
+            pytest.skip("_get_or_create_agent returned None")
+
+        ts = getattr(agent, "enabled_toolsets", [])
+        assert "terminal" in ts
+        assert "file" in ts
+        assert "vision" in ts
+        assert "web" in ts
+
+
 class TestOfflineDefaults:
     """2026-06-22 §19/§20 踩坑:KB 模型默认离线,避免 controller 进程卡 53min
 
