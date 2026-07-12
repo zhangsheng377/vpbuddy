@@ -28,8 +28,18 @@ from typing import Any, AsyncGenerator
 from urllib.parse import parse_qs, urlparse
 
 # ── 加载 .env 文件 (优先级低于已有的 env var) ──
-_env_file = Path(__file__).resolve().parent / ".env"
-if _env_file.exists():
+# 尝试多个路径: 同目录 > 项目根 > data目录上级 (兼容 editable install)
+_env_candidates = [
+    Path(__file__).resolve().parent / ".env",
+    Path(__file__).resolve().parents[2] / ".env",
+    Path(os.environ.get("VPBUDDY_DATA_DIR", "")).parents[1] / ".env" if os.environ.get("VPBUDDY_DATA_DIR") else None,
+]
+_env_file = None
+for _c in _env_candidates:
+    if _c and _c.exists():
+        _env_file = _c
+        break
+if _env_file and _env_file.exists():
     for _line in _env_file.read_text().split("\n"):
         _line = _line.strip()
         if _line and not _line.startswith("#") and "=" in _line:
