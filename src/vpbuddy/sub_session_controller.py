@@ -140,15 +140,21 @@ def _get_or_create_agent(meeting_id: str, doc_kind: str) -> Any:
             # 否则 hermes 默认走 openrouter → MiniMax-M3 也被路由过去但 openrouter
             # 不识别我们的 MiniMax API key → HTTP 401. 现在直连 MiniMax endpoint.
             #
-            # 2026-07-12: Hermes vision tool 走 Anthropic SDK，读 ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL env。
-            # 全局 OPENAI_API_KEY 是 DashScope key（VPBuddy .env 注入），Anthropic SDK 不读它。
-            # ANTHROPIC_API_KEY 未设置 → Anthropic SDK fallback 到 OPENAI_API_KEY → DashScope key
-            # 打 api.anthropic.com → 401。修复：显式设 ANTHROPIC_* env 指向 DashScope。
-            _dash_key = os.environ.get("OPENAI_API_KEY", "") or os.environ.get("ANTHROPIC_API_KEY", "")
-            _dash_url = os.environ.get("OPENAI_BASE_URL", "") or os.environ.get("ANTHROPIC_BASE_URL", "")
-            if _dash_key and _dash_url:
-                os.environ.setdefault("ANTHROPIC_API_KEY", _dash_key)
-                os.environ.setdefault("ANTHROPIC_BASE_URL", _dash_url)
+            # 2026-07-12: Hermes vision tool 路由修复（ADR-0054）。
+            # 根因: resolve_runtime_provider("custom") 硬返回 OpenRouter（来源 /etc/environment OPENROUTER_API_KEY，
+            # Hermes 凭据池 build 时固化），导致 _resolve_custom_runtime → _try_custom_endpoint → None →
+            # fallback 到 Anthropic SDK → 用全局 OPENAI_API_KEY (MiniMax) 打 api.anthropic.com → 401。
+            # DashScope 支持 OpenAI chat/completions (200) 但不支持 Anthropic messages (404) —
+            # 唯一可行路径: _try_custom_endpoint() → _create_openai_client(DashScope key, DashScope URL)。
+            #
+            # 修复: os.environ.pop OPENROUTER_API_KEY + monkeypatch resolve_runtime_provider →
+            # 返回 None → _resolve_custom_runtime 走 env fallback → 读 OPENAI_API_KEY/BASE_URL (VPBuddy .env= DashScope)。
+            _OPENROUTER_BAK = os.environ.pop("OPENROUTER_API_KEY", None)
+            try:
+                from hermes_cli import runtime_provider as _rhp
+                _rhp.resolve_runtime_provider = lambda requested="auto", **kw: None
+            except Exception:
+                pass
             #
             # 2026-07-04 (ADR-0041): parent_session_id fork 自主 chat session,
             # 让 doc 生成继承 chat 上下文 (chat 里讨论的内容自动注入 doc 上下文).

@@ -49,17 +49,6 @@ if _env_file and _env_file.exists():
             _count += 1
     print(f"[fastapi_app] loaded {_count} vars from {_env_file}", flush=True)
 
-# ── v0.22.6: Hermes vision 客户端路由修复 ──
-# Hermes _resolve_custom_runtime 优先调 resolve_runtime_provider("custom")，
-# 返回空 dict → 永远不走 env fallback → vision tool 降级到 Anthropic SDK → 401。
-# 重命名 runtime_provider.py 后 import 失败 → 走 env fallback →
-# _create_openai_client(OPENAI_API_KEY, OPENAI_BASE_URL) → DashScope ✅
-# ADR-0054: provider=custom 依赖此修复。(pip upgrade 后需重新 apply)
-_rtp = Path(sys.prefix) / "lib" / "python3.11" / "site-packages" / "hermes_cli" / "runtime_provider.py"
-if _rtp.exists():
-    _rtp.rename(_rtp.with_suffix(".py.bak"))
-    print(f"[fastapi_app] renamed runtime_provider.py → .bak (vision routing fix)", flush=True)
-
 import uvicorn
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware

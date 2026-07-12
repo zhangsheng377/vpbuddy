@@ -1,8 +1,8 @@
 """v0.22.6: Hermes auxiliary.vision 配置看护 — provider=custom + OPENAI_API_KEY/BASE_URL env → DashScope
 
-ADR-0054: fastapi_app 启动时自动重命名 hermes_cli/runtime_provider.py → .bak，
-让 _resolve_custom_runtime import 失败 → 走 env fallback → _create_openai_client → DashScope。
-pip upgrade hermes-agent 后文件会恢复 → 需重新 apply (fastapi_app 重启自动处理)。
+ADR-0054: sub_session_controller 在创建 AIAgent 前 monkeypatch resolve_runtime_provider → None +
+pop OPENROUTER_API_KEY → _resolve_custom_runtime 走 env fallback → _create_openai_client.
+Hermes 源码不改动。
 """
 
 from __future__ import annotations
