@@ -753,9 +753,11 @@ async def get_meeting_events(meeting_id: str, request: Request, user: dict = Dep
     """
     _require_meeting_owner(meeting_id, user)
     from ..realtime_server import sse_generator
+    last_event_id = request.headers.get("Last-Event-ID", request.headers.get("last-event-id",
+        request.query_params.get("last_event_id", None)))
 
     def event_stream():
-        for chunk in sse_generator(meeting_id):
+        for chunk in sse_generator(meeting_id, last_event_id=last_event_id):
             yield chunk
 
     return StreamingResponse(
