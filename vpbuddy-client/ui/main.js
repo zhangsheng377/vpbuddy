@@ -631,22 +631,37 @@ listen("doc-status", (e) => {
     if (kind === "demo" && is_demo) {
       const v = demoVersions[0]?.version;
       if (selectedDemoVersion != null && selectedDemoVersion !== v) {
-        // 用户选的是非最新 → SSE 不覆盖, 等用户主动点 latest 按钮才切
         return;
       }
       selectedDemoVersion = v;
       const frame = document.getElementById("demo-iframe");
       if (frame) frame.srcdoc = content;
-      // 同步 select
       const sel = document.getElementById("demo-version-select");
       if (sel && v != null) sel.value = String(v);
       return;
     }
-    // 其他 5 类写到自己 doc-block 的 body
     const body = block?.querySelector(".doc-body");
     if (body) body.textContent = content;
+  } else if (kind && docState === "stored" && !content) {
+    fetchDocContent(kind, is_demo);
   }
 });
+
+// v0.22.6: SSE doc-update 不再含 content, 客户端按需 GET
+async function fetchDocContent(kind, is_demo) {
+  if (kind === "demo") return;
+  try {
+    const gpu = await getGpuUrl();
+    const resp = await fetchWithAuth(`${gpu}/api/meetings/${encodeURIComponent(currentMeetingId)}/docs/${encodeURIComponent(kind)}`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const content = data.content || "";
+    docsByKind[kind] = { kind, status: "stored", content, is_demo };
+    const block = document.querySelector(`.doc-block[data-kind="${kind}"]`);
+    const body = block?.querySelector(".doc-body");
+    if (body) body.textContent = content;
+  } catch (_) {}
+}
 
 listen("connection-status", (e) => {
   const p = e.payload || {};

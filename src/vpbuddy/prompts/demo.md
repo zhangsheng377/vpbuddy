@@ -87,6 +87,7 @@ VP 在 Web UI 主屏 iframe 里直接看 (sandbox 隔离)。
 |- 可选工具 (用 terminal 调, 见 VPBuddy 注入的 system 提示):
   - 网络搜索: `python -c "from vpbuddy.tools.web_search import search; ..."`
   - KB 检索: `python -c "from vpbuddy.tools.kb_search import search; ..."` (meeting_id 已注入)
+  - 图片分析 (v0.22.6): `python -c "from vpbuddy.tools.vision_analyze import analyze; ..."`  — 读取截图/设计稿/参考图内容
   - 仅当 demo 需要真实数据样例 (产品名 / 行业标准) 时调用
 
 # 协作提问协议 — ADR-0028
