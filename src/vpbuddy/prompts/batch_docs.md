@@ -134,10 +134,7 @@ section 命名:
   ```bash
   python -c "from vpbuddy.tools.kb_search import search; import json; print(json.dumps(search('{meeting_id}', '客户合同要点', top_k=5), ensure_ascii=False))"
   ```
-- 图片分析 (v0.22.6, 读取截图/设计稿/参考图):
-  ```bash
-  python -c "from vpbuddy.tools.vision_analyze import analyze; import json; print(json.dumps(analyze('/path/to/image.jpg', '这张图里有什么信息?'), ensure_ascii=False))"
-  ```
+- 图片分析: Hermes 内置 `vision` toolset 可用 — 直接调即可
 - 协作提问 (collab.md, 3 个 agent 共享):
   ```bash
   python -c "from vpbuddy.collab import ask_question, list_pending; print(ask_question('{meeting_id}', 'req', '客户预算是?'))"

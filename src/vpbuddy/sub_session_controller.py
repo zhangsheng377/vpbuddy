@@ -132,7 +132,7 @@ def _get_or_create_agent(meeting_id: str, doc_kind: str) -> Any:
             # 2026-06-23 张胜东纠正: 不禁止 demo agent fetch/eval
             # 防止 sandbox 太严 demo 做不出来, 先看效果
             # 真出问题再在 UI 层 (iframe sandbox) 加隔离, 不在 agent 层禁
-            toolsets = ["terminal", "file"]
+            toolsets = ["terminal", "file", "vision"]
             # ⚠️ 2026-06-23 bug 修: 之前写 ephemeral_system_prompt=(...) 多行 tuple
             # Python 自动变 tuple, AIAgent chat 时 str + tuple 报错 TypeError
             # 用 "\n".join([...]) 强制 str
