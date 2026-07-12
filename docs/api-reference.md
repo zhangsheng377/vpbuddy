@@ -1,6 +1,6 @@
 # VPBuddy HTTP API 参考
 
-> **版本**: v0.22.5 · `@ 2026-07-12`
+> **版本**: v0.22.6 · `@ 2026-07-12`
 > **Base URL**: `http://47.100.182.3:28765`（公网 GPU 服务器）
 > **协议**: HTTP/1.1 · WebSocket 实时 ASR · SSE 实时推送 · Multipart 上传
 > **编码**: 所有请求/响应使用 UTF-8
@@ -9,6 +9,13 @@
 > **会议隔离 (ADR-0050)**: 所有单会议端点 (state/docs/events/aggregate/collab/chat/close/materials) 仅 owner 可访问, 非 owner 返回 `403`
 > **百炼 ASR (ADR-0051)**: API Key 从 `DASHSCOPE_API_KEY` 环境变量读取, 仓库不存明文; 服务端**必须**通过 `bash run.sh` 启动以注入 key。
 > **⚠️ Breaking in v0.20**: `upload_audio`、`stream_chunk`、`stream_stop` 已移除，30s 切片模式已废弃，请使用 WebSocket 实时 ASR。
+>
+> **v0.22.6 关键变更**:
+> - `doc-update` SSE 不再推送 `content` 字段（只推元信息 `{kind, status, doc_size}`）
+> - SSE 重连支持增量恢复（读取客户端 `Last-Event-ID` header/query）
+> - Chat 文件上传不塞内容只放路径（agent 用 `read_file` 按需读取）
+> - 图片上传写盘 + 路径注入 prompt（不再只转 base64）
+> - KB 去重按 `user_id` 隔离（`content_hash` 查询加 `user_id` 过滤）
 
 ---
 
@@ -585,11 +592,13 @@ GET /api/meetings/{id}/events
 | `asr_status` | `{status: "connected"/"closed"}` | 百炼连接状态变化 |
 | `asr_complete` | `{sentence_count, full_text}` | 识别完成 |
 | `asr_error` | `{error}` | 百炼错误 |
-| `doc-update` | `{kind, status, doc_size, content?}` | 某个文档生成完成 |
+| `doc-update` | `{kind, status, doc_size}` | 某个文档生成完成 (v0.22.6: 不再含 `content`，客户端按需 GET 获取) |
 | `demo-new-version` | `{version, summary, file_size, file}` | 新 demo 版本写入 (v0.22.5: 客户端自动刷新版本列表) |
 | `chat-message` | `{role, content, source, ...}` | Chat 助理消息 |
 | `collab-update` | `{action, qid, section, question, answer?}` | 协作提问/回答 |
-| `meeting-complete` | `{status: "user_closed"}` | 会议结束 |
+| `meeting-complete` | `{status: "user_closed"}` | 用户主动关闭会议 (POST /close) |
+
+**SSE 断线恢复 (v0.22.6)**: 客户端重连时传 `Last-Event-ID` header 或 `?last_event_id=...` query param，服务端只推送该 ID 之后的新事件，不再全量重放。
 
 ---
 
@@ -894,11 +903,13 @@ GET /api/timeline
 | `/data/vpbuddy/server/docs/{mid}/` | 6 文档 + demo HTML |
 | `/data/vpbuddy/server/src/` | 服务端 Python 源码 |
 | `/data/vpbuddy/server/data/experiences/` | 经验蒸馏 JSON |
+| `/data/vpbuddy/server/data/uploads/{mid}/` | 会议上传文件 (文本+图片原始文件) |
 
-### 近期变更 (v0.22.4–v0.22.5)
+### 近期变更 (v0.22.6)
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| v0.22.6 | 2026-07-12 | gkd去掉demo参与hash(防自反馈) + _kick_docs阈值对齐50 + SSE读取Last-Event-ID(增量恢复) + chat文件只放路径 + 图片上传落盘 + KB去重加user_id过滤 + _gkd_runner签名修复 + SSE subscriber兜底清理 |
 | v0.22.5 | 2026-07-12 | demo版本占位拒绝 (write_demo_version 拦截"等待更多会议内容") + gkd阈值 10→50字 + demo-new-version SSE链路完整 (Rust显式分支 + 前端自动刷新版本列表) |
 | v0.22.4 | 2026-07-12 | SSE生命周期与采集解耦 (sse_active独立flag, 停采集后保持30s) + WS发送失败不再设capturing=false (防止服务端断百炼WS时误杀SSE) + 服务端必须bash run.sh启动 (注入BAILIAN_API_KEY/DASHSCOPE_API_KEY) |
 | v0.21.12 | 2026-07-11 | (基线) |
