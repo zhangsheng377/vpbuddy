@@ -1,4 +1,4 @@
-"""v0.22.6: gkd hash 不含 demo content + _kick_docs 阈值测试"""
+"""v0.22.6: gkd hash 不含 demo content + 去掉字数阈值 + 空文本 guard"""
 
 from __future__ import annotations
 import sys, hashlib, tempfile, os
@@ -34,25 +34,41 @@ def test_cleaned_text_hash_changes_on_content_change():
     assert hashlib.md5(text_a.encode()).hexdigest() != hashlib.md5(text_b.encode()).hexdigest()
 
 
-def test_kick_docs_threshold_50(tmp_data):
-    """_kick_docs 阈值 50: cleaned_text > 50 才触发."""
+def test_gkd_no_length_threshold(tmp_data):
+    """v0.22.6: 去掉字数阈值 — 任何字数 > 0 都应通过 hash 判断触发."""
     st = MeetingStorage(data_dir=tmp_data)
-    mid = "kd_test_001"
+    mid = "gkd_short_001"
+
     state = MeetingState(meeting_id=mid)
-
-    state.cleaned_text = "A" * 10
+    state.cleaned_text = "AB"  # 只有 2 个字
     st.save(state)
     cur = state.cleaned_text
-    cur_hash = hashlib.md5(cur.encode()).hexdigest()
-    assert len(cur) <= 50
-    # 阈值未到 — 不应计算的 hash 无效
-    assert len(cur) <= 50
 
-    state.cleaned_text = "B" * 60
-    st.save(state)
-    cur = state.cleaned_text
+    assert cur.strip()
     cur_hash = hashlib.md5(cur.encode()).hexdigest()
-    assert len(cur) > 50
+    assert len(cur_hash) == 32
+
+
+def test_gkd_empty_text_guard(tmp_data):
+    """v0.22.6: 空文本不触发 — not cur.strip() 为 True 时跳过."""
+    st = MeetingStorage(data_dir=tmp_data)
+    mid = "gkd_empty_001"
+
+    state = MeetingState(meeting_id=mid)
+    state.cleaned_text = ""
+    st.save(state)
+    assert not state.cleaned_text.strip()
+
+    state.cleaned_text = "   "
+    st.save(state)
+    assert not state.cleaned_text.strip()
+
+
+def test_gkd_empty_hash_not_equals_meaningful_hash():
+    """空文本 hash 不同于有意义文本的 hash，避免空串误触发最后一次 hash 缓存."""
+    h_empty = hashlib.md5("".encode()).hexdigest()
+    h_hi = hashlib.md5("你好".encode()).hexdigest()
+    assert h_empty != h_hi
 
 
 def test_kick_docs_no_false_trigger_on_same_text(tmp_data):
