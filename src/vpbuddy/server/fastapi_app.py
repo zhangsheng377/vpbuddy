@@ -185,13 +185,6 @@ def _gkd_loop():
                 if len(cur) <= 50:
                     continue
                 cur_hash = _hashlib_gkd.md5(cur.encode()).hexdigest()
-                # v0.22.5 #35 P1: 也 hash 最新 demo 内容 — cleaned_text 微小变化不一定需要重新生成
-                try:
-                    from ..demo_version import latest_demo_content_hash as _ldh_gkd
-                    _dh = _ldh_gkd(mid) or ""
-                    cur_hash = _hashlib_gkd.md5((cur + _dh).encode()).hexdigest()
-                except Exception:
-                    pass
                 prev = _gkd_last.get(mid, "")
                 if cur_hash != prev or _gkd_first:
                     _gkd_last[mid] = cur_hash
@@ -1539,7 +1532,7 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
                         state = st.load(meeting_id)
                         cur = state.cleaned_text if state.cleaned_text else ""
                         cur_hash = hashlib.md5(cur.encode()).hexdigest()
-                        if cur_hash != _doc_last_hash[0] and len(cur) > 10:
+                        if cur_hash != _doc_last_hash[0] and len(cur) > 50:
                             _doc_last_hash[0] = cur_hash
                             _log.info("[_kick_docs] meaningful change detected, len=%d hast=%s", len(cur), cur_hash[:8])
                             get_task_manager().submit(meeting_id, _doc_runner)
