@@ -11,16 +11,18 @@
 > **⚠️ Breaking in v0.20**: `upload_audio`、`stream_chunk`、`stream_stop` 已移除，30s 切片模式已废弃，请使用 WebSocket 实时 ASR。
 >
 > **v0.22.6 关键变更**:
+> - **vision 三层逃生通道 (ADR-0054)**: OpenAI 兼容端点 (DashScope qwen-vl-max) → monkeypatch Hermes 路由 → mmx-cli MiniMax 原生 VLM 后备，确保图片识图在任何情况下都不 401
 > - **新增 toolsets**: agent 从 `["terminal","file"]` 扩展为 `["terminal","file","vision","web"]`（vision 读图、web DDG 搜索）
 > - **KB search POST 非阻塞**: `async def` → `await run_in_executor(None, ...)`，不再阻塞 event loop
-> - **.env 自动加载**: 服务启动时从 `.env` 注入 `DASHSCOPE_API_KEY` 等环境变量（多路径 fallback）
+> - **.env 自动加载**: 服务启动时从 `.env` 注入 `DASHSCOPE_API_KEY` 等环境变量（多路径 fallback + `OPENAI_*` 从 `DASHSCOPE_API_KEY` 兜底推导）
 > - **gkd 无字数阈值**: hash-based 触发，不设字数枷锁；空文本 `< 1 字` 跳过（防误触发）
-> - **Vision 配置看护**: Hermes `auxiliary.vision` 需显式 `api_key`/`base_url`/`model` (`qwen-vl-max`)
+> - **Vision 配置看护**: Hermes `auxiliary.vision` 需 `provider: custom` + `model: qwen-vl-max` + DashScope key
+> - **mmx-cli 后备**: `npm install -g mmx-cli` + `mmx auth login`，图片上传时 OpenAI 主路径失败自动走 MiniMax 原生 VLM
 > - **idle 文案**: 客户端 `"未连接"` → `"录音就绪"`（录音断开 ≠ 服务断开）
 > - `doc-update` SSE 不再推送 `content` 字段（只推元信息 `{kind, status, doc_size}`）
 > - SSE 重连支持增量恢复（读取客户端 `Last-Event-ID` header/query）
 > - Chat 文件上传不塞内容只放路径（agent 用 `read_file` 按需读取）
-> - 图片上传写盘 + 路径注入 prompt（不再只转 base64）
+> - 图片上传 → OpenAI vision API 异步分析 → mmx-cli 备份 → 结果追加到 chat 并入库 KB
 > - KB 去重按 `user_id` 隔离（`content_hash` 查询加 `user_id` 过滤）
 
 ---
@@ -674,6 +676,26 @@ POST /api/meetings/{id}/materials
 
 上传后自动：保存 Material 实体 → 文本类喂给 Hermes → 异步入 KB。
 
+**图片 Vision 分析管道 (v0.22.6, ADR-0054)**:
+
+图片上传后走三层后备链路：
+
+```
+图片文件上传
+  → 主路径: OpenAI /chat/completions (DashScope qwen-vl-max)
+  → 后备 1 (monkeypatch): resolve_runtime_provider 注入 → _create_openai_client(DashScope)
+  → 后备 2 (mmx-cli): mmx vision describe (MiniMax 原生 VLM, 不经过 Hermes)
+  → 结果追加到 chat (source: "vision-analysis") + 以文本形式入库 KB
+```
+
+| 通道 | 技术 | 触发条件 |
+|------|------|----------|
+| OpenAI 兼容 | DashScope `qwen-vl-max` `/chat/completions` | 主路径，有 `OPENAI_API_KEY` / `MINIMAX_API_KEY` 时 |
+| monkeypatch | Hermes `_resolve_custom_runtime` → `_create_openai_client` | AIAgent 创建前注入，防止路由到 OpenRouter |
+| mmx-cli | `mmx vision describe --image <file>` | 主路径失败 / 无 API key / 返回空结果时 |
+
+图片分析完成后，描述文本通过 SSE `chat-message` 推送给客户端（`source: "vision-analysis"` 或 `"vision-analysis-mmx"`）。
+
 ### 10.3 材料详情
 
 ```
@@ -910,12 +932,13 @@ GET /api/timeline
 | `/data/vpbuddy/server/src/` | 服务端 Python 源码 |
 | `/data/vpbuddy/server/data/experiences/` | 经验蒸馏 JSON |
 | `/data/vpbuddy/server/data/uploads/{mid}/` | 会议上传文件 (文本+图片原始文件) |
+| `/root/.mmx/config.json` | mmx-cli 登录凭据 (MiniMax API key, ADR-0054) |
 
 ### 近期变更 (v0.22.6)
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
-| v0.22.6 | 2026-07-12 | **toolsets 扩展** (terminal+file+vision+web) + **KB search非阻塞** (`run_in_executor`) + **.env 自动加载** (多路径fallback+force overwrite) + **gkd无阈值** (hash触发,空文本跳过) + **vision配置看护** (auxiliary.vision.api_key/base_url) + **idle文案** ("录音就绪") + SSE Last-Event-ID增量恢复 + chat文件路径注入 + 图片落盘 + KB去重user_id过滤 + _srv_deploy.py误提交清理 |
+| v0.22.6 | 2026-07-12 | **vision 三层逃生通道 (ADR-0054)**: OpenAI兼容(DashScope qwen-vl-max) → monkeypatch Hermes路由 → mmx-cli MiniMax原生VLM后备 + **toolsets 扩展** + **KB search非阻塞** (run_in_executor) + **.env 自动加载** (多路径fallback + OPENAI_*从DASHSCOPE兜底) + **gkd无阈值** + **vision配置看护** (provider:custom+qwen-vl-max) + **mmx-cli安装** (npm install -g mmx-cli + mmx auth login) + **idle文案** ("录音就绪") + SSE增量恢复 + chat文件路径注入 + 图片落盘 + KB去重user_id过滤 |
 | v0.22.5 | 2026-07-12 | demo版本占位拒绝 (write_demo_version 拦截"等待更多会议内容") + gkd阈值 10→50字 + demo-new-version SSE链路完整 (Rust显式分支 + 前端自动刷新版本列表) |
 | v0.22.4 | 2026-07-12 | SSE生命周期与采集解耦 (sse_active独立flag, 停采集后保持30s) + WS发送失败不再设capturing=false (防止服务端断百炼WS时误杀SSE) + 服务端必须bash run.sh启动 (注入BAILIAN_API_KEY/DASHSCOPE_API_KEY) |
 | v0.21.12 | 2026-07-11 | (基线) |

@@ -132,6 +132,28 @@ rsync -av ~/.hermes_backups/gpu_192.168.10.63_*/memories/   192.168.10.63:~/.her
 
 - [ADR-0010 信息隔离 — Deployment Clean Install](../decisions/0010-信息隔离-deployment-clean-install.md) — 决策细节
 - [踩坑记录 §20 信息隔离](./踩坑记录.md#20) — 事件复盘
+- [ADR-0054 Vision 三层逃生通道 — mmx-cli 后备](../decisions/0054-vision三层逃生通道-mmx-cli后备.md) — 识图可靠性架构
+
+---
+
+## mmx-cli 安装 (ADR-0054 · v0.22.6)
+
+> 图片 Vision 分析的三层后备通道依赖 MiniMax 原生 VLM CLI。
+> 在新机器上部署时需额外执行：
+
+```bash
+# 1. 安装 mmx-cli
+npm install -g mmx-cli
+
+# 2. 用 MiniMax API key 登录
+mmx auth login --api-key sk-your-minimax-key
+
+# 3. 验证
+mmx vision describe --image /path/to/test.jpg --prompt "一句话描述"
+```
+
+> API Key 在 [platform.minimaxi.com 订阅 Token Plan](https://platform.minimaxi.com/subscribe/token-plan) 获取。
+> `scripts/install-gpu-server.sh` 已包含 mmx-cli 安装步骤（仅装 nosde/npm + 全局装 mmx-cli，不写 API key）。
 
 ---
 

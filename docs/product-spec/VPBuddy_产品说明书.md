@@ -1,13 +1,14 @@
 |> **说明**:本文档是 VPBuddy 产品说明书的当前版本。
 |> 
 |> **版本历史**:
-|> - **v2.4** (2026-07-12): **v0.22.6 — toolsets + KB 非阻塞 + .env + gkd 去阈值 + vision + idle**:
-|>   1. **toolsets 扩展**: agent 工具集从 `["terminal","file"]` 扩展到 `["terminal","file","vision","web"]`
-|>   2. **KB search 非阻塞**: `POST /api/kb/search` 改为 `run_in_executor`，不再阻塞 event loop
-|>   3. **.env 自动加载**: 多路径 fallback + force overwrite，确保 API key 不丢失
-|>   4. **gkd 无阈值**: 字数门槛去掉，hash 变化即触发文档生成
-|>   5. **vision 配置看护**: Hermes `auxiliary.vision` 显式 `api_key`/`base_url`，qwen-vl-max on DashScope
-|>   6. **idle 文案**: `"未连接"` → `"录音就绪"` (录音断开 ≠ 服务断开)
+|> - **v2.4** (2026-07-12): **v0.22.6 — toolsets + KB 非阻塞 + .env + gkd 去阈值 + vision 三层通道 + mmx-cli + idle**:
+  1. **toolsets 扩展**: agent 工具集从 `["terminal","file"]` 扩展到 `["terminal","file","vision","web"]`
+  2. **KB search 非阻塞**: `POST /api/kb/search` 改为 `run_in_executor`，不再阻塞 event loop
+  3. **.env 自动加载**: 多路径 fallback + OPENAI_* 从 DASHSCOPE_API_KEY 兜底推导
+  4. **gkd 无阈值**: 字数门槛去掉，hash 变化即触发文档生成
+  5. **vision 三层逃生通道 (ADR-0054)**: OpenAI 兼容端点 (DashScope qwen-vl-max) → monkeypatch Hermes 路由 → mmx-cli MiniMax 原生 VLM 后备
+  6. **mmx-cli 集成**: `npm install -g mmx-cli` + `mmx auth login`，图片识图永不 401
+  7. **idle 文案**: `"未连接"` → `"录音就绪"` (录音断开 ≠ 服务断开)
 |> - **v2.3** (2026-07-07): **v0.10 — 百炼 ASR 替换 + 文档自驱动**:
 |>   1. **百炼 Fun-ASR-Realtime** (ADR-0046): 替换 funasr+pyannote 本地 GPU 推理，阿里云云端实时逐句转写，无需管理 GPU 模型
 |>   2. **WebSocket 实时 ASR**: 客户端 PCM 流直连百炼，逐句回调写入 `cleaned_text`，延迟 <1s
