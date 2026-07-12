@@ -1142,7 +1142,17 @@ async def post_chat(meeting_id: str, request: Request, user: dict = Depends(get_
                 for f in files_meta
                 if f.get("status") in ("kb-stored", "image", "empty")
             )
-            if attach_summary:
+            # v0.22.6: 图片落盘后, 把路径塞进 prompt 让 agent 用 read_file 读取
+            image_paths = [
+                f.get("path", "")
+                for f in files_meta
+                if f.get("status") == "image" and f.get("path")
+            ]
+            if image_paths:
+                text = (text or f"[上传了 {len(files_meta)} 个文件]") + "\n" + "\n".join(
+                    f"图片文件路径：{p}\n你可以用 read_file 读取图片内容。" for p in image_paths
+                )
+            elif attach_summary:
                 text = text or f"[上传了 {len(files_meta)} 个文件]"
         user_msg = _append_chat_message(
             meeting_id,

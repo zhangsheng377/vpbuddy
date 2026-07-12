@@ -278,11 +278,16 @@ def handle_chat_upload(body: bytes, content_type: str, meeting_id: str, user_id:
             continue
 
         if _is_image(fname):
-            # 图片 → base64, 不入库
+            # 图片 → base64 + 写盘 (v0.22.6: 下游 agent 需要 read_file 读取原始文件)
             try:
                 uri = _image_to_b64_data_uri(data, ct)
                 image_data_uris.append(uri)
-                results.append({"filename": fname, "status": "image", "data_uri_length": len(uri)})
+                file_uuid = uuid.uuid4().hex[:12]
+                upload_dir = UPLOADS_DIR / meeting_id
+                upload_dir.mkdir(parents=True, exist_ok=True)
+                raw_path = upload_dir / f"{file_uuid}_{fname}"
+                raw_path.write_bytes(data)
+                results.append({"filename": fname, "status": "image", "data_uri_length": len(uri), "path": str(raw_path)})
             except ValueError as e:
                 results.append({"filename": fname, "status": "rejected", "error": str(e)})
         else:
