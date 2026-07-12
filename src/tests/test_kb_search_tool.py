@@ -102,7 +102,7 @@ def test_snippet_truncated_to_500(fake_rag):
         assert len(r["snippet"]) <= 500
 
 
-def test_search_falls_back_to_owner_id(monkeypatch, tmp_path):
+def test_search_falls_back_to_owner_id(monkeypatch, fake_rag, tmp_path):
     """v0.22.6: 不传 user_id 时从 MeetingState.owner_id 回退."""
     from vpbuddy.storage import MeetingStorage
     from vpbuddy.state import MeetingState
@@ -112,44 +112,34 @@ def test_search_falls_back_to_owner_id(monkeypatch, tmp_path):
     state.owner_id = "owner_xyz"
     st.save(state)
 
-    original_load = MeetingStorage.load
-
-    class _PatchedStorage:
-        def load(self, mid):
-            if mid == "mtg_back":
-                return state
-            raise FileNotFoundError
-
-    monkeypatch.setattr(MeetingStorage, "load", _PatchedStorage().load)
+    monkeypatch.setattr(
+        "vpbuddy.tools.kb_search.MeetingStorage",
+        lambda data_dir=str(tmp_path), **kw: MeetingStorage(data_dir=data_dir, **kw),
+    )
 
     out = kb_search.search("mtg_back", "anything")
-    assert out["ok"] is False
-    assert "无法确定用户身份" not in out.get("error", "")
+    assert out["ok"] is True
+    assert out["results"] is not None
 
 
-def test_search_no_user_id_no_meeting_state(monkeypatch):
+def test_search_no_user_id_no_meeting_state(monkeypatch, fake_rag, tmp_path):
     """v0.22.6: 不传 user_id 且 MeetingState 不存在 → 返错误."""
-    from vpbuddy.storage import MeetingStorage
-
-    def _fail_load(self, mid):
-        raise FileNotFoundError
-
-    monkeypatch.setattr(MeetingStorage, "load", _fail_load)
+    monkeypatch.setattr(
+        "vpbuddy.tools.kb_search.MeetingStorage",
+        lambda data_dir=str(tmp_path), **kw: __import__("vpbuddy.storage", fromlist=["MeetingStorage"]).MeetingStorage(data_dir=data_dir, **kw),
+    )
 
     out = kb_search.search("nonexistent_mtg", "x")
     assert out["ok"] is False
     assert "用户身份" in out["error"]
 
 
-def test_search_user_id_not_in_where_for_empty_string(monkeypatch):
+def test_search_user_id_not_in_where_for_empty_string(monkeypatch, fake_rag, tmp_path):
     """v0.22.6: user_id='' 且 load 失败 → 返错误信息."""
-    from vpbuddy.storage import MeetingStorage
-
-    def _fail_load(self, mid):
-        raise FileNotFoundError
-
-    monkeypatch.setattr(MeetingStorage, "load", _fail_load)
-    monkeypatch.setattr(rag_backend, "_rag", _FakeRAG())
+    monkeypatch.setattr(
+        "vpbuddy.tools.kb_search.MeetingStorage",
+        lambda data_dir=str(tmp_path), **kw: __import__("vpbuddy.storage", fromlist=["MeetingStorage"]).MeetingStorage(data_dir=data_dir, **kw),
+    )
 
     out = kb_search.search("no_such_meeting", "x")
     assert out["ok"] is False
