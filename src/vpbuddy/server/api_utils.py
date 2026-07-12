@@ -354,7 +354,7 @@ def _get_chat_agent(meeting_id: str):
 
         _CHAT_AGENT_CACHE[session_id] = AIAgent(
             session_id=session_id,
-            enabled_toolsets=["terminal", "file", "vision"],
+            enabled_toolsets=["terminal", "file", "vision", "web"],
             platform="subagent",
             quiet_mode=True,
             max_iterations=20,
