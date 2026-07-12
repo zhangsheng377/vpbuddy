@@ -77,7 +77,7 @@ class TestGkdE2E:
         token = _register()
         c, r = _api("/api/kb/list", token=token)
         assert c == 200
-        assert "documents" in r
+        assert "docs" in r
 
     def test_demo_versions_endpoint(self):
         token = _register()
