@@ -2,7 +2,7 @@
 
 > **本地优先的会议操作系统级 AI 助手** —— 为 VP / 售前 / 项目负责人设计,运行在 VP 自己桌面客户端,数据完全本地化。
 
-**v0.16.0** (2026-07-07) — 百炼 Fun-ASR-Realtime WS 实时转写，首字延迟 <100ms，客户端 Rust WebSocket 音频流推送，服务端 Python relay。详见 [Releases](https://github.com/zhangsheng377/vpbuddy/releases)。
+**v0.22.6** (2026-07-12) — **toolsets 扩展** (vision+web) · **KB search 非阻塞** (run_in_executor) · **.env 自动加载** (多路径 fallback) · **gkd 无字数阈值** (hash 即触发) · **vision 配置看护** (Hermes auxiliary.vision) · **"录音就绪" 文案**。详见 [Releases](https://github.com/zhangsheng377/vpbuddy/releases)。
 
 [English](#english) | [中文](#中文)
 
@@ -227,6 +227,21 @@ MIT
 ---
 
 ## CHANGELOG
+
+### v0.22.6 (2026-07-12) — toolsets 扩展 + KB 非阻塞 + .env 自动加载 + gkd 无阈值 + vision 配置看护 + idle 文案
+
+**核心**: 综合修复 v0.22.x 系列所有 P0/P1 问题，覆盖 toolsets、KB 性能、环境变量可靠性、gkd 触发策略、vision 可用性和客户端体验。
+
+**改动**:
+- 🔧 **toolsets 扩展**: agent 从 `["terminal","file"]` 扩展到 `["terminal","file","vision","web"]` — vision 读取用户上传图片，web DDG 搜索补充上下文
+- ⚡ **KB search 非阻塞**: `POST /api/kb/search` 从 `async def` 内同步等待改为 `await run_in_executor(None, ...)`，不再阻塞 FastAPI event loop
+- 🔐 **.env 自动加载**: 服务启动时多路径 fallback (同目录 → 项目根 → data 上级)，`os.environ[key] = value` (force overwrite，不用 setdefault)，确保 `DASHSCOPE_API_KEY` 永远不会因部署方式丢失
+- 🎯 **gkd 无字数阈值**: 去掉 `len(cur) > 50` 门槛 — hash 变化即触发；新增 `not cur.strip()` 空文本 guard 防止 `md5("")` 误触发
+- 👁️ **vision 配置看护**: Hermes `auxiliary.vision` 显式配置 `api_key`/`base_url`/`model` — `qwen-vl-max` on DashScope，解决 fallback 到 MiniMax key 导致的 401
+- 📝 **idle 文案**: `"未连接"` → `"录音就绪"` — 录音断开 ≠ 服务断开
+- 📄 **SSE doc-update 元信息**: 不再推送 content 字段，只推 `{kind, status, doc_size}`，客户端按需 GET
+- 📥 **Chat 文件路径注入**: 文本文件不塞内容只放路径，图片落盘 `uploads/{mid}/`
+- ��� **测试加固**: 新增 12+ 测试用例 (gkd/env/vision/i18n/kb nonblocking/e2e 真实 API)
 
 ### v0.9.0 (2026-07-05) — 后台任务队列 + 经验蒸馏 Phase 1 + BFF API + FastAPI 迁移 (#5, #1, #9, #6)
 

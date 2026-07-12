@@ -1,6 +1,13 @@
 |> **说明**:本文档是 VPBuddy 产品说明书的当前版本。
 |> 
 |> **版本历史**:
+|> - **v2.4** (2026-07-12): **v0.22.6 — toolsets + KB 非阻塞 + .env + gkd 去阈值 + vision + idle**:
+|>   1. **toolsets 扩展**: agent 工具集从 `["terminal","file"]` 扩展到 `["terminal","file","vision","web"]`
+|>   2. **KB search 非阻塞**: `POST /api/kb/search` 改为 `run_in_executor`，不再阻塞 event loop
+|>   3. **.env 自动加载**: 多路径 fallback + force overwrite，确保 API key 不丢失
+|>   4. **gkd 无阈值**: 字数门槛去掉，hash 变化即触发文档生成
+|>   5. **vision 配置看护**: Hermes `auxiliary.vision` 显式 `api_key`/`base_url`，qwen-vl-max on DashScope
+|>   6. **idle 文案**: `"未连接"` → `"录音就绪"` (录音断开 ≠ 服务断开)
 |> - **v2.3** (2026-07-07): **v0.10 — 百炼 ASR 替换 + 文档自驱动**:
 |>   1. **百炼 Fun-ASR-Realtime** (ADR-0046): 替换 funasr+pyannote 本地 GPU 推理，阿里云云端实时逐句转写，无需管理 GPU 模型
 |>   2. **WebSocket 实时 ASR**: 客户端 PCM 流直连百炼，逐句回调写入 `cleaned_text`，延迟 <1s
@@ -16,9 +23,9 @@
 
 ---
 
-# VPBuddy 产品说明书 v2.3
+# VPBuddy 产品说明书 v2.4
 
-> **v2.3** (2026-07-07 修订 — **v0.10**): 百炼 Fun-ASR-Realtime 替换本地 ASR + WebSocket 实时逐句转写 + 文档自驱动 15s 轮询。详见 [总体架构 v1.43](../design/总体架构.md) + [ADR-0046](../decisions/0046-bailian-asr.md)。
+> **v2.4** (2026-07-12 修订 — **v0.22.6**): 综合修复 v0.22.x 系列 P0/P1 — toolsets 扩展 (vision+web)、KB search 非阻塞 (run_in_executor)、.env 自动加载 (多路径 fallback+force overwrite)、gkd 无字数阈值、vision 配置看护 (Hermes auxiliary.vision)、idle 文案 ("录音就绪")。详见 [总体架构 v1.46](../design/总体架构.md) + [API 参考 v0.22.6](../api-reference.md)。
 
 > **历史版本**:v1.0-v1.13 已归档删除。
 
@@ -295,6 +302,7 @@ VP 任何时候投屏/外发(无『完成』前提)
 
 ## 十二、版本历史
 
+- **v2.4 (2026-07-12)**: v0.22.6 — toolsets 扩展 (vision+web) / KB 非阻塞 (run_in_executor) / .env 自动加载 / gkd 去阈值 / vision 配置看护 / idle 文案
 - **v2.3 (2026-07-07)**: v0.10 — 百炼 Fun-ASR-Realtime 替换本地 ASR + WebSocket 实时逐句转写 + 文档自驱动 15s 轮询 (ADR-0046)
 - **v2.2 (2026-07-05)**: v0.9.0 — 后台任务队列 / 经验蒸馏 Phase 1 / FastAPI 迁移 / BFF API (ADR-0042~0044)
 - **v2.1 (2026-07-04)**: LLM env 透传 / fork 架构 / API 参考文档 (ADR-0040~0041)

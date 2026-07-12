@@ -11,6 +11,12 @@
 > **⚠️ Breaking in v0.20**: `upload_audio`、`stream_chunk`、`stream_stop` 已移除，30s 切片模式已废弃，请使用 WebSocket 实时 ASR。
 >
 > **v0.22.6 关键变更**:
+> - **新增 toolsets**: agent 从 `["terminal","file"]` 扩展为 `["terminal","file","vision","web"]`（vision 读图、web DDG 搜索）
+> - **KB search POST 非阻塞**: `async def` → `await run_in_executor(None, ...)`，不再阻塞 event loop
+> - **.env 自动加载**: 服务启动时从 `.env` 注入 `DASHSCOPE_API_KEY` 等环境变量（多路径 fallback）
+> - **gkd 无字数阈值**: hash-based 触发，不设字数枷锁；空文本 `< 1 字` 跳过（防误触发）
+> - **Vision 配置看护**: Hermes `auxiliary.vision` 需显式 `api_key`/`base_url`/`model` (`qwen-vl-max`)
+> - **idle 文案**: 客户端 `"未连接"` → `"录音就绪"`（录音断开 ≠ 服务断开）
 > - `doc-update` SSE 不再推送 `content` 字段（只推元信息 `{kind, status, doc_size}`）
 > - SSE 重连支持增量恢复（读取客户端 `Last-Event-ID` header/query）
 > - Chat 文件上传不塞内容只放路径（agent 用 `read_file` 按需读取）
@@ -493,7 +499,7 @@ GET /api/meetings/{id}/docs
 ```
 WebSocket ASR 连接建立
   → 每句完成 → 写入 MeetingState.cleaned_text
-  → gkd 守护线程每 6s 扫描, cleaned_text >50 字时触发文档生成
+  → gkd 守护线程每 6s 扫描, 非空 cleaned_text 变化时触发文档生成 (hash-based, 无字数阈值)
      → batch_docs agent (5 文档, 1 次 LLM 调用)
      → demo agent (HTML 原型, 独立 session, 并行)
   → cleaned_text 有增量变化 → 自动重触发
@@ -606,8 +612,8 @@ GET /api/meetings/{id}/events
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/kb/search?q=X&meeting_id=Y` | 关键词搜索 |
-| POST | `/api/kb/search` | JSON 搜索 `{"query":"...", "top_k":5}` |
+| GET | `/api/kb/search?q=X&meeting_id=Y` | 关键词搜索 (threadpool) |
+| POST | `/api/kb/search` | JSON 搜索 `{"query":"...", "top_k":5}` (非阻塞 — `run_in_executor`) |
 | POST | `/api/kb/upload` | 上传文件 (.txt/.md/.pdf, ≤50MB) |
 | GET | `/api/kb/list?meeting_id=Y` | KB 统计 + 文档列表 |
 | DELETE | `/api/kb/{doc_id}` | 删除文档 (v0.21.1+: 需认证+owner校验，非文件 owner 返回 403) |
@@ -909,7 +915,7 @@ GET /api/timeline
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
-| v0.22.6 | 2026-07-12 | gkd去掉demo参与hash(防自反馈) + _kick_docs阈值对齐50 + SSE读取Last-Event-ID(增量恢复) + chat文件只放路径 + 图片上传落盘 + KB去重加user_id过滤 + _gkd_runner签名修复 + SSE subscriber兜底清理 |
+| v0.22.6 | 2026-07-12 | **toolsets 扩展** (terminal+file+vision+web) + **KB search非阻塞** (`run_in_executor`) + **.env 自动加载** (多路径fallback+force overwrite) + **gkd无阈值** (hash触发,空文本跳过) + **vision配置看护** (auxiliary.vision.api_key/base_url) + **idle文案** ("录音就绪") + SSE Last-Event-ID增量恢复 + chat文件路径注入 + 图片落盘 + KB去重user_id过滤 + _srv_deploy.py误提交清理 |
 | v0.22.5 | 2026-07-12 | demo版本占位拒绝 (write_demo_version 拦截"等待更多会议内容") + gkd阈值 10→50字 + demo-new-version SSE链路完整 (Rust显式分支 + 前端自动刷新版本列表) |
 | v0.22.4 | 2026-07-12 | SSE生命周期与采集解耦 (sse_active独立flag, 停采集后保持30s) + WS发送失败不再设capturing=false (防止服务端断百炼WS时误杀SSE) + 服务端必须bash run.sh启动 (注入BAILIAN_API_KEY/DASHSCOPE_API_KEY) |
 | v0.21.12 | 2026-07-11 | (基线) |
