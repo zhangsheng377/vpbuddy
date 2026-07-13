@@ -480,6 +480,9 @@ def format_state_summary(state) -> str:
                             _extra = f" [上传了: {', '.join(_fnames)}]"
                     parts.append(f"- {_label}: {_content}{_extra}")
                     parts.append("")
+                if len(_history) > 20:
+                    parts.append(f"[共 {len(_history)} 条，以上为最近 20 条。完整对话文件: {_chat_json}]")
+                    parts.append(f"需要更多上下文时，用 read_file 工具读取 {_chat_json}")
         except Exception:
             pass
 
