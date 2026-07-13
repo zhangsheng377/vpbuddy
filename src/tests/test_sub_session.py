@@ -451,19 +451,160 @@ class TestKbStatus:
         finally:
             doc_path.unlink(missing_ok=True)
 
-    def test_get_kb_status_summary(self):
-        """get_kb_status() 返回空 (ADR-0020 stub)"""
-        from vpbuddy.sub_session_controller import get_kb_status
-        data = get_kb_status()
-        assert data["summary"]["total"] == 0
-        assert data["summary"]["stored"] == 0
 
-    def test_get_kb_status_filter_by_meeting(self):
-        """get_kb_status(meeting_id=X) 返回空 (ADR-0020 stub)"""
-        from vpbuddy.sub_session_controller import get_kb_status
-        data = get_kb_status(meeting_id="MTG_A")
-        assert data["summary"]["total"] == 0
-        assert data["items"] == []
+class TestFormatStateSummaryChatHistory:
+    """v0.22.7 ADR-0055: format_state_summary 注入 chat 对话历史"""
+
+    def test_chat_json_injected_when_exists(self, populated_meeting):
+        """chat.json 存在且有消息 → summary 包含 'VP Chat 对话历史'"""
+        import json as _json
+        chat_json = DATA_DIR / f"{populated_meeting}.chat.json"
+        chat_json.write_text(_json.dumps([
+            {"role": "user", "content": "这个会议讨论了什么?", "source": "chat"},
+            {"role": "assistant", "content": "SSO 登录相关需求", "source": "hermes"},
+        ], ensure_ascii=False), encoding="utf-8")
+        try:
+            state = MeetingStorage(data_dir=str(DATA_DIR)).load(populated_meeting)
+            summary = format_state_summary(state)
+            assert "VP Chat 对话历史" in summary
+            assert "这个会议讨论了什么" in summary
+            assert "SSO 登录相关需求" in summary
+        finally:
+            chat_json.unlink(missing_ok=True)
+
+    def test_no_chat_section_when_json_missing(self, populated_meeting):
+        """chat.json 不存在 → summary 不包含对话历史段"""
+        state = MeetingStorage(data_dir=str(DATA_DIR)).load(populated_meeting)
+        summary = format_state_summary(state)
+        assert "VP Chat 对话历史" not in summary
+
+    def test_only_last_20_messages_injected(self, populated_meeting):
+        """超过 20 条消息 → 只注入最近 20 条 + 提示完整文件路径"""
+        import json as _json
+        messages = []
+        for i in range(50):
+            messages.append({"role": "user", "content": f"消息 #{i}", "source": "chat"})
+            messages.append({"role": "assistant", "content": f"回复 #{i}", "source": "hermes"})
+        chat_json = DATA_DIR / f"{populated_meeting}.chat.json"
+        chat_json.write_text(_json.dumps(messages, ensure_ascii=False), encoding="utf-8")
+        try:
+            state = MeetingStorage(data_dir=str(DATA_DIR)).load(populated_meeting)
+            summary = format_state_summary(state)
+            assert "VP Chat 对话历史" in summary
+            assert "消息 #40" in summary   # 最近 20 条(=最后 20 条消息)包含 #40-#49
+            assert "消息 #0" not in summary  # 第 0 条在最前面, 不在最近 20 条
+            assert "共 100 条" in summary
+            assert ".chat.json" in summary
+        finally:
+            chat_json.unlink(missing_ok=True)
+
+    def test_long_message_truncated(self, populated_meeting):
+        """单条消息 > 2000 字 → 截断 + 显示 [...]"""
+        import json as _json
+        long_content = "X" * 3000
+        chat_json = DATA_DIR / f"{populated_meeting}.chat.json"
+        chat_json.write_text(_json.dumps([
+            {"role": "user", "content": long_content, "source": "chat"},
+        ], ensure_ascii=False), encoding="utf-8")
+        try:
+            state = MeetingStorage(data_dir=str(DATA_DIR)).load(populated_meeting)
+            summary = format_state_summary(state)
+            assert "[...已截断]" in summary
+            assert "X" * 500 in summary
+            assert "X" * 2500 not in summary  # 超长部分被截断
+        finally:
+            chat_json.unlink(missing_ok=True)
+
+    def test_attachment_info_shown(self, populated_meeting):
+        """material-upload / client-upload 消息 → 显示附件文件名"""
+        import json as _json
+        chat_json = DATA_DIR / f"{populated_meeting}.chat.json"
+        chat_json.write_text(_json.dumps([
+            {"role": "user", "content": "这是什么图片?", "source": "client-upload",
+             "attachments": [{"filename": "screenshot.png"}, {"filename": "logo.jpg"}]},
+        ], ensure_ascii=False), encoding="utf-8")
+        try:
+            state = MeetingStorage(data_dir=str(DATA_DIR)).load(populated_meeting)
+            summary = format_state_summary(state)
+            assert "上传了: screenshot.png, logo.jpg" in summary
+        finally:
+            chat_json.unlink(missing_ok=True)
+
+    def test_empty_chat_json_no_section(self, populated_meeting):
+        """chat.json 是空列表 → 不注入对话历史段"""
+        import json as _json
+        chat_json = DATA_DIR / f"{populated_meeting}.chat.json"
+        chat_json.write_text("[]", encoding="utf-8")
+        try:
+            state = MeetingStorage(data_dir=str(DATA_DIR)).load(populated_meeting)
+            summary = format_state_summary(state)
+            assert "VP Chat 对话历史" not in summary
+        finally:
+            chat_json.unlink(missing_ok=True)
+
+    def test_corrupt_chat_json_no_crash(self, populated_meeting):
+        """chat.json 格式损坏 → 不抛异常, 不影响正常摘要"""
+        chat_json = DATA_DIR / f"{populated_meeting}.chat.json"
+        chat_json.write_text("{{{broken json", encoding="utf-8")
+        try:
+            state = MeetingStorage(data_dir=str(DATA_DIR)).load(populated_meeting)
+            summary = format_state_summary(state)
+            assert "TEST12345ABCD" in summary  # 正常内容还在
+            assert "VP Chat 对话历史" not in summary
+        finally:
+            chat_json.unlink(missing_ok=True)
+
+
+class TestFormatStateSummaryUploadedFiles:
+    """v0.22.7: format_state_summary 注入上传文件列表"""
+
+    def test_uploaded_files_shown(self, populated_meeting):
+        """uploads/{mid}/ 有文件 → summary 包含文件列表"""
+        upload_dir = DATA_DIR / "uploads" / populated_meeting
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        (upload_dir / "readme.txt").write_text("hello", encoding="utf-8")
+        (upload_dir / "slide.pptx").write_text("ppt", encoding="utf-8")
+        try:
+            state = MeetingStorage(data_dir=str(DATA_DIR)).load(populated_meeting)
+            summary = format_state_summary(state)
+            assert "上传的文件 (会议材料)" in summary
+            assert "readme.txt" in summary
+            assert "slide.pptx" in summary
+        finally:
+            import shutil as _sh
+            _sh.rmtree(upload_dir, ignore_errors=True)
+
+    def test_image_file_annotated_with_read_file(self, populated_meeting):
+        """图片文件 → prompt 提示用 read_file 读取"""
+        upload_dir = DATA_DIR / "uploads" / populated_meeting
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        (upload_dir / "screenshot.png").write_bytes(b"\x89PNGdummy")
+        try:
+            state = MeetingStorage(data_dir=str(DATA_DIR)).load(populated_meeting)
+            summary = format_state_summary(state)
+            assert "screenshot.png" in summary
+            assert "用 read_file 工具读取此路径" in summary
+            assert "[图片]" in summary
+        finally:
+            import shutil as _sh
+            _sh.rmtree(upload_dir, ignore_errors=True)
+
+    def test_no_upload_section_when_dir_missing(self, populated_meeting):
+        """uploads/{mid}/ 不存在 → 不注入文件段"""
+        state = MeetingStorage(data_dir=str(DATA_DIR)).load(populated_meeting)
+        summary = format_state_summary(state)
+        assert "上传的文件 (会议材料)" not in summary
+
+    def test_empty_upload_dir_no_section(self, populated_meeting):
+        """uploads/{mid}/ 存在但无文件 → 不注入文件段"""
+        upload_dir = DATA_DIR / "uploads" / populated_meeting
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            state = MeetingStorage(data_dir=str(DATA_DIR)).load(populated_meeting)
+            summary = format_state_summary(state)
+            assert "上传的文件 (会议材料)" not in summary
+        finally:
+            upload_dir.rmdir()
 
 
 class TestTriggerWritesFile:
