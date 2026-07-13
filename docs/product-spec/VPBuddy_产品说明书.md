@@ -1,7 +1,8 @@
 |> **说明**:本文档是 VPBuddy 产品说明书的当前版本。
 |> 
 |> **版本历史**:
-|> - **v2.5** (2026-07-13): **v0.22.7 — pause≠stop + chat注入子agent + close 120s兜底**: 客户端 `stop_capture({close_meeting: true})` 区分暂停/结束；`format_state_summary()` 注入 chat 历史 + 上传文件列表；`_close_meeting()` 延迟关闭 SSE
+|> - **v2.6** (2026-07-14): **v0.22.8 — 录音稳定性三修 + 数据安全加固**: 百炼 ASR 自动重连、`stream_start` 断线重连保留转录、图片/对话上传非阻塞；Agent 铁律增强、会议删除彻底清理、经验蒸馏自排除
+- **v2.5** (2026-07-13): **v0.22.7 — pause≠stop + chat注入子agent + close 120s兜底**: 客户端 `stop_capture({close_meeting: true})` 区分暂停/结束；`format_state_summary()` 注入 chat 历史 + 上传文件列表；`_close_meeting()` 延迟关闭 SSE
 - **v2.4** (2026-07-12): **v0.22.6 — vision 三层通道 + mmx-cli**: OpenAI 兼容端点 → monkeypatch → mmx-cli MiniMax 原生 VLM 后备，图片识图永不 401
   1. **toolsets 扩展**: agent 工具集从 `["terminal","file"]` 扩展到 `["terminal","file","vision","web"]`
   2. **KB search 非阻塞**: `POST /api/kb/search` 改为 `run_in_executor`，不再阻塞 event loop
@@ -25,11 +26,23 @@
 
 ---
 
-# VPBuddy 产品说明书 v2.5
+# VPBuddy 产品说明书 v2.6
 
-> **v2.5** (2026-07-13 修订 — **v0.22.7**): 暂停≠结束 (客户端 `close_meeting` 参数 + 服务端延迟关闭) + chat 历史注入子 agent (ADR-0055) + 上传文件路径暴露给子 agent。详见 [总体架构 v1.48](../design/总体架构.md) + [API 参考 v0.22.7](../api-reference.md)。
+> **v2.6** (2026-07-14 修订 — **v0.22.8**): 录音稳定性三修（百炼 ASR 自动重连、断线重连保留转录、上传/chat 非阻塞）+ 数据安全加固（Agent 铁律增强、会议删除彻底清理、经验蒸馏自排除）。详见 [总体架构 v1.48](../design/总体架构.md) + [API 参考 v0.22.8](../api-reference.md)。
 
 > **历史版本**:v1.0-v1.13 已归档删除。
+
+## v0.22.8 更新 (2026-07-14)
+
+### 录音稳定性增强
+- **百炼 ASR 自动重连**：长时间不说话时百炼服务端 idle timeout 关闭连接，现在服务端自动检测并静默重连。用户完全无感，客户端 WS 不断开，继续说话时 ASR 立即恢复。
+- **`stream_start` 断线重连保留转录**：会议断线重连不再丢失之前的转写记录。
+- **图片/对话上传非阻塞**：上传图片或发送 chat 消息时，不会影响实时语音转写——后台操作在线程池中执行。
+
+### 数据安全加固
+- **Agent 提示词铁律增强**：文档生成 agent 禁止探索服务器文件系统、用户名、环境变量。种子数据只用中性占位符（如"张伟""李雪"），不会出现开发者或用户真实姓名。
+- **会议删除彻底清理**：删除会议时同步清理上传文件、知识库记录、agent 内存缓存、经验候选文件。
+- **经验蒸馏自排除**：当前会议生成的经验不会被自己重复引用，防止信息循环。
 
 ## 一、产品定位
 
@@ -304,6 +317,7 @@ VP 任何时候投屏/外发(无『完成』前提)
 
 ## 十二、版本历史
 
+- **v2.5 (2026-07-13)**: v0.22.7 — pause≠stop (客户端 close_meeting 参数 + 服务端延迟关闭) + chat 历史注入子 agent (ADR-0055) + 上传文件路径暴露给子 agent
 - **v2.4 (2026-07-12)**: v0.22.6 — toolsets 扩展 (vision+web) / KB 非阻塞 (run_in_executor) / .env 自动加载 / gkd 去阈值 / vision 配置看护 / idle 文案
 - **v2.3 (2026-07-07)**: v0.10 — 百炼 Fun-ASR-Realtime 替换本地 ASR + WebSocket 实时逐句转写 + 文档自驱动 15s 轮询 (ADR-0046)
 - **v2.2 (2026-07-05)**: v0.9.0 — 后台任务队列 / 经验蒸馏 Phase 1 / FastAPI 迁移 / BFF API (ADR-0042~0044)

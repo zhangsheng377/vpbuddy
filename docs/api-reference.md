@@ -1,6 +1,6 @@
 # VPBuddy HTTP API 参考
 
-> **版本**: v0.22.7 · `@ 2026-07-13`
+> **版本**: v0.22.8 · `@ 2026-07-14`
 > **Base URL**: `http://47.100.182.3:28765`（公网 GPU 服务器）
 > **协议**: HTTP/1.1 · WebSocket 实时 ASR · SSE 实时推送 · Multipart 上传
 > **编码**: 所有请求/响应使用 UTF-8
@@ -14,6 +14,16 @@
 > - **暂停 ≠ 结束 (ADR-0055)**: 客户端 `stop_capture` 新增 `close_meeting` 参数 — 暂停录音不再调用 `POST /close`，SSE 保持连接，前端不再误显示"未连接"
 > - **chat 历史注入子 agent (ADR-0055)**: `format_state_summary()` 读取 `{mid}.chat.json`，最近 20 条对话 + 完整文件路径注入 prompt，子 agent 可 `read_file` 读全量；上传文件路径同样暴露给子 agent
 > - **`_close_meeting()` 延迟关闭**: 不再立即 `close_meeting()` 杀 SSE，改为 120s 后台线程兜底关闭
+>
+> **v0.22.8 关键变更**:
+> - **百炼 idle timeout 自动重连**: 用户长时间不说话 → 百炼 WS 关闭 → 服务端检测 `needs_reconnect` → 自动 `restart_session()` 重建 Recognition，客户端 WS 不断、不推 `recording-disconnected`
+> - **agent sandbox 强化 (prompt 铁律)**: demo/batch_docs/single-agent 三处 prompt 新增——严禁读取/提及服务器文件系统路径、主机用户名(/home/xxx)、环境变量；禁止用终端工具探索系统(whoami/uname/hostname/等)；种子/示例数据禁用可能泄露身份的信息，只用中性占位符
+> - **`DELETE /api/meetings/{id}` 资源清理完善**: 新增清理 uploads 目录、KB Chroma 记录、`_AGENT_CACHE`/`_CHAT_AGENT_CACHE`/`_CLEAN_AGENT_CACHE`、experience 候选文件；返回 `deleted` 对象增加 `uploads`/`kb`/`agents`/`experiences` 字段
+> - **Experience 自排除**: `search_experiences()` 新增 `exclude_meeting_id` 参数，batch_docs 调用时排除当前会议自身经验，防止自我循环引用
+> - **`handle_chat_upload` KB metadata 补全**: 补 `scope=meeting_material`、`labels`、`meeting_callable` 字段，与 `handle_kb_upload` 保持一致
+> - **`stream_start` reuse 保留转录**: 断线重连时不再重置 `transcript_segments`，保留之前的转写记录
+> - **图片上传/chat 非阻塞化**: `handle_chat_upload` + `_run_vp_chat` 通过 `await loop.run_in_executor()` 在线程池中执行，不阻塞 event loop，WS ASR 持续收音频帧
+> - **图片上传后强制触发文档重生成**: `post_chat` 图片路径非空时通过 `task_manager.submit()` 提交 BATCH_DOCS_KIND + DEMO_KIND
 >
 > **v0.22.6 关键变更**:
 > - **vision 三层逃生通道 (ADR-0054)**: OpenAI 兼容端点 (DashScope qwen-vl-max) → monkeypatch Hermes 路由 → mmx-cli MiniMax 原生 VLM 后备，确保图片识图在任何情况下都不 401
@@ -347,9 +357,9 @@ PATCH /api/meetings/{id}
 DELETE /api/meetings/{id}
 ```
 
-**v0.20 新增**。删除会议 state、chat history、materials、docs 目录。
+**v0.20 新增**。删除会议 state、chat history、materials、docs 目录。v0.22.8: 新增清理 uploads、KB Chroma、agent cache、experience 候选。
 
-**响应**: `{"meeting_id": "{id}", "deleted": {"state": true, "chat": true, "docs": true, ...}}`
+**响应**: `{"meeting_id": "{id}", "deleted": {"state": true, "chat": true, "materials": 3, "docs": true, "stream_meta": true, "uploads": 5, "kb": 12, "agents": 2, "experiences": true}}`
 
 **权限 (ADR-0050)**: 仅会议 owner 可操作。
 
@@ -416,6 +426,7 @@ WS /api/meetings/{id}/realtime_asr
 - 每句完成时自动写入 `MeetingState.cleaned_text`，**v0.21.3 变更**: 写入的是经过降噪过滤的 `cleaned_accumulated_text`（过滤填充词/设备测试短语/无意义重复），非原始累积文本
 - **v0.21.3 变更**: 文档调度改为 hash-based 检测有意义变更，debounce 6s（不再使用 15s 无条件首轮 + 30s 字符增量策略）
 - **v0.21.3 变更**: 断线不误关会议，会议数据保留可用于后续重连
+- **v0.22.8 百炼重连**: 百炼 WS 长时间无有效语音会关闭 (idle timeout ~10-20s)，服务端检测到 `on_close` → 标记 `needs_reconnect` → 下次 `send_audio` 自动 `restart_session()` 重建 Recognition。客户端 WS **不断开**，SSE **不推** `recording-disconnected`。用户重新开始说话时 ASR 自动恢复。
 
 **典型流程**:
 ```
@@ -451,11 +462,13 @@ WS /api/meetings/{id}/realtime_asr
 POST /api/meetings/{id}/close
 ```
 
-**v0.22.7 变更**: `_close_meeting()` 不再立即 `close_meeting()` 杀 SSE，改为 120s 后台线程兜底关闭。客户端暂停录音 (**不**带 `close_meeting=true`) 不会调用此端点，SSE 保持连接。
+**v0.22.7 变更**: `_close_meeting()` 不再立即 `close_meeting()` 杀 SSE，改为 120s 后台线程兜底关闭。客户端暂停录音 (**不**带 `close_meeting=true`) 不会调用此端点，SSE 保持连接。v0.22.8: 客户端暂停录音 (不带 `close_meeting=true`) 不触发 POST /close 是 v0.22.7 的客户端行为，本次无额外变更。
 
 **说明**: 推送 `meeting-complete` SSE 事件 → 清 proactive 节流 → 触发经验蒸馏 → 提交最终文档生成任务。
 
-### 4.8.1 暂停 vs 结束 (v0.22.7)
+### 4.8.1 暂停 vs 结束 (v0.22.7 客户端行为)
+
+> **v0.22.7 起** 客户端 `stop_capture` 通过 `close_meeting` 参数区分暂停与结束，服务端据此决定是否触发 `POST /close`。
 
 | 操作 | 客户端调用 | 服务端行为 | SSE |
 |------|-----------|-----------|:--:|
@@ -628,6 +641,7 @@ GET /api/meetings/{id}/events
 | `chat-message` | `{role, content, source, ...}` | Chat 助理消息 |
 | `collab-update` | `{action, qid, section, question, answer?}` | 协作提问/回答 |
 | `meeting-complete` | `{status: "user_closed"}` | 用户主动关闭会议 (POST /close) |
+| `recording-disconnected` | `{status: "disconnected"}` | 录制连接断开。v0.22.8: 百炼自动重连后此事件**不再推送**——仅当百炼重连也失败时才推送 |
 
 **SSE 断线恢复 (v0.22.6)**: 客户端重连时传 `Last-Event-ID` header 或 `?last_event_id=...` query param，服务端只推送该 ID 之后的新事件，不再全量重放。
 
@@ -961,6 +975,7 @@ GET /api/timeline
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| v0.22.8 | 2026-07-14 | **百炼自动重连**: idle timeout → restart_session() 静默重建 + **agent sandbox prompt铁律**: 禁读宿主用户名/环境变量 + **delete 完善清理** uploads/KB/agent-cache/experience + **experience exclude_meeting_id** 防自我引用 + **handle_chat_upload补scope** + **stream_start保留转录** + **chat/图片非阻塞** run_in_executor + **图片上传强制触发doc重生成** |
 | v0.22.7 | 2026-07-13 | **暂停≠结束**: 客户端 `stop_capture({close_meeting: bool})` + `_close_meeting()` 120s 延迟兜底 + **chat历史注入子agent (ADR-0055)**: `format_state_summary()` 读 `{mid}.chat.json`，最近20条+完整路径暴露给batch_docs/demo |
 | v0.22.6 | 2026-07-12 | vision三层逃生通道 (ADR-0054): OpenAI兼容 → monkeypatch → mmx-cli VLM后备 + toolsets扩展 + KB search非阻塞 + .env自动加载 + gkd无阈值 + mmx-cli安装 + SSE增量恢复 + KB去重 |
 | v0.22.5 | 2026-07-12 | demo版本占位拒绝 (write_demo_version 拦截"等待更多会议内容") + gkd阈值 10→50字 + demo-new-version SSE链路完整 (Rust显式分支 + 前端自动刷新版本列表) |
