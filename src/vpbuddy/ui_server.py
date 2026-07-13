@@ -97,8 +97,12 @@ def _close_meeting(meeting_id: str) -> dict:
     不依赖 self, 返回 dict 由调用方序列化.
 
     v0.9.0: 新增 task_manager 提交文档生成 (替代旧 controller 轮询).
+    v0.22.6: 不再立即 close_meeting(meeting_id) — 客户端 Rust 代码 POST /close 后
+    还要等 30s 收 doc-update/demo-new-version 等事后事件, 服务端提前 kill SSE 会导致
+    "暂停录音→断联" bug. SSE 订阅者由客户端主动断开时自动清理 (sse_generator finally).
+    120s 后兜底 close 防资源泄漏.
     """
-    from .realtime_server import close_meeting, push_event
+    from .realtime_server import push_event
     from .task_manager import get_task_manager
     from .sub_session_controller import _dispatch_kind, BATCH_DOCS_KIND, DEMO_KIND
 
@@ -108,7 +112,19 @@ def _close_meeting(meeting_id: str) -> dict:
             "status": "user_closed",
             "note": "用户主动结束 (ADR-0022)",
         })
-        closed = close_meeting(meeting_id)
+
+        # v0.22.6: 不立即 close_meeting — 客户端还需要收事后事件
+        # 120s 兜底: 防止客户端永不断开导致的资源泄漏
+        import threading as _th
+        def _delayed_close():
+            import time as _time
+            _time.sleep(120)
+            try:
+                from .realtime_server import close_meeting as _cm
+                _cm(meeting_id)
+            except Exception:
+                pass
+        _th.Thread(target=_delayed_close, daemon=True).start()
 
         # 清 proactive 节流
         try:

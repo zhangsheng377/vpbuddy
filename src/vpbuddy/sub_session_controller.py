@@ -434,6 +434,23 @@ def format_state_summary(state) -> str:
         for sid, name in state.speaker_map.items():
             parts.append(f"- {sid} → {name}")
 
+    # v0.22.6: 子 agent 也需要看到上传文件列表，否则 vision 工具找不到图片路径
+    _upload_dir = DATA_DIR / "uploads" / state.meeting_id
+    if _upload_dir.is_dir():
+        _uploaded = sorted(_upload_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)[:20]
+        if _uploaded:
+            parts.append("")
+            parts.append("## 上传的文件 (会议材料)")
+            for _f in _uploaded:
+                if not _f.is_file():
+                    continue
+                _ext = _f.suffix.lower()
+                _type = "图片" if _ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp") else "文件"
+                parts.append(f"- [{_type}] {_f.name} ({_f.stat().st_size} bytes)")
+                parts.append(f"  路径: {_f}")
+                if _type == "图片":
+                    parts.append(f"  读取: 用 read_file 工具读取此路径")
+
     return "\n".join(parts)
 
 
