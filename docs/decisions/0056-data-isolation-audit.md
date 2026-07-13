@@ -12,17 +12,17 @@
 
 | 编号 | 问题 | 严重度 | 状态 |
 |------|------|:---:|:---:|
-| A | **KB 检索不按 `meeting_id` 过滤** → 同用户所有会议 KB 互可见 | 🔴 P0 | **confirmed** |
+| A | **KB 检索不按 `meeting_id` 过滤** → 同用户所有会议 KB 互可见 | — | **by design** — KB 按 `user_id` 隔离，不按 `meeting_id` |
 | B | `handle_chat_upload` 写 KB 缺少 `scope` 字段 | 🟡 P1 | **confirmed** |
-| C | **Experience 无 PII 检测/脱敏/抽象，原文直接存储** | 🔴 P0 | **confirmed** |
+| C | **Experience 无 PII 检测/脱敏/抽象，原文直接存储** | — | **暂缓** — 先不做，以免引入隐含问题 |
 | D | `search_experiences()` 调用未传任何过滤参数 | 🟡 P1 | **confirmed** |
 | E | `DELETE /api/meetings/{id}` 不清理 uploads/KB/agent cache | 🟡 P1 | **confirmed** |
-| F | Agent 文件工具 **无目录 sandbox**，可跨会议读文件 | 🟡 P1 | **confirmed** |
+| F | Agent 文件工具 **无目录 sandbox**，可跨会议读文件 | — | **暂缓** |
 | G | `stream_start` reuse 时清空 transcript_segments | 🟠 P2 | **confirmed** |
 | H | `parent_session_id` fork 不生效（已知，已有补偿） | — | **known** |
 | I | **反复出现的人名来源** — 待复现 | 🔴 P0 | **suspected** |
 
-**关键发现**: 三个 P0 问题均确认为代码/数据层面的事实缺陷，不需要"复现"即可判为 confirmed。
+**待确认 P0**: 仅 I（人名来源），需要生产数据抽样复现。
 
 ---
 
@@ -125,7 +125,7 @@ gen 代码注释：
 # ADR-0047: 只按 user_id 隔离 (用户可查自己所有会议的 KB)
 ```
 
-这是有意为之的设计。但在 Issue #41 的产品预期中，Meeting Materials 应该"其他会议不可检索、不可注入、不可复用"。
+这是有意为之的设计。**已确认**: KB 按 `user_id` 隔离是正确行为，不按 `meeting_id` 隔离——用户有权在同一账户下跨会议检索自己的知识库。
 
 ### 2.2 Personal KB 与 Meeting Materials 共享相同 collection
 
@@ -317,15 +317,17 @@ Agent 可以通过 `read_file`/`write_file` 访问任意文件系统路径，无
 | 2 | 搭建可复现矩阵（用户 A/B 交叉测试）| P0 | 需要部署测试环境 |
 | 3 | 追踪反复出现的人名在 Experience/chat.json/KB 中的来源 | P0 | 需要 grep 生产数据 |
 
-### Phase 1 推荐修复（待审计完成后）
+### Phase 1 推荐修复（按当前状态裁剪）
+
+> A（KB 按 user_id 隔离）为 by design，不做修改；
+> C（Experience PII）暂缓；
+> F（agent sandbox）暂缓。
 
 | # | 修复 | 优先级 | 理由 |
 |---|------|:---:|------|
-| 1 | KB 检索 `where` 加 `meeting_id`（可选：仅 meeting_material scope） | **P0** | 防止跨会议 KB 泄漏 |
-| 2 | `handle_chat_upload` 补 `scope` 字段 | P1 | metadata 一致性 |
-| 3 | Experience 管线加 PII 检测 + 抽象化 | **P0** | 数据安全核心诉求 |
-| 4 | `search_experiences()` 按 domain 过滤 | P1 | 减少无关上下文噪音 |
-| 5 | `DELETE /api/meetings/{id}` 清理 uploads + KB + cache | P1 | 资源完整性 |
-| 6 | Agent 文件工具加目录 sandbox | P1 | 跨会议访问防护 |
-| 7 | `stream_start` reuse 不丢失 transcript | P2 | 数据完整性 |
-| 8 | Agent cache key 加 `user_id` | P2 | 多用户隔离 |
+| 1 | `handle_chat_upload` 补 `scope` 字段 | P1 | metadata 与 `handle_kb_upload` 保持一致 |
+| 2 | `search_experiences()` 传过滤参数 | P1 | 按 domain 过滤，目前无任何过滤 |
+| 3 | `DELETE /api/meetings/{id}` 清理 uploads + KB + agent cache | P1 | 避免磁盘/内存泄漏，会议复用不残留旧数据 |
+| 4 | `stream_start` reuse 时保留 transcript | P2 | 断线重连不丢失转写记录 |
+| 5 | Agent cache key 加 `user_id` | P2 | `meeting_id` 是客户端指定，防止多用户碰撞 |
+| 6 | **人名来源追踪 (I)** | **P0** | 抽样 `_all.json` + meeting JSON 中搜索该人名 |
