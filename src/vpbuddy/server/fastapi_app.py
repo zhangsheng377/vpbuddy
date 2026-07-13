@@ -1223,8 +1223,17 @@ async def post_chat(meeting_id: str, request: Request, user: dict = Depends(get_
 
     # Multipart 分支 (ADR-0023 Phase 6)
     if content_type.startswith("multipart/form-data"):
+        import concurrent.futures as _cf
+
         body = await request.body()
-        upload_result = handle_chat_upload(body, content_type, meeting_id, user_id=user.get("user_id", ""))
+        # v0.22.7: handle_chat_upload 里有图片落盘+vision API+KB写入,都是同步阻塞操作,
+        # 必须在 executor 里跑,否则阻塞 event loop 会导致 WS ASR 收不到音频帧
+        loop = _asyncio.get_event_loop()
+        with _cf.ThreadPoolExecutor(max_workers=1) as _upload_exec:
+            upload_result = await loop.run_in_executor(
+                _upload_exec,
+                lambda: handle_chat_upload(body, content_type, meeting_id, user_id=user.get("user_id", ""))
+            )
         if upload_result.get("error"):
             status_code = upload_result.get("status", 400)
             if status_code != 200:
@@ -1259,7 +1268,10 @@ async def post_chat(meeting_id: str, request: Request, user: dict = Depends(get_
         )
         safe_push_event(meeting_id, "chat-message", user_msg)
 
-        result = _run_vp_chat(meeting_id, text or "(用户只上传了文件, 没问文本)")
+        # v0.22.7: _run_vp_chat 也走 executor — agent.chat() 是同步 LLM 调用, 阻塞 event loop
+        def _chat_runner():
+            return _run_vp_chat(meeting_id, text or "(用户只上传了文件, 没问文本)")
+        result = await loop.run_in_executor(None, _chat_runner)
         assistant_msg = _append_chat_message(
             meeting_id,
             "assistant",
