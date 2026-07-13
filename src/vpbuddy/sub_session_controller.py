@@ -451,6 +451,38 @@ def format_state_summary(state) -> str:
                 if _type == "图片":
                     parts.append(f"  读取: 用 read_file 工具读取此路径")
 
+    # v0.22.6: chat 对话历史注入 — Hermes parent_session_id fork 不生效,
+    # 子 agent 实际收不到 chat 上下文 (详见 ADR-0055)。手动注入最近 20 条消息。
+    _chat_json = DATA_DIR / f"{state.meeting_id}.chat.json"
+    if _chat_json.exists():
+        try:
+            import json as _json
+            _history = _json.loads(_chat_json.read_text(encoding="utf-8"))
+            if isinstance(_history, list) and _history:
+                _recent = _history[-20:]
+                parts.append("")
+                parts.append("## VP Chat 对话历史 (最近 20 条)")
+                for _m in _recent:
+                    _role = _m.get("role", "unknown")
+                    _src = _m.get("source", "")
+                    _content = str(_m.get("content", "") or "")
+                    _label = {"user": "👤 VP", "assistant": "🤖 Agent"}.get(_role, _role)
+                    # 跳过超长系统注入文本 (含完整会议上下文 JSON 等)
+                    if len(_content) > 2000:
+                        _content = _content[:500] + "\n[...已截断]"
+                    if not _content.strip():
+                        continue
+                    _extra = ""
+                    if _src in ("material-upload", "client-upload"):
+                        _atts = _m.get("attachments") or []
+                        if _atts:
+                            _fnames = [a.get("filename", "?") for a in _atts]
+                            _extra = f" [上传了: {', '.join(_fnames)}]"
+                    parts.append(f"- {_label}: {_content}{_extra}")
+                    parts.append("")
+        except Exception:
+            pass
+
     return "\n".join(parts)
 
 
