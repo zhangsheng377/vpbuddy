@@ -174,10 +174,16 @@ fn main() {
 }
 
 #[tauri::command]
-async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
-    log::info!("=== stop_capture 触发 ===");
+async fn stop_capture(state: State<'_, AppState>, close_meeting: Option<bool>) -> Result<(), String> {
+    log::info!("=== stop_capture 触发 === (close_meeting={close_meeting:?})");
     log::info!("  capturing={} (设 false 中)", state.capturing.load(Ordering::SeqCst));
     state.capturing.store(false, Ordering::SeqCst);
+    // v0.22.6: 暂停 ≠ 结束 — 只有 close_meeting=true 时才调 POST /close
+    // run_realtime_loop 根据 state.stop_requested 决定是否关会
+    if close_meeting.unwrap_or(false) {
+        state.stop_requested.store(true, Ordering::SeqCst);
+        log::info!("  已标记 stop_requested=true, run_realtime_loop 将调 POST /close");
+    }
     // v0.22.4: run_realtime_loop 现在在 POST /close 后等 30s 才设 sse_active=false
     // 所以 capture_handle 会多等 30s — 超时设为 60s
     if let Some(h) = state.capture_handle.lock().await.take() {
@@ -247,6 +253,7 @@ async fn start_realtime_capture(
 
     let capturing2 = state.capturing.clone();
     let sse_active2 = state.sse_active.clone();
+    let stop_req2 = state.stop_requested.clone();
      let bytes2 = state.total_bytes.clone();
      let native2 = state.native_sample_rate.clone();
      let mid2 = meeting_id.clone();
@@ -257,7 +264,7 @@ async fn start_realtime_capture(
      let handle = tokio::spawn(async move {
          if let Err(e) = run_realtime_loop(
              app, gpu_url, mid2,
-             capturing2, sse_active2, bytes2,
+             capturing2, sse_active2, stop_req2, bytes2,
              dev2, src2, native2,
              auth2,
          ).await {
@@ -276,6 +283,7 @@ pub async fn run_realtime_loop(
     meeting_id: String,
     capturing: Arc<AtomicBool>,
     sse_active: Arc<AtomicBool>,
+    stop_requested: Arc<AtomicBool>,
     bytes: Arc<AtomicU64>,
     audio_device: Option<String>,
     audio_source: String,
@@ -407,17 +415,22 @@ pub async fn run_realtime_loop(
     ws.join().await;
     log::info!("实时模式: 完成, 总计 {} bytes 发送", total_bytes_sent);
 
-    let close_url = format!("{}/api/meetings/{}/close", gpu_url, meeting_id);
-    match reqwest::Client::new()
-        .post(&close_url)
-        .bearer_auth(token)
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await
-    {
-        Ok(r) if r.status().is_success() => log::info!("close_meeting: HTTP {}", r.status()),
-        Ok(r) => log::warn!("close_meeting: HTTP {} (非 2xx)", r.status()),
-        Err(e) => log::warn!("close_meeting 调用失败: {e}"),
+    // v0.22.6: 暂停 ≠ 结束 — 只有主动结束会议时才调 POST /close
+    if stop_requested.load(Ordering::SeqCst) {
+        let close_url = format!("{}/api/meetings/{}/close", gpu_url, meeting_id);
+        match reqwest::Client::new()
+            .post(&close_url)
+            .bearer_auth(token)
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await
+        {
+            Ok(r) if r.status().is_success() => log::info!("close_meeting: HTTP {}", r.status()),
+            Ok(r) => log::warn!("close_meeting: HTTP {} (非 2xx)", r.status()),
+            Err(e) => log::warn!("close_meeting 调用失败: {e}"),
+        }
+    } else {
+        log::info!("实时模式: pause (不调 POST /close), 等待 30s 让 SSE 接收事后事件...");
     }
 
     log::info!("实时模式: 等待 30s 让 SSE 接收 demo-new-version/doc-update 等事后事件...");

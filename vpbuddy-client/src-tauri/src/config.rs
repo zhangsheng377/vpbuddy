@@ -24,6 +24,8 @@ pub struct AppState {
     pub audio_source: Arc<Mutex<Option<String>>>,
     /// v0.22.4: SSE 独立生命周期 — 停采集后仍保持连接以接收 demo-new-version 等事后事件
     pub sse_active: Arc<AtomicBool>,
+    /// v0.22.6: 暂停 vs 结束区分 — run_realtime_loop 只在 stop_requested 为 true 时调 POST /close
+    pub stop_requested: Arc<AtomicBool>,
 }
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct ClientConfig {
@@ -162,6 +164,7 @@ impl AppState {
             // 2026-07-02 Phase 7: 初始 None, start_capture 时填
             audio_source: Arc::new(Mutex::new(None)),
             sse_active: Arc::new(AtomicBool::new(false)),
+            stop_requested: Arc::new(AtomicBool::new(false)),
         }
     }
 }
