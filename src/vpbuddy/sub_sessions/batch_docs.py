@@ -76,11 +76,11 @@ def render_batch_prompt(
     template = template_path.read_text(encoding="utf-8")
 
     # v0.9.0 #1: 检索已确认经验, 注入 prompt 上下文
+    # v0.22.7: 排除当前会议自身经验，防止自我引用
     experiences_block = ""
     try:
         from ..experience_store import search_experiences, format_experiences_for_prompt
-        # 先通过 domain/product_type 匹配
-        experiences = search_experiences()
+        experiences = search_experiences(exclude_meeting_id=meeting_id)
         if experiences:
             experiences_block = format_experiences_for_prompt(experiences)
     except Exception:

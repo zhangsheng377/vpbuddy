@@ -83,14 +83,20 @@ def get_approved_experiences() -> list[ExperienceItem]:
 def search_experiences(
     domain: str | None = None,
     product_type: str | None = None,
+    exclude_meeting_id: str | None = None,
 ) -> list[ExperienceItem]:
-    """按领域/产品类型检索已确认经验."""
+    """按领域/产品类型检索已确认经验.
+
+    v0.22.7: 加 exclude_meeting_id 防止当前会议的经验自我引用.
+    """
     all_items = get_approved_experiences()
     results = []
     for item in all_items:
         if domain and item.domain != domain:
             continue
         if product_type and item.product_type != product_type:
+            continue
+        if exclude_meeting_id and item.source_meeting_id == exclude_meeting_id:
             continue
         results.append(item)
     return results

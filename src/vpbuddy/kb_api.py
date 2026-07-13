@@ -326,6 +326,9 @@ def handle_chat_upload(body: bytes, content_type: str, meeting_id: str, user_id:
                         "file_size": len(data),
                         "file_ext": Path(fname).suffix.lower().lstrip("."),
                         "content_hash": content_md5,
+                        "scope": "meeting_material",
+                        "labels": "",
+                        "meeting_callable": "true",
                     }],
                 )
                 kb_doc_ids.append(doc_id)

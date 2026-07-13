@@ -1178,6 +1178,7 @@ async def post_stream_start(request: Request, user: dict = Depends(get_current_u
             state.audio_source = audio_source
             state.last_updated = datetime.now().isoformat()
             storage.save(state)
+            # v0.22.7: reuse 时不重置 stream meta — 保留断线前的转写记录
         else:
             state = MeetingState(
                 meeting_id=meeting_id,
@@ -1187,16 +1188,16 @@ async def post_stream_start(request: Request, user: dict = Depends(get_current_u
                 project_name=project_name or f"长连接会议 {meeting_id}",
             )
             storage.save(state)
-        _save_stream_meta(
-            meeting_id,
-            {
-                "processed_chunks": [],
-                "transcript_segments": [],
-                "metrics": [],
-                "created_at": datetime.now().isoformat(),
-                "audio_source": audio_source.value,
-            },
-        )
+            _save_stream_meta(
+                meeting_id,
+                {
+                    "processed_chunks": [],
+                    "transcript_segments": [],
+                    "metrics": [],
+                    "created_at": datetime.now().isoformat(),
+                    "audio_source": audio_source.value,
+                },
+            )
     except HTTPException:
         raise
     except Exception as e:
@@ -1389,7 +1390,8 @@ def delete_meeting(meeting_id: str, user: dict = Depends(get_current_user)):
     _require_meeting_owner(meeting_id, user)
     import shutil
 
-    deleted = {"state": False, "chat": False, "materials": 0, "docs": False, "stream_meta": False}
+    deleted = {"state": False, "chat": False, "materials": 0, "docs": False,
+               "stream_meta": False, "uploads": 0, "kb": 0, "agents": 0, "experiences": False}
 
     try:
         from ..realtime_server import close_meeting
@@ -1438,6 +1440,48 @@ def delete_meeting(meeting_id: str, user: dict = Depends(get_current_user)):
         if docs_dir.exists() and docs_dir.is_dir():
             shutil.rmtree(str(docs_dir))
             deleted["docs"] = True
+    except Exception:
+        pass
+
+    # v0.22.7: 清理 uploads 目录
+    try:
+        uploads_dir = DATA_DIR / "uploads" / meeting_id
+        if uploads_dir.exists() and uploads_dir.is_dir():
+            deleted["uploads"] = sum(1 for _ in uploads_dir.rglob("*") if _.is_file())
+            shutil.rmtree(str(uploads_dir))
+    except Exception:
+        pass
+
+    # v0.22.7: 清理 agent cache (防止内存泄漏 + meeting_id 复用冲突)
+    try:
+        from ..sub_session_controller import _AGENT_CACHE, _CHAT_AGENT_CACHE, _CLEAN_AGENT_CACHE
+        for cache in (_AGENT_CACHE, _CHAT_AGENT_CACHE, _CLEAN_AGENT_CACHE):
+            keys_to_pop = [k for k in cache if meeting_id in str(k)]
+            for k in keys_to_pop:
+                cache.pop(k, None)
+                deleted["agents"] += 1
+    except Exception:
+        pass
+
+    # v0.22.7: 清理 KB Chroma 记录
+    try:
+        from ..rag_backend import get_rag
+        rag = get_rag()
+        results = rag.list_docs(where={"meeting_id": meeting_id})
+        if results:
+            ids = [d["id"] for d in results]
+            rag.delete(ids=ids)
+            deleted["kb"] = len(ids)
+    except Exception:
+        pass
+
+    # v0.22.7: 清理 experience 候选
+    try:
+        from ..experience_store import EXPERIENCES_DIR
+        exp_path = EXPERIENCES_DIR / f"{meeting_id}.json"
+        if exp_path.exists():
+            exp_path.unlink()
+            deleted["experiences"] = True
     except Exception:
         pass
 
