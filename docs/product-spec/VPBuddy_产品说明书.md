@@ -1,7 +1,8 @@
 |> **说明**:本文档是 VPBuddy 产品说明书的当前版本。
 |> 
 |> **版本历史**:
-|> - **v2.4** (2026-07-12): **v0.22.6 — toolsets + KB 非阻塞 + .env + gkd 去阈值 + vision 三层通道 + mmx-cli + idle**:
+|> - **v2.5** (2026-07-13): **v0.22.7 — pause≠stop + chat注入子agent + close 120s兜底**: 客户端 `stop_capture({close_meeting: true})` 区分暂停/结束；`format_state_summary()` 注入 chat 历史 + 上传文件列表；`_close_meeting()` 延迟关闭 SSE
+- **v2.4** (2026-07-12): **v0.22.6 — vision 三层通道 + mmx-cli**: OpenAI 兼容端点 → monkeypatch → mmx-cli MiniMax 原生 VLM 后备，图片识图永不 401
   1. **toolsets 扩展**: agent 工具集从 `["terminal","file"]` 扩展到 `["terminal","file","vision","web"]`
   2. **KB search 非阻塞**: `POST /api/kb/search` 改为 `run_in_executor`，不再阻塞 event loop
   3. **.env 自动加载**: 多路径 fallback + OPENAI_* 从 DASHSCOPE_API_KEY 兜底推导
@@ -24,9 +25,9 @@
 
 ---
 
-# VPBuddy 产品说明书 v2.4
+# VPBuddy 产品说明书 v2.5
 
-> **v2.4** (2026-07-12 修订 — **v0.22.6**): 综合修复 v0.22.x 系列 P0/P1 — toolsets 扩展 (vision+web)、KB search 非阻塞 (run_in_executor)、.env 自动加载 (多路径 fallback+force overwrite)、gkd 无字数阈值、vision 配置看护 (Hermes auxiliary.vision)、idle 文案 ("录音就绪")。详见 [总体架构 v1.46](../design/总体架构.md) + [API 参考 v0.22.6](../api-reference.md)。
+> **v2.5** (2026-07-13 修订 — **v0.22.7**): 暂停≠结束 (客户端 `close_meeting` 参数 + 服务端延迟关闭) + chat 历史注入子 agent (ADR-0055) + 上传文件路径暴露给子 agent。详见 [总体架构 v1.48](../design/总体架构.md) + [API 参考 v0.22.7](../api-reference.md)。
 
 > **历史版本**:v1.0-v1.13 已归档删除。
 

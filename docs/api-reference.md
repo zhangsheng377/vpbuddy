@@ -1,6 +1,6 @@
 # VPBuddy HTTP API 参考
 
-> **版本**: v0.22.6 · `@ 2026-07-12`
+> **版本**: v0.22.7 · `@ 2026-07-13`
 > **Base URL**: `http://47.100.182.3:28765`（公网 GPU 服务器）
 > **协议**: HTTP/1.1 · WebSocket 实时 ASR · SSE 实时推送 · Multipart 上传
 > **编码**: 所有请求/响应使用 UTF-8
@@ -10,6 +10,11 @@
 > **百炼 ASR (ADR-0051)**: API Key 从 `DASHSCOPE_API_KEY` 环境变量读取, 仓库不存明文; 服务端**必须**通过 `bash run.sh` 启动以注入 key。
 > **⚠️ Breaking in v0.20**: `upload_audio`、`stream_chunk`、`stream_stop` 已移除，30s 切片模式已废弃，请使用 WebSocket 实时 ASR。
 >
+> **v0.22.7 关键变更**:
+> - **暂停 ≠ 结束 (ADR-0055)**: 客户端 `stop_capture` 新增 `close_meeting` 参数 — 暂停录音不再调用 `POST /close`，SSE 保持连接，前端不再误显示"未连接"
+> - **chat 历史注入子 agent (ADR-0055)**: `format_state_summary()` 读取 `{mid}.chat.json`，最近 20 条对话 + 完整文件路径注入 prompt，子 agent 可 `read_file` 读全量；上传文件路径同样暴露给子 agent
+> - **`_close_meeting()` 延迟关闭**: 不再立即 `close_meeting()` 杀 SSE，改为 120s 后台线程兜底关闭
+>
 > **v0.22.6 关键变更**:
 > - **vision 三层逃生通道 (ADR-0054)**: OpenAI 兼容端点 (DashScope qwen-vl-max) → monkeypatch Hermes 路由 → mmx-cli MiniMax 原生 VLM 后备，确保图片识图在任何情况下都不 401
 > - **新增 toolsets**: agent 从 `["terminal","file"]` 扩展为 `["terminal","file","vision","web"]`（vision 读图、web DDG 搜索）
@@ -18,7 +23,6 @@
 > - **gkd 无字数阈值**: hash-based 触发，不设字数枷锁；空文本 `< 1 字` 跳过（防误触发）
 > - **Vision 配置看护**: Hermes `auxiliary.vision` 需 `provider: custom` + `model: qwen-vl-max` + DashScope key
 > - **mmx-cli 后备**: `npm install -g mmx-cli` + `mmx auth login`，图片上传时 OpenAI 主路径失败自动走 MiniMax 原生 VLM
-> - **idle 文案**: 客户端 `"未连接"` → `"录音就绪"`（录音断开 ≠ 服务断开）
 > - `doc-update` SSE 不再推送 `content` 字段（只推元信息 `{kind, status, doc_size}`）
 > - SSE 重连支持增量恢复（读取客户端 `Last-Event-ID` header/query）
 > - Chat 文件上传不塞内容只放路径（agent 用 `read_file` 按需读取）
@@ -447,7 +451,16 @@ WS /api/meetings/{id}/realtime_asr
 POST /api/meetings/{id}/close
 ```
 
-**说明**: 推送 `meeting-complete` SSE 事件 → 关闭 SSE 订阅者 → 清 proactive 节流 → 触发经验蒸馏 → 提交最终文档生成任务。
+**v0.22.7 变更**: `_close_meeting()` 不再立即 `close_meeting()` 杀 SSE，改为 120s 后台线程兜底关闭。客户端暂停录音 (**不**带 `close_meeting=true`) 不会调用此端点，SSE 保持连接。
+
+**说明**: 推送 `meeting-complete` SSE 事件 → 清 proactive 节流 → 触发经验蒸馏 → 提交最终文档生成任务。
+
+### 4.8.1 暂停 vs 结束 (v0.22.7)
+
+| 操作 | 客户端调用 | 服务端行为 | SSE |
+|------|-----------|-----------|:--:|
+| 暂停录音 | `stop_capture()` (默认 `close_meeting=false`) | WebSocket 断开，会议保持开放 | ✅ 保持 |
+| 结束会议 | `stop_capture({close_meeting: true})` | WS 断开 → `POST /close` → 经验蒸馏 + 文档生成 | 120s 后关 |
 
 ---
 
@@ -561,6 +574,16 @@ POST /api/meetings/{id}/chat
 |------|------|------|
 | text | string | 对话文本 (可选) |
 | files | file[] | 文件 (文本入 KB, 图片转 base64) |
+
+### 6.1.1 Chat 与子 Agent 上下文 (v0.22.7, ADR-0055)
+
+VP Chat 对话历史自动注入 batch_docs 和 demo 子 agent 的 prompt：
+- 最近 20 条对话以格式化文本注入 `format_state_summary()`
+- 超长消息 (>2000 字) 截断，但**完整 `{mid}.chat.json` 路径**暴露给子 agent
+- 子 agent 可按需调用 `read_file` 读取全量对话历史
+- 上传的文件路径同样在 prompt 中列出
+
+> ⚠️ 设计背景：Hermes `parent_session_id` 实测**只存 DB 血缘标记不消费**，对​话循环全程不读父 session 历史。VPBuddy 在应用层手动注入 chat 历史到子 agent prompt (详见 [ADR-0055](decisions/0055-parent-session-fork-not-working-chat-history-injection.md))。
 
 ---
 
@@ -934,11 +957,12 @@ GET /api/timeline
 | `/data/vpbuddy/server/data/uploads/{mid}/` | 会议上传文件 (文本+图片原始文件) |
 | `/root/.mmx/config.json` | mmx-cli 登录凭据 (MiniMax API key, ADR-0054) |
 
-### 近期变更 (v0.22.6)
+### 近期变更 (v0.22.7)
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
-| v0.22.6 | 2026-07-12 | **vision 三层逃生通道 (ADR-0054)**: OpenAI兼容(DashScope qwen-vl-max) → monkeypatch Hermes路由 → mmx-cli MiniMax原生VLM后备 + **toolsets 扩展** + **KB search非阻塞** (run_in_executor) + **.env 自动加载** (多路径fallback + OPENAI_*从DASHSCOPE兜底) + **gkd无阈值** + **vision配置看护** (provider:custom+qwen-vl-max) + **mmx-cli安装** (npm install -g mmx-cli + mmx auth login) + **idle文案** ("录音就绪") + SSE增量恢复 + chat文件路径注入 + 图片落盘 + KB去重user_id过滤 |
+| v0.22.7 | 2026-07-13 | **暂停≠结束**: 客户端 `stop_capture({close_meeting: bool})` + `_close_meeting()` 120s 延迟兜底 + **chat历史注入子agent (ADR-0055)**: `format_state_summary()` 读 `{mid}.chat.json`，最近20条+完整路径暴露给batch_docs/demo |
+| v0.22.6 | 2026-07-12 | vision三层逃生通道 (ADR-0054): OpenAI兼容 → monkeypatch → mmx-cli VLM后备 + toolsets扩展 + KB search非阻塞 + .env自动加载 + gkd无阈值 + mmx-cli安装 + SSE增量恢复 + KB去重 |
 | v0.22.5 | 2026-07-12 | demo版本占位拒绝 (write_demo_version 拦截"等待更多会议内容") + gkd阈值 10→50字 + demo-new-version SSE链路完整 (Rust显式分支 + 前端自动刷新版本列表) |
 | v0.22.4 | 2026-07-12 | SSE生命周期与采集解耦 (sse_active独立flag, 停采集后保持30s) + WS发送失败不再设capturing=false (防止服务端断百炼WS时误杀SSE) + 服务端必须bash run.sh启动 (注入BAILIAN_API_KEY/DASHSCOPE_API_KEY) |
 | v0.21.12 | 2026-07-11 | (基线) |
