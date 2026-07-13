@@ -1038,7 +1038,7 @@ async def post_meeting_material(meeting_id: str, request: Request, user: dict = 
                     source=result["source"], status=result["status"],
                 )
                 safe_push_event(meeting_id, "chat-message", assistant_msg)
-            except Exception as e:
+        except Exception as e:
             print(f"[materials] Hermes 处理失败: {e}")
 
     # 4. 同步进知识库（文本/图片描述进 KB，二进制原本就异步）
