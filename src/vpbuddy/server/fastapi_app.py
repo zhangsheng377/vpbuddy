@@ -1696,7 +1696,13 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
                     await websocket.send_json({"type": "pong"})
             elif "bytes" in data:
                 # 二进制音频帧
-                send_audio(session, data["bytes"])
+                # v0.22.7: 百炼 idle timeout 后 send_audio 会抛异常, 不应 kill 整个 WS handler
+                try:
+                    if session and session.running:
+                        send_audio(session, data["bytes"])
+                except Exception as _bailian_err:
+                    _log.warning("[ws_realtime_asr] 百炼 send_audio 失败: %s, 断开 WS", _bailian_err)
+                    break
 
     except WebSocketDisconnect:
         _log.info("[ws_realtime_asr] client disconnected, meeting=%s", meeting_id)
