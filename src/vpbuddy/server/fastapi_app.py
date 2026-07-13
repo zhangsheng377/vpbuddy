@@ -1752,12 +1752,32 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
                     await websocket.send_json({"type": "pong"})
             elif "bytes" in data:
                 # 二进制音频帧
-                # v0.22.7: 百炼 idle timeout 后 send_audio 会抛异常, 不应 kill 整个 WS handler
+                # v0.22.7: 百炼 idle timeout 后自动重连, 不杀客户端 WS
                 try:
                     if session and session.running:
+                        if session.needs_reconnect:
+                            try:
+                                from .bailian_asr import restart_session
+                                _log.info("[ws_realtime_asr] 百炼 WS 断开, 自动重连...")
+                                restart_session(session, _asyncio.get_running_loop(),
+                                                _send_json, sample_rate, format_str, DATA_DIR)
+                            except Exception as _re:
+                                _log.error("[ws_realtime_asr] 百炼重连失败: %s", _re)
+                                break
                         send_audio(session, data["bytes"])
                 except Exception as _bailian_err:
-                    _log.warning("[ws_realtime_asr] 百炼 send_audio 失败: %s, 断开 WS", _bailian_err)
+                    # 发送失败可能是百炼还没走到 on_close (底层 WS 已死但 callback 未触发)
+                    # 此时也尝试恢复: 如果 needs_reconnect 已为 True 就重连, 否则先 break
+                    if session and session.needs_reconnect:
+                        _log.warning("[ws_realtime_asr] 百炼 send_audio 失败(%s), 尝试重连...", _bailian_err)
+                        try:
+                            from .bailian_asr import restart_session
+                            restart_session(session, _asyncio.get_running_loop(),
+                                            _send_json, sample_rate, format_str, DATA_DIR)
+                            continue  # 重连成功, 下一帧再发
+                        except Exception as _re:
+                            _log.error("[ws_realtime_asr] 百炼重连失败: %s", _re)
+                    _log.warning("[ws_realtime_asr] 百炼 send_audio 失败且无法恢复: %s", _bailian_err)
                     break
 
     except WebSocketDisconnect:

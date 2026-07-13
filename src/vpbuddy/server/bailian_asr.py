@@ -103,6 +103,7 @@ class _ASRSession:
     noise_count: int = 0
     started_at: float = 0.0
     running: bool = False
+    needs_reconnect: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def add_sentence(self, text: str, cleaned: str, is_noise: bool = False) -> None:
@@ -144,6 +145,7 @@ class BailianCallback:
     def on_close(self) -> None:
         logger.info("[bailian_asr] WS closed by Bailian, meeting=%s", self._session.meeting_id)
         self._safe_send({"type": "asr_status", "status": "closed"})
+        self._session.needs_reconnect = True
 
     def on_complete(self) -> None:
         logger.info("[bailian_asr] recognition complete, meeting=%s sentences=%d",
@@ -264,11 +266,50 @@ def send_audio(session: _ASRSession, data: bytes) -> None:
         session.recognition.send_audio_frame(data)
 
 
+def restart_session(
+    session: _ASRSession,
+    loop,
+    send_json,
+    sample_rate: int = 16000,
+    fmt: str = "pcm",
+    data_dir: str = "",
+) -> bool:
+    """百炼 idle timeout 后重连 — 不 kill 客户端 WS.
+
+    Bailian 长时间无有效语音会关闭 WS (idle timeout ~10-20s).
+    客户端只是不说话, 连接不应该断开. 此函数静默重建 Recognition.
+    """
+    logger.info("[bailian_asr] restarting session: meeting=%s", session.meeting_id)
+    if session.recognition:
+        try:
+            session.recognition.stop()
+        except Exception:
+            pass
+        session.recognition = None
+
+    from dashscope.audio.asr import Recognition
+    callback = BailianCallback(loop, send_json, session, data_dir=data_dir)
+    session.callback = callback
+    recognition = Recognition(
+        model=MODEL,
+        format=fmt,
+        sample_rate=sample_rate,
+        semantic_punctuation_enabled=True,
+        callback=callback,
+    )
+    session.recognition = recognition
+    session.needs_reconnect = False
+    recognition.start()
+    logger.info("[bailian_asr] session restarted: meeting=%s", session.meeting_id)
+    return True
+
+
 def stop_session(session: _ASRSession) -> None:
     """停止识别会话."""
     logger.info("[bailian_asr] stopping session: meeting=%s sentences=%d",
                  session.meeting_id, session.sentence_count)
     session.running = False
+    session.needs_reconnect = False
     if session.recognition:
         try:
             session.recognition.stop()
