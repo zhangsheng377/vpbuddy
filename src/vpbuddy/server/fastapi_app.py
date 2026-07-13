@@ -1038,7 +1038,7 @@ async def post_meeting_material(meeting_id: str, request: Request, user: dict = 
                     source=result["source"], status=result["status"],
                 )
                 safe_push_event(meeting_id, "chat-message", assistant_msg)
-        except Exception as e:
+            except Exception as e:
             print(f"[materials] Hermes 处理失败: {e}")
 
     # 4. 同步进知识库（文本/图片描述进 KB，二进制原本就异步）
@@ -1269,6 +1269,27 @@ async def post_chat(meeting_id: str, request: Request, user: dict = Depends(get_
             extra={"error": result.get("error"), "attachment_count": len(files_meta)},
         )
         safe_push_event(meeting_id, "chat-message", assistant_msg)
+
+        # v0.22.7: 图片上传后触发文档重新生成
+        if image_paths and result["status"] == "ok":
+            try:
+                from ..task_manager import get_task_manager
+                from ..sub_session_controller import _dispatch_kind, BATCH_DOCS_KIND, DEMO_KIND
+                def _doc_runner(gen_id: int, mid: str) -> dict:
+                    results = {}
+                    for kind in [BATCH_DOCS_KIND, DEMO_KIND]:
+                        try:
+                            r = _dispatch_kind(mid, kind, dry_run=False)
+                            results[kind] = {"triggered": r.get("triggered"), "error": r.get("error")}
+                        except Exception as _e:
+                            results[kind] = {"triggered": False, "error": str(_e)}
+                    return results
+                get_task_manager().submit(meeting_id, _doc_runner)
+                import logging as _l
+                _l.getLogger(__name__).info("re-trigger docs after image upload, meeting=%s", meeting_id)
+            except Exception:
+                import logging as _l
+                _l.getLogger(__name__).warning("non-critical error re-triggering docs after image upload", exc_info=True)
 
         return {
             "meeting_id": meeting_id,
