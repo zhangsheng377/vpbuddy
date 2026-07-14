@@ -429,17 +429,14 @@ pub async fn run_realtime_loop(
             Ok(r) => log::warn!("close_meeting: HTTP {} (非 2xx)", r.status()),
             Err(e) => log::warn!("close_meeting 调用失败: {e}"),
         }
-    } else {
-        log::info!("实时模式: pause (不调 POST /close), 后台等待 30s 让 SSE 接收事后事件...");
-    }
-
-    // v0.22.8: 30s SSE 等待放入后台 task — 不阻塞 stop_capture 返回
-    // 前端已先更新按钮状态为"开始录音", 用户无感知
-    tokio::spawn(async move {
+        // v0.22.8: 结束会议后等 30s 收 meeting-complete/doc-update 等事后事件, 再关 SSE
+        log::info!("实时模式: 等待 30s 接收事后事件后关闭 SSE...");
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
         sse_active.store(false, Ordering::SeqCst);
-        log::info!("实时模式: SSE 关闭信号已发送 (sse_active=false)");
-    });
+        log::info!("实时模式: SSE 关闭信号已发送");
+    } else {
+        log::info!("实时模式: pause (不调 POST /close) — SSE 保持连接, 会议继续");
+    }
 
     Ok(())
 }
