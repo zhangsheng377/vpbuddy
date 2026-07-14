@@ -17,6 +17,8 @@
 >
 > **v0.22.8 关键变更**:
 > - **百炼 idle timeout 自动重连**: 用户长时间不说话 → 百炼 WS 关闭 → 服务端检测 `needs_reconnect` → 自动 `restart_session()` 重建 Recognition，客户端 WS 不断、不推 `recording-disconnected`
+> - **WS 与 SSE 完全解耦 (客户端 v0.22.8)**: 暂停录音不再关闭 SSE 长连接。录音(WS)和事件推送(SSE)是独立通道——停止录音后文档生成、demo 更新、chat 消息继续通过 SSE 推流，会议保持活跃
+> - **停止录音按钮即时响应 (客户端 v0.22.8)**: 点击"停止录音"后 JS 立即更新按钮状态为"开始录音"，不再等待 Rust 侧 30 秒延迟；`meeting-complete` 事件不覆盖暂停状态
 > - **agent sandbox 强化 (prompt 铁律)**: demo/batch_docs/single-agent 三处 prompt 新增——严禁读取/提及服务器文件系统路径、主机用户名(/home/xxx)、环境变量；禁止用终端工具探索系统(whoami/uname/hostname/等)；种子/示例数据禁用可能泄露身份的信息，只用中性占位符
 > - **`DELETE /api/meetings/{id}` 资源清理完善**: 新增清理 uploads 目录、KB Chroma 记录、`_AGENT_CACHE`/`_CHAT_AGENT_CACHE`/`_CLEAN_AGENT_CACHE`、experience 候选文件；返回 `deleted` 对象增加 `uploads`/`kb`/`agents`/`experiences` 字段
 > - **Experience 自排除**: `search_experiences()` 新增 `exclude_meeting_id` 参数，batch_docs 调用时排除当前会议自身经验，防止自我循环引用
@@ -467,6 +469,10 @@ POST /api/meetings/{id}/close
 **说明**: 推送 `meeting-complete` SSE 事件 → 清 proactive 节流 → 触发经验蒸馏 → 提交最终文档生成任务。
 
 ### 4.8.1 暂停 vs 结束 (v0.22.7 客户端行为)
+
+> **v0.22.8 更新**: 暂停录音 **不再关闭 SSE 长连接**。录音 (WS) 和事件推送 (SSE) 是两个独立通道——停止录音后文档生成、demo 更新、chat 消息继续通过 SSE 推流，会议保持活跃。前端按钮**即时**切换为"开始录音"，用户可随时重新开始录音。
+
+客户端 `stop_capture` 入口区分以下场景:
 
 > **v0.22.7 起** 客户端 `stop_capture` 通过 `close_meeting` 参数区分暂停与结束，服务端据此决定是否触发 `POST /close`。
 
@@ -971,11 +977,11 @@ GET /api/timeline
 | `/data/vpbuddy/server/data/uploads/{mid}/` | 会议上传文件 (文本+图片原始文件) |
 | `/root/.mmx/config.json` | mmx-cli 登录凭据 (MiniMax API key, ADR-0054) |
 
-### 近期变更 (v0.22.7)
+### 近期变更 (v0.22.8)
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
-| v0.22.8 | 2026-07-14 | **百炼自动重连**: idle timeout → restart_session() 静默重建 + **agent sandbox prompt铁律**: 禁读宿主用户名/环境变量 + **delete 完善清理** uploads/KB/agent-cache/experience + **experience exclude_meeting_id** 防自我引用 + **handle_chat_upload补scope** + **stream_start保留转录** + **chat/图片非阻塞** run_in_executor + **图片上传强制触发doc重生成** |
+| v0.22.8 | 2026-07-14 | **百炼自动重连**: idle timeout → restart_session() 静默重建 + **WS/SSE 解耦**: 暂停录音不再关SSE，会议保持活跃 + **停止按钮即时响应**: JS先设状态再await + **meeting-complete不覆盖暂停** + **agent sandbox prompt铁律**: 禁读宿主用户名/环境变量 + **delete 完善清理** uploads/KB/agent-cache/experience + **experience exclude_meeting_id** 防自我引用 + **handle_chat_upload补scope** + **stream_start保留转录** + **chat/图片非阻塞** run_in_executor + **图片上传强制触发doc重生成** |
 | v0.22.7 | 2026-07-13 | **暂停≠结束**: 客户端 `stop_capture({close_meeting: bool})` + `_close_meeting()` 120s 延迟兜底 + **chat历史注入子agent (ADR-0055)**: `format_state_summary()` 读 `{mid}.chat.json`，最近20条+完整路径暴露给batch_docs/demo |
 | v0.22.6 | 2026-07-12 | vision三层逃生通道 (ADR-0054): OpenAI兼容 → monkeypatch → mmx-cli VLM后备 + toolsets扩展 + KB search非阻塞 + .env自动加载 + gkd无阈值 + mmx-cli安装 + SSE增量恢复 + KB去重 |
 | v0.22.5 | 2026-07-12 | demo版本占位拒绝 (write_demo_version 拦截"等待更多会议内容") + gkd阈值 10→50字 + demo-new-version SSE链路完整 (Rust显式分支 + 前端自动刷新版本列表) |
