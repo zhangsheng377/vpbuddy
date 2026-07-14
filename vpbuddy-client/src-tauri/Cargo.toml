@@ -1,6 +1,6 @@
 [package]
 name = "vpbuddy-client"
-version = "0.22.7"
+version = "0.22.8"
 description = "VPBuddy desktop client"
 authors = ["张胜东 <zhangsheng@zsd.dev>"]
 edition = "2021"
