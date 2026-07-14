@@ -263,17 +263,18 @@ document.getElementById("btn-rec").addEventListener("click", async () => {
   } else {
     // 停止录音
     btn.disabled = true;
+    // v0.22.8: 立即更新按钮状态，不等待 Rust 侧的 30s SSE 收集
+    recording = false;
+    stopLatencyTicker();
+    btn.dataset.state = "idle";
+    btn.textContent = "开始录音";
+    dot.className = "dot";
+    status.textContent = t("stopped");
+    // 隐藏结束会议按钮 (会议还在, 用户可继续开)
+    const endBtn = document.getElementById("btn-end-meeting");
+    if (endBtn) endBtn.style.display = "none";
     try {
       await invoke("stop_capture");
-      recording = false;
-      stopLatencyTicker();
-      btn.dataset.state = "idle";
-      btn.textContent = "开始录音";
-      dot.className = "dot";
-      status.textContent = t("stopped");
-      // 隐藏结束会议按钮 (会议还在, 用户可继续开)
-      const endBtn = document.getElementById("btn-end-meeting");
-      if (endBtn) endBtn.style.display = "none";
     } catch (e) {
       status.textContent = "❌ " + e;
     } finally {
@@ -675,8 +676,14 @@ listen("connection-status", (e) => {
 // 注意: 不需要 refreshDocs — SSE doc-status 之前已逐个推过来, 6 块已是最新
 listen("meeting-complete", (e) => {
   const p = e.payload || {};
+  // v0.22.8: 只在录音已停止且非用户主动暂停时显示"会议完成"
+  // 如果用户只是暂停录音(recording=false), 会议还在继续, 不覆盖按钮
+  if (recording) {
+    recording = false;
+    stopLatencyTicker();
+  }
   const btn = document.getElementById("btn-rec");
-  if (btn) {
+  if (btn && btn.dataset.state !== "idle") {
     btn.dataset.state = "idle";
     btn.textContent = "✅ 会议完成 (开始新会议)";
     btn.disabled = false;
