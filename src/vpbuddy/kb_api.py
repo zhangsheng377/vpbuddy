@@ -278,7 +278,7 @@ def handle_chat_upload(body: bytes, content_type: str, meeting_id: str, user_id:
             continue
 
         if _is_image(fname):
-            # 图片 → base64 + 写盘 (v0.22.6: 下游 agent 需要 read_file 读取原始文件)
+            # 图片 → base64 + 写盘
             try:
                 uri = _image_to_b64_data_uri(data, ct)
                 image_data_uris.append(uri)
@@ -287,7 +287,42 @@ def handle_chat_upload(body: bytes, content_type: str, meeting_id: str, user_id:
                 upload_dir.mkdir(parents=True, exist_ok=True)
                 raw_path = upload_dir / f"{file_uuid}_{fname}"
                 raw_path.write_bytes(data)
-                results.append({"filename": fname, "status": "image", "data_uri_length": len(uri), "path": str(raw_path)})
+
+                # v0.22.9: 上传后立即调用 DashScope qwen-vl-max 分析图片，
+                # 不依赖 agent vision tool（Hermes 内 qwen-vl-max 路由可能失败）
+                vision_desc = ""
+                try:
+                    import os as _os
+                    api_key = _os.environ.get("OPENAI_API_KEY", "")
+                    base_url = _os.environ.get("OPENAI_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+                    b64 = uri.split(",", 1)[1] if "," in uri else uri
+                    import requests as _requests
+                    _vresp = _requests.post(
+                        f"{base_url}/chat/completions",
+                        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                        json={
+                            "model": "qwen-vl-max",
+                            "messages": [{"role": "user", "content": [
+                                {"type": "image_url", "image_url": {"url": f"data:{ct};base64,{b64}"}},
+                                {"type": "text", "text": "请简要描述这张图片的内容。"},
+                            ]}],
+                            "max_tokens": 300,
+                        },
+                        timeout=30,
+                    )
+                    if _vresp.status_code == 200:
+                        _vdata = _vresp.json()
+                        vision_desc = (_vdata.get("choices", [{}])[0]
+                                       .get("message", {}).get("content", "")).strip()
+                        if vision_desc:
+                            logger.info("chat upload vision: %s → %d chars", fname, len(vision_desc))
+                except Exception as _ve:
+                    logger.warning("chat upload vision failed for %s: %s", fname, _ve)
+
+                result_entry = {"filename": fname, "status": "image", "data_uri_length": len(uri), "path": str(raw_path)}
+                if vision_desc:
+                    result_entry["vision_desc"] = vision_desc
+                results.append(result_entry)
             except ValueError as e:
                 results.append({"filename": fname, "status": "rejected", "error": str(e)})
         else:

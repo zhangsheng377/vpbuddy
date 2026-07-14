@@ -263,19 +263,17 @@ document.getElementById("btn-rec").addEventListener("click", async () => {
   } else {
     // 停止录音
     btn.disabled = true;
-    // v0.22.8: 立即更新按钮状态，不等待 Rust 侧
     recording = false;
     stopLatencyTicker();
     btn.dataset.state = "idle";
     btn.textContent = "开始录音";
+    btn.disabled = false;
     dot.className = "dot";
     status.textContent = t("stopped");
     try {
       await invoke("stop_capture");
     } catch (e) {
       status.textContent = "❌ " + e;
-    } finally {
-      btn.disabled = false;
     }
   }
 });

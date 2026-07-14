@@ -1249,13 +1249,23 @@ async def post_chat(meeting_id: str, request: Request, user: dict = Depends(get_
                 for f in files_meta
                 if f.get("status") in ("kb-stored", "image", "empty")
             )
-            # v0.22.6: 图片落盘后, 把路径塞进 prompt 让 agent 用 read_file 读取
+            # v0.22.9: 图片已在上传时调 qwen-vl-max 分析，用 vision_desc 代替原始路径
+            vision_descs = [
+                f.get("vision_desc", "")
+                for f in files_meta
+                if f.get("status") == "image" and f.get("vision_desc")
+            ]
             image_paths = [
                 f.get("path", "")
                 for f in files_meta
                 if f.get("status") == "image" and f.get("path")
             ]
-            if image_paths:
+            if vision_descs:
+                text = (text or f"[上传了 {len(files_meta)} 个文件]") + "\n" + "\n".join(
+                    f"---图片 AI 分析结果 ({f.get('filename', 'image')})---\n{f.get('vision_desc', '')}\n---分析结果结束---"
+                    for f in files_meta if f.get("status") == "image" and f.get("vision_desc")
+                )
+            elif image_paths:
                 text = (text or f"[上传了 {len(files_meta)} 个文件]") + "\n" + "\n".join(
                     f"图片文件路径：{p}\n你可以用 read_file 读取图片内容。" for p in image_paths
                 )
