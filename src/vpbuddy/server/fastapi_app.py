@@ -1225,11 +1225,12 @@ async def post_chat(meeting_id: str, request: Request, user: dict = Depends(get_
     # Multipart 分支 (ADR-0023 Phase 6)
     if content_type.startswith("multipart/form-data"):
         import concurrent.futures as _cf
+        import asyncio as _asyncio
 
         body = await request.body()
         # v0.22.7: handle_chat_upload 里有图片落盘+vision API+KB写入,都是同步阻塞操作,
         # 必须在 executor 里跑,否则阻塞 event loop 会导致 WS ASR 收不到音频帧
-        loop = _asyncio.get_event_loop()
+        loop = _asyncio.get_running_loop()
         with _cf.ThreadPoolExecutor(max_workers=1) as _upload_exec:
             upload_result = await loop.run_in_executor(
                 _upload_exec,
