@@ -19,6 +19,9 @@ from typing import Any
 
 from .realtime_server import push_event
 
+# MeetingState 数据目录
+DATA_DIR = Path(os.environ.get("VPBUDDY_DATA_DIR", PROJECT_ROOT / "data" / "meetings"))
+
 logger = logging.getLogger(__name__)
 
 # 节流内存 set: key = "{meeting_id}:{trigger_type}"
@@ -222,12 +225,12 @@ def _monitor_loop() -> None:
 
     while not _MONITOR_STOP.is_set():
         try:
-            if not data_dir.exists():
+            if not DATA_DIR.exists():
                 _MONITOR_STOP.wait(_MONITOR_INTERVAL)
                 continue
-            storage = MeetingStorage(data_dir)
+            storage = MeetingStorage(DATA_DIR)
             now = time.time()
-            for state_path in data_dir.glob("*.json"):
+            for state_path in DATA_DIR.glob("*.json"):
                 # 跳过 stream.json / chat.json / 非 meeting state 文件
                 if state_path.suffix != ".json" or not _is_meeting_state(state_path):
                     continue

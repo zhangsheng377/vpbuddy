@@ -80,26 +80,36 @@ def push_event(meeting_id: str, event_type: str, payload: dict) -> int:
             q.put_nowait(event)
             sent += 1
         except queue.Full:
-            # 队列满, 丢弃最旧事件再放
+            # BE-046: 队列满, 先插入 event-gap 信号再丢弃最旧事件重试
             try:
                 q.get_nowait()
+                gap = {
+                    "id": f"{int(time.time() * 1000)}-event-gap",
+                    "type": "event-gap",
+                    "payload": {"reason": "subscriber_queue_full"},
+                    "timestamp": time.time(),
+                }
+                q.put_nowait(gap)
                 q.put_nowait(event)
                 sent += 1
-            except queue.Empty:
+            except queue.Full:
                 pass
     return sent
 
 
-def get_event_history(meeting_id: str, since_id: str | None = None, limit: int = 200) -> list[dict]:
-    """返回会议近期事件历史, 用于断线重连后补偿。"""
+def get_event_history(meeting_id: str, since_id: str | None = None, limit: int = 200) -> tuple[list[dict], bool]:
+    """返回会议近期事件历史 + cursor 是否找到, 用于断线重连后补偿。"""
     with _subscribers_lock:
         events = list(_event_history.get(meeting_id, []))
+    cursor_found = True
     if since_id:
+        cursor_found = False
         for idx, event in enumerate(events):
             if event.get("id") == since_id:
                 events = events[idx + 1:]
+                cursor_found = True
                 break
-    return events[-limit:]
+    return events[-limit:], cursor_found
 
 
 def get_subscriber_count(meeting_id: str) -> int:
@@ -180,9 +190,19 @@ def sse_generator(meeting_id: str, timeout: float = 5.0, last_event_id: str | No
         yield f"data: {json.dumps({'meeting_id': meeting_id, 'subscribers': get_subscriber_count(meeting_id)}, ensure_ascii=False)}\n\n".encode()
 
         # 先补发断线期间的历史事件
-        for event in get_event_history(meeting_id, last_event_id, limit=200):
-            if time.time() - event.get("timestamp", 0) <= EVENT_TTL:
-                yield _format_sse(event)
+        events, cursor_found = get_event_history(meeting_id, last_event_id, limit=200)
+        if last_event_id and not cursor_found:
+            # BE-047: cursor 已过期 → sync-required, 不盲重放旧事件
+            yield _format_sse({
+                "id": f"{int(time.time() * 1000)}-sync-required",
+                "type": "sync-required",
+                "payload": {"reason": "cursor_expired", "hint": "client should re-fetch full meeting state"},
+                "timestamp": time.time(),
+            })
+        else:
+            for event in events:
+                if time.time() - event.get("timestamp", 0) <= EVENT_TTL:
+                    yield _format_sse(event)
 
         last_event_time = time.time()
         # 2026-06-27: heartbeat 用合法 JSON, 否则客户端 reqwest-eventsource 解析失败断开

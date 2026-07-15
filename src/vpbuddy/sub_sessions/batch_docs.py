@@ -14,6 +14,8 @@
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import threading
@@ -256,12 +258,35 @@ def trigger_batch_docs(
     result["elapsed_sec"] = time.time() - t0
     result["agent_path"] = "in-process"
 
-    # 7. 推 SSE doc-update (每个写入的文件)
+    # 7. 推 SSE doc-update (仅内容有变化的文档)
     if any_written:
-        try:
-            from ..realtime_server import push_event
-            for kind, finfo in result["files"].items():
-                if finfo["written"]:
+        req_dir = paths["req"].parent
+        hash_path = req_dir / ".doc_hashes.json"
+        last_hashes: dict[str, str] = {}
+        if hash_path.exists():
+            try:
+                last_hashes = json.loads(hash_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
+        new_hashes: dict[str, str] = {}
+        changed_kinds: list[str] = []
+        for kind, finfo in result["files"].items():
+            if finfo["written"]:
+                content = paths[kind].read_text(encoding="utf-8", errors="replace")
+                new_hashes[kind] = hashlib.md5(content.encode()).hexdigest()
+                if new_hashes[kind] != last_hashes.get(kind, ""):
+                    changed_kinds.append(kind)
+
+        if changed_kinds:
+            try:
+                hash_path.write_text(json.dumps(new_hashes, ensure_ascii=False), encoding="utf-8")
+            except Exception:
+                pass
+            try:
+                from ..realtime_server import push_event
+                for kind in changed_kinds:
+                    finfo = result["files"][kind]
                     content = paths[kind].read_text(encoding="utf-8", errors="replace")
                     push_event(meeting_id, "doc-update", {
                         "kind": kind,
@@ -272,8 +297,10 @@ def trigger_batch_docs(
                         "updated_at": datetime.now().isoformat(),
                         "is_demo": False,
                     })
-        except Exception as e:
-            logger.warning(f"[batch_docs] push SSE doc-update failed: {e}")
+            except Exception as e:
+                logger.warning(f"[batch_docs] push SSE doc-update failed: {e}")
+        else:
+            logger.info(f"[batch_docs] 所有文档内容无变化, 跳过 SSE 推送 meeting={meeting_id}")
 
         # 8. 推 docs-complete 检查 (沿用 ui_server_helpers)
         try:

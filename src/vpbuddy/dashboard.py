@@ -6,14 +6,13 @@
 生成单文件 HTML,内嵌 Linear Dark 风格,5s 自动刷新
 """
 
-# Auto-computed project root. P1#1 (2026-07-04)
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-
-
 import argparse
 import os
 import time
 from pathlib import Path
+
+# Auto-computed project root. P1#1 (2026-07-04)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 # 默认路径(可通过环境变量覆盖)
 DOCS_DIR = Path(os.environ.get("VPBUDDY_DOCS_DIR", PROJECT_ROOT / "docs"))

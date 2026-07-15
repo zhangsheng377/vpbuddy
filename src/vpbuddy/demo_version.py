@@ -207,6 +207,19 @@ def write_demo_version(
         md = _meeting_dir(meeting_id, docs_dir)
         md.mkdir(parents=True, exist_ok=True)
 
+        # 0. 内容去重: 与上一版本 hash 相同则跳过
+        import hashlib
+        new_hash = hashlib.md5(html.encode("utf-8")).hexdigest()
+        prev_hash = latest_demo_content_hash(meeting_id, docs_dir)
+        if prev_hash and new_hash == prev_hash:
+            manifest_list = load_manifest(meeting_id, docs_dir)
+            prev_v = manifest_list[-1]["version"] if manifest_list else 0
+            return {
+                "ok": True,
+                "version": prev_v,
+                "skipped": "content_unchanged",
+            }
+
         # 1. 推进版本号
         v = next_version(meeting_id, docs_dir)
 

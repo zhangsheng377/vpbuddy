@@ -1,4 +1,4 @@
-"""experience_store — 经验持久化 + 检索 (v0.9.0 #1 Phase 1)
+"""experience_store — 经验持久化 + 检索 (v0.9.0 #1 Phase 1 → v0.23.0)
 
 存储:
 - data/experiences/{meeting_id}.json — 每个会议的经验候选
@@ -7,12 +7,17 @@
 检索:
 - get_approved_experiences(): 返回所有 approved=True 的条目
 - search_experiences(domain, product_type): 按领域/产品类型过滤
+
+PII 防护:
+- extract_from_meeting_state() 过滤含人名/邮箱/电话/具体需求的候选
+- _might_contain_pii() 汉字人名形态 + 常见 PII pattern 检测
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +40,77 @@ def ensure_dir():
 
 # import 时自动创建目录
 ensure_dir()
+
+
+# v0.23.0: PII 检测 — 拒绝含个人信息的经验候选
+_PII_PATTERNS = [
+    re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'),  # email
+    re.compile(r'1[3-9]\d{9}'),  # 中国手机号
+    re.compile(r'\b\d{3}[-.]?\d{4}[-.]?\d{4}\b'),  # 电话号
+    re.compile(r'\b\d{6}(19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{3}[\dXx]\b'),  # 18位身份证
+]
+
+# 常见中国人名特征: 2-3 汉字, 跟在动词/介绍的后面
+_NAME_CONTEXT_PATTERNS = [
+    re.compile(r'(叫|是|负责|由|为|姓|名)\s*([\u4e00-\u9fa5]{2,3})\s*(。|，|的|在|做|来|去|要|已经|了|这个|那个|一个|我们)'),
+    re.compile(r'^([\u4e00-\u9fa5]{2,3})(要求|说|提出|认为|表示|指出|需要|希望|建议|决定|同意|反对)'),
+]
+
+# 常见姓 + 名 组合 (常见 100 姓)
+_COMMON_SURNAMES = set(
+    "赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张"
+    "孔曹严华金魏陶姜戚谢邹喻柏水窦章云苏潘葛奚范彭郎"
+    "鲁韦昌马苗凤花方俞任袁柳酆鲍史唐费廉岑薛雷贺倪汤"
+    "滕殷罗毕郝邬安常乐于时傅皮下齐康伍余元卜顾孟平黄"
+    "和穆萧尹姚邵湛汪祁毛禹狄米贝明臧计伏成戴谈宋茅庞"
+    "熊纪舒屈项祝董梁杜阮蓝闵席季麻强贾路娄危江童颜郭"
+    "梅盛林刁钟徐邱骆高夏蔡田樊胡凌霍虞万支柯昝管卢莫"
+    "经房裘缪干解应宗丁宣贲邓郁单杭洪包诸左石崔吉钮龚"
+    "程嵇邢滑裴陆荣翁荀羊於惠甄麴家封芮羿储靳汲邴糜松"
+    "井段富巫乌焦巴弓牧隗山谷车侯宓蓬全郗班仰秋仲伊宫"
+    "宁仇栾暴甘钭厉戎祖武符刘景詹束龙叶幸司韶郜黎蓟薄"
+    "印宿白怀蒲邰从鄂索咸籍赖卓蔺屠蒙池乔阴鬱胥能苍双"
+    "闻莘党翟谭贡劳逄姬申扶堵冉宰郦雍卻璩桑桂濮牛寿通"
+    "边扈燕冀郏浦尚农温别庄晏柴瞿阎充慕连茹习宦艾鱼容"
+    "向古易慎戈廖庾终暨居衡步都耿满弘匡国文寇广禄阙东"
+    "欧殳沃利蔚越夔隆师巩厍聂晁勾敖融冷訾辛阚那简饶空"
+    "曾毋沙乜养鞠须丰巢关蒯相查后荆红游竺权逯盖益桓公"
+    "万俟司马上官欧阳夏侯诸葛闻人东方赫连皇甫尉迟公羊"
+    "澹台公冶宗政濮阳淳于单于太叔申屠公孙仲孙轩辕令狐"
+    "钟离宇文长孙慕容鲜于闾丘司徒司空丌官司寇仉督子车"
+    "颛孙端木巫马公西漆雕乐正壤驷公良拓跋夹谷宰父谷梁"
+    "晋楚闫法汝鄢涂钦段干百里东郭南门呼延归海羊舌微生"
+    "岳帅缑亢况后有琴梁丘左丘东门西门商牟佘佴伯赏南宫"
+    "墨哈谯笪年爱阳佟第五言福"
+)
+
+
+def _might_contain_pii(text: str) -> bool:
+    """检测文本是否可能含 PII / 具体需求。
+
+    返回 True = 应拒绝此经验候选。
+    """
+    if not text or len(text) < 4:
+        return True
+
+    # 1. regex 扫描邮箱/电话/身份证
+    for pat in _PII_PATTERNS:
+        if pat.search(text):
+            return True
+
+    # 2. 人名上下文检测
+    for ctx_pat in _NAME_CONTEXT_PATTERNS:
+        m = ctx_pat.search(text)
+        if m:
+            name_part = m.group(2) if ctx_pat is _NAME_CONTEXT_PATTERNS[0] else m.group(1)
+            if len(name_part) >= 2 and name_part[0] in _COMMON_SURNAMES:
+                return True
+
+    # 3. 具体需求特征: 包含具体产品名/功能描述 (太长的 domain_fact 基本是原文复制)
+    if len(text) > 80:
+        return True
+
+    return False
 
 
 def save_experiences(meeting_id: str, items: list[ExperienceItem]) -> str:
@@ -226,7 +302,7 @@ def extract_from_meeting_state(
     seen_texts: set[str] = set()
     for r_text in [f for f in facts if f.startswith("REQ:")]:
         text = r_text[5:].strip()
-        if len(text) > 15 and text not in seen_texts:
+        if len(text) > 15 and text not in seen_texts and not _might_contain_pii(text):
             seen_texts.add(text)
             items.append(ExperienceItem(
                 kind="domain_fact",
@@ -242,7 +318,7 @@ def extract_from_meeting_state(
     # 2. 从 risks 中提取失败教训
     for r_text in [f for f in facts if f.startswith("RISK:")]:
         text = r_text[6:].strip()
-        if len(text) > 20 and text not in seen_texts:
+        if len(text) > 20 and text not in seen_texts and not _might_contain_pii(text):
             seen_texts.add(text)
             items.append(ExperienceItem(
                 kind="failure_lesson",

@@ -90,6 +90,9 @@ from .server.api_utils import (  # noqa: E402
 
 # ── 模块级会议关闭函数 (v0.9.0: 供 FastAPI + VPBuddyHandler 共用) ──
 
+# BE-044/BE-117 幂等: 记录已 finalize 的会议, 防止重复 /close 触发重复 meeting-complete + experience + doc task
+_finalized_meetings: dict[str, dict] = {}
+
 def _close_meeting(meeting_id: str) -> dict:
     """关闭会议: SSE complete 事件 + 经验蒸馏 + 文档生成触发.
 
@@ -104,6 +107,10 @@ def _close_meeting(meeting_id: str) -> dict:
     """
     from .realtime_server import push_event
     from .task_manager import get_task_manager
+
+    # BE-044/BE-117: 幂等 — 已 finalize 的会议直接返回缓存结果
+    if meeting_id in _finalized_meetings:
+        return _finalized_meetings[meeting_id]
 
     try:
         push_event(meeting_id, "meeting-complete", {
@@ -124,6 +131,8 @@ def _close_meeting(meeting_id: str) -> dict:
             except Exception:
                 pass
         _th.Thread(target=_delayed_close, daemon=True).start()
+
+        closed = 0
 
         # 清 proactive 节流
         try:
@@ -159,7 +168,7 @@ def _close_meeting(meeting_id: str) -> dict:
 
         print(f"[close_meeting] {meeting_id}: 关闭 {closed} 个 SSE, 清 {cleared} 个 throttle, "
               f"提取 {extracted_count} 条经验, doc_task={doc_task_submitted}")
-        return {
+        result = {
             "meeting_id": meeting_id,
             "closed_subscribers": closed,
             "proactive_cleared": cleared,
@@ -167,5 +176,7 @@ def _close_meeting(meeting_id: str) -> dict:
             "doc_task_submitted": doc_task_submitted,
             "status": "closed",
         }
+        _finalized_meetings[meeting_id] = result
+        return result
     except Exception as e:
         return {"error": str(e), "status": "close_failed"}

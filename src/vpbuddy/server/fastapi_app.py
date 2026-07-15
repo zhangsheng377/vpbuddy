@@ -1441,7 +1441,8 @@ def delete_meeting(meeting_id: str, user: dict = Depends(get_current_user)):
 
     # v0.22.7: 清理 agent cache (防止内存泄漏 + meeting_id 复用冲突)
     try:
-        from ..sub_session_controller import _AGENT_CACHE, _CHAT_AGENT_CACHE, _CLEAN_AGENT_CACHE
+        from ..sub_session_controller import _AGENT_CACHE
+        from ..server.api_utils import _CHAT_AGENT_CACHE, _CLEAN_AGENT_CACHE
         for cache in (_AGENT_CACHE, _CHAT_AGENT_CACHE, _CLEAN_AGENT_CACHE):
             keys_to_pop = [k for k in cache if meeting_id in str(k)]
             for k in keys_to_pop:
@@ -1858,21 +1859,16 @@ async def fe_transcript_segments(meeting_id: str, user: dict = Depends(get_curre
 # POST /meetings/{meeting_id}/recording/start — 开始录音
 @app.post("/meetings/{meeting_id}/recording/start")
 async def fe_recording_start(meeting_id: str, user: dict = Depends(get_current_user)):
-    """POST /meetings/:id/recording/start → POST /api/meetings/stream_start"""
+    """POST /meetings/:id/recording/start — BFF stub (recording handled via WS realtime ASR)."""
     _require_meeting_owner(meeting_id, user)
-    from ..ui_server import _handle_stream_start
-    # 复用 stream_start handler
-    result = _handle_stream_start(meeting_id=meeting_id)
-    return {"status": "recording", "started_at": datetime.now().isoformat(), "detail": result}
+    return {"status": "ok", "note": "recording controlled via WebSocket realtime ASR, this endpoint is a stub"}
 
 # POST /meetings/{meeting_id}/recording/stop — 停止录音
 @app.post("/meetings/{meeting_id}/recording/stop")
 async def fe_recording_stop(meeting_id: str, user: dict = Depends(get_current_user)):
-    """POST /meetings/:id/recording/stop → POST /api/meetings/:id/stream_stop"""
+    """POST /meetings/:id/recording/stop — BFF stub (recording handled via WS realtime ASR)."""
     _require_meeting_owner(meeting_id, user)
-    from ..ui_server import _handle_stream_stop
-    result = _handle_stream_stop(meeting_id)
-    return {"status": "stopped", "ended_at": datetime.now().isoformat(), "detail": result}
+    return {"status": "ok", "note": "recording controlled via WebSocket realtime ASR, this endpoint is a stub"}
 
 # GET /meetings/{meeting_id}/deliverables — 交付物列表
 @app.get("/meetings/{meeting_id}/deliverables")
@@ -1901,7 +1897,7 @@ async def fe_get_deliverable(deliverable_id: str, user: dict = Depends(get_curre
     # 格式: del-{meeting_id}-{kind}
     parts = deliverable_id.split("-", 2)
     if len(parts) < 3:
-        raise HTTPException(status_code=400, detail=f"Invalid deliverable_id: {deliverable_id}, expected del-{meeting_id}-{kind}")
+        raise HTTPException(status_code=400, detail=f"Invalid deliverable_id: {deliverable_id}, expected del-{{meeting_id}}-{{kind}}")
     meeting_id, kind = parts[1], parts[2]
     _require_meeting_owner(meeting_id, user)
     doc_path = DOCS_DIR / meeting_id / f"{kind}.md"

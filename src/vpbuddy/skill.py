@@ -1,10 +1,13 @@
 """skill module"""
 from __future__ import annotations
 
+import os
+from pathlib import Path
 
 # Auto-computed project root. P1#1 (2026-07-04)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
+DATA_DIR = Path(os.environ.get("VPBUDDY_DATA_DIR", PROJECT_ROOT / "data" / "meetings"))
 
 
 
@@ -37,9 +40,7 @@ class VPBuddySkill:
     def storage(self) -> MeetingStorage:
         """延迟初始化存储(YAGNI:不预加载 state)"""
         if self._storage is None:
-            import os
-            from pathlib import Path
-            self._storage = MeetingStorage(data_dir=str(data_dir))
+            self._storage = MeetingStorage(data_dir=str(DATA_DIR))
         return self._storage
 
     # === Hermes 调用的方法(skill 协议) ===
