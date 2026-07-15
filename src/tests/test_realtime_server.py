@@ -171,3 +171,32 @@ class TestGetEventHistory:
         events, cursor_found = get_event_history(mid)
         assert cursor_found is True
         assert len(events) == 1
+
+
+class TestPushEventHistory:
+    def test_doc_update_body_truncated_in_history(self):
+        """doc-update event 的 content 在 event_history 中应为 <N chars>."""
+        mid = "test_hist_doc_trunc"
+        _event_history.pop(mid, None)
+        long_body = "x" * 5000
+        push_event(mid, "doc-update", {"kind": "req", "content": long_body})
+        events, _ = get_event_history(mid)
+        assert len(events) == 1
+        stored_content = events[0]["payload"]["content"]
+        assert stored_content == "<5000 chars>"
+
+    def test_doc_update_short_body_truncated(self):
+        mid = "test_hist_doc_short"
+        _event_history.pop(mid, None)
+        short = "hello"
+        push_event(mid, "doc-update", {"kind": "req", "content": short})
+        events, _ = get_event_history(mid)
+        assert events[0]["payload"]["content"] == "<5 chars>"
+
+    def test_non_doc_event_full_body_preserved(self):
+        """非 doc-update 事件 body 完整保留."""
+        mid = "test_hist_non_doc"
+        _event_history.pop(mid, None)
+        push_event(mid, "state-update", {"data": "hello world"})
+        events, _ = get_event_history(mid)
+        assert events[0]["payload"]["data"] == "hello world"

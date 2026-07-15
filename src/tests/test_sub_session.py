@@ -818,7 +818,23 @@ class TestDocTaskManagerIntegration:
         assert mgr.has_running("def_test")
 
         t2 = mgr.submit("def_test", lambda gid, mid: {"ok": True})
-        assert t2 is None, "第二次提交应 defer"
+        assert t2 is None
+
+
+class TestDeliverableIdParsing:
+    """v0.23.0: deliverable_id rsplit — 支持 meeting_id 含 '-'."""
+
+    def test_simple_id(self):
+        parts = "del-mtg-req".rsplit("-", 2)
+        assert parts == ["del", "mtg", "req"]
+
+    def test_meeting_id_with_dashes(self):
+        parts = "del-mt-g-2026-q4-api".rsplit("-", 2)
+        assert parts == ["del-mt-g-2026", "q4", "api"]
+
+    def test_multiple_dashes_in_id(self):
+        parts = "del-meeting-2026-q3-risk".rsplit("-", 2)
+        assert parts == ["del-meeting-2026", "q3", "risk"]
 
     def test_running_blocks_new_submit(self):
         """running 任务期间新提交不取消旧任务."""
