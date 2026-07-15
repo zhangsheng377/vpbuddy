@@ -13,21 +13,25 @@ use config::{AppState, load_client_config, set_log_path, get_log_path, save_gpu_
 use tauri::{AppHandle, Emitter, Manager, State};
 
 fn main() {
-    // 2026-06-27: 客户端日志写文件 (排查 "采集不到声音" 等问题)
-    // - 同时输出到 stderr (开发可见)
-    // - 文件追加模式, 每次启动分隔一行 banner
-    // - 跨平台: Windows 用 %USERPROFILE%\AppData\Local\VPBuddy\client.log
-    //            macOS/Linux 用 $HOME/.vpbuddy-client.log
-    //            VPBUDDY_CLIENT_LOG 环境变量可覆盖
+    // v0.23.0: 客户端日志写文件 (排查 "采集不到声音" 等问题)
+    // - Windows: %LOCALAPPDATA%\VPBuddy\logs\client.log → fallback %TEMP%
+    // - macOS/Linux: $HOME/.vpbuddy-client.log
+    // - VPBUDDY_CLIENT_LOG 环境变量可覆盖
     let log_path = std::env::var("VPBUDDY_CLIENT_LOG").unwrap_or_else(|_| {
         #[cfg(target_os = "windows")]
         {
-            let base = std::env::var("USERPROFILE")
-                .or_else(|_| std::env::var("HOME"))
-                .unwrap_or_else(|_| "C:\\Users\\Default".into());
-            let dir = format!("{base}\\AppData\\Local\\VPBuddy");
-            let _ = std::fs::create_dir_all(&dir);
-            format!("{dir}\\client.log")
+            let base = std::env::var("LOCALAPPDATA")
+                .or_else(|_| std::env::var("USERPROFILE").map(|v| format!("{v}\\AppData\\Local")))
+                .or_else(|_| std::env::var("HOME").map(|v| format!("{v}\\AppData\\Local")))
+                .or_else(|_| std::env::var("TEMP"))
+                .unwrap_or_else(|_| "C:\\Users\\Default\\AppData\\Local".into());
+            let dir = format!("{base}\\VPBuddy\\logs");
+            if std::fs::create_dir_all(&dir).is_err() {
+                let fallback = std::env::var("TEMP").unwrap_or_else(|_| ".".into());
+                format!("{fallback}\\vpbuddy-client.log")
+            } else {
+                format!("{dir}\\client.log")
+            }
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -41,7 +45,6 @@ fn main() {
         .open(&log_path)
         .ok();
 
-    // 拼 stderr + 可选文件 双输出
     let mut builder = env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or("info,reqwest=warn,ureq=warn,h2=warn"),
     );
@@ -62,7 +65,6 @@ fn main() {
     }
     builder.init();
 
-    // 2026-06-27: 把路径存到全局, 设置页 invoke get_log_path 读
     set_log_path(log_path.clone());
 
     log::info!("=== VPBuddy client 启动 (Tauri 2) ===");
