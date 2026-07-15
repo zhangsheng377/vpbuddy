@@ -116,16 +116,18 @@ def test_orphan_subscriber_cleanup_integration():
 class TestGetEventHistory:
     def test_empty_history(self):
         mid = "test_hist_empty"
-        events = get_event_history(mid)
+        events, cursor_found = get_event_history(mid)
         assert events == []
+        assert cursor_found is True
 
     def test_history_without_since_id(self):
         mid = "test_hist_full"
         _event_history.pop(mid, None)
         push_event(mid, "test-type", {"k": "v1"})
         push_event(mid, "test-type", {"k": "v2"})
-        events = get_event_history(mid)
+        events, cursor_found = get_event_history(mid)
         assert len(events) == 2
+        assert cursor_found is True
         assert events[0]["payload"]["k"] == "v1"
         assert events[1]["payload"]["k"] == "v2"
 
@@ -135,26 +137,37 @@ class TestGetEventHistory:
         push_event(mid, "t1", {"n": 1})
         push_event(mid, "t2", {"n": 2})
         push_event(mid, "t3", {"n": 3})
-        full = get_event_history(mid)
+        full, _ = get_event_history(mid)
         assert len(full) == 3
         since_id = full[0]["id"]
-        partial = get_event_history(mid, since_id=since_id)
+        partial, cursor_found = get_event_history(mid, since_id=since_id)
         assert len(partial) == 2
+        assert cursor_found is True
         assert partial[0]["payload"]["n"] == 2
         assert partial[1]["payload"]["n"] == 3
 
-    def test_since_id_not_found_returns_all(self):
+    def test_since_id_not_found(self):
         mid = "test_hist_badid"
         _event_history.pop(mid, None)
         push_event(mid, "x", {"a": 1})
-        events = get_event_history(mid, since_id="nonexistent-id")
+        events, cursor_found = get_event_history(mid, since_id="nonexistent-id")
         assert len(events) == 1
+        assert cursor_found is False
 
     def test_event_ids_are_strings(self):
         mid = "test_hist_ids"
         _event_history.pop(mid, None)
         push_event(mid, "mytype", {"b": 2})
-        events = get_event_history(mid)
+        events, _ = get_event_history(mid)
         assert len(events) == 1
         assert isinstance(events[0]["id"], str)
         assert len(events[0]["id"]) > 0
+
+    def test_cursor_found_without_last_event_id(self):
+        """无 since_id 时 cursor_found 应为 True."""
+        mid = "test_hist_no_last"
+        _event_history.pop(mid, None)
+        push_event(mid, "a", {})
+        events, cursor_found = get_event_history(mid)
+        assert cursor_found is True
+        assert len(events) == 1

@@ -403,3 +403,34 @@ class TestFormatExperiencesForPrompt:
         )
         text = store.format_experiences_for_prompt([item])
         assert "教训" in text
+
+
+class TestPiiDetection:
+    """v0.23.0: _might_contain_pii 检测 — 拒绝含人名/邮箱/电话的候选."""
+
+    def test_clean_domain_fact_ok(self):
+        assert not store._might_contain_pii("需求信息不足时，应先澄清再生成具体接口")
+
+    def test_name_with_surname_rejected(self):
+        assert store._might_contain_pii("张三要求采购系统支持短信登录")
+
+    def test_name_in_context_rejected(self):
+        assert store._might_contain_pii("叫王芳来办公室开会")
+
+    def test_email_rejected(self):
+        assert store._might_contain_pii("请联系 admin@example.com 获取权限")
+
+    def test_phone_rejected(self):
+        assert store._might_contain_pii("手机号 13812345678 请联系")
+
+    def test_short_text_rejected(self):
+        assert store._might_contain_pii("OK")
+
+    def test_long_text_rejected(self):
+        assert store._might_contain_pii("这是一个非常长的需求描述" + "测试文本" * 50)
+
+    def test_clean_short_desc_ok(self):
+        assert not store._might_contain_pii("当用户上传无效文件时，显示友好错误信息")
+
+    def test_clean_generic_rule_ok(self):
+        assert not store._might_contain_pii("API 返回 500 时应记录错误并通知用户")

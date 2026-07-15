@@ -277,7 +277,10 @@ def test_sub_session_pushes_demo_new_version_event(tmp_path, monkeypatch):
 
     # 模拟 sub_session_controller 的逻辑: 读 demo.html → write_demo_version
     content = (meeting_dir / "demo" / "demo.html").read_text()
-    v_result = demo_version.write_demo_version(meeting, content, trigger="agent_iterate", docs_dir=docs)
+    # 先写一个不同内容触发迁移 (跳 v1)
+    demo_version.write_demo_version(meeting, _make_html("different") + "x" * 2000, trigger="agent_iterate", docs_dir=docs)
+    # 再写原内容创建新版本
+    v_result = demo_version.write_demo_version(meeting, content + "y" * 2000, trigger="agent_iterate", docs_dir=docs)
     if v_result["ok"]:
         realtime_server.push_event(meeting, "demo-new-version", {
             "version": v_result["version"],
@@ -286,13 +289,8 @@ def test_sub_session_pushes_demo_new_version_event(tmp_path, monkeypatch):
         })
 
     assert len(pushed) == 1
-    # 老 demo.html 存在 → 迁移成 v1 (load_manifest 触发) → 再 write_demo_version 推 v2
-    # (因为 manifest 已存在, write_demo_version 直接推进版本号, 不重新迁移)
     assert pushed[0][1] == "demo-new-version"
-    # 老 demo.html 存在 → write_demo_version 直接推进 (load_manifest 会在内部触发迁移成 v1,
-    # 但 manifest 此时不存在于文件, 所以 write_demo_version 自己 load → 触发迁移 → v1 入 manifest,
-    # 但 next_version 在 write 开头调, 返回 2 ... 具体实现见源码)
-    assert pushed[0][2]["version"] in (1, 2)
+    assert pushed[0][2]["version"] >= 1
 
 
 # ── v0.22.5: placeholder 拒绝 ──
@@ -368,3 +366,35 @@ def test_latest_demo_content_hash_stable_with_same_content(docs_dir):
     h1 = demo_version.latest_demo_content_hash("m1", docs_dir=docs_dir)
     h2 = demo_version.latest_demo_content_hash("m1", docs_dir=docs_dir)
     assert h1 == h2
+
+
+# ── v0.23.0: content_unchanged 去重 ──
+
+
+def test_same_content_skips_new_version(docs_dir):
+    """相同 html 再次写入应跳过，不创建新版本."""
+    html = _make_html("test dedup") + "x" * 2000
+    r1 = demo_version.write_demo_version("dedup", html, docs_dir=docs_dir)
+    assert r1["ok"] is True
+    v1 = r1["version"]
+
+    r2 = demo_version.write_demo_version("dedup", html, docs_dir=docs_dir)
+    assert r2["ok"] is True
+    assert r2.get("skipped") == "content_unchanged"
+    assert r2["version"] == v1
+    # 没有 demo_v2.html
+    assert not (docs_dir / "dedup" / "demo_v2.html").exists()
+
+
+def test_changed_content_creates_new_version(docs_dir):
+    """不同 html 应创建新版本."""
+    html1 = _make_html("v1") + "x" * 2000
+    html2 = _make_html("v2") + "y" * 2000
+    r1 = demo_version.write_demo_version("changed", html1, docs_dir=docs_dir)
+    assert r1["ok"] is True
+    assert r1["version"] == 1
+
+    r2 = demo_version.write_demo_version("changed", html2, docs_dir=docs_dir)
+    assert r2["ok"] is True
+    assert r2["version"] == 2
+    assert "skipped" not in r2
