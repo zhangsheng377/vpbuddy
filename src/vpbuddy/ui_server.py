@@ -104,7 +104,6 @@ def _close_meeting(meeting_id: str) -> dict:
     """
     from .realtime_server import push_event
     from .task_manager import get_task_manager
-    from .sub_session_controller import _dispatch_kind, BATCH_DOCS_KIND, DEMO_KIND
 
     try:
         push_event(meeting_id, "meeting-complete", {
@@ -152,17 +151,8 @@ def _close_meeting(meeting_id: str) -> dict:
         # v0.9.0: 通过 task_manager 提交文档生成 (替代旧 controller 轮询)
         doc_task_submitted = False
         try:
-            def _doc_runner(gen_id: int, mid: str) -> dict:
-                kinds = [BATCH_DOCS_KIND, DEMO_KIND]
-                results = {}
-                for kind in kinds:
-                    try:
-                        r = _dispatch_kind(mid, kind, dry_run=False)
-                        results[kind] = {"triggered": r.get("triggered"), "error": r.get("error")}
-                    except Exception as e:
-                        results[kind] = {"triggered": False, "error": str(e)}
-                return results
-            get_task_manager().submit(meeting_id, _doc_runner)
+            from .sub_session_controller import run_docs
+            get_task_manager().submit(meeting_id, run_docs)
             doc_task_submitted = True
         except Exception as e:
             print(f"[close_meeting] 文档生成任务提交失败: {e}")

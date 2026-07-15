@@ -278,6 +278,18 @@ def _dispatch_kind(meeting_id: str, kind: str, dry_run: bool = False) -> dict[st
     }
 
 
+def run_docs(gen_id: int, mid: str) -> dict[str, Any]:
+    """统一文档 runner — batch_docs + demo 顺序触发，被 task_manager 调度."""
+    results = {}
+    for kind in [BATCH_DOCS_KIND, DEMO_KIND]:
+        try:
+            r = _dispatch_kind(mid, kind, dry_run=False)
+            results[kind] = {"triggered": r.get("triggered"), "error": r.get("error")}
+        except Exception as e:
+            results[kind] = {"triggered": False, "error": str(e)}
+    return results
+
+
 def list_active_meetings() -> list[str]:
     """列出活跃会议(有 MeetingState JSON 文件就算活跃)"""
     if not DATA_DIR.exists():

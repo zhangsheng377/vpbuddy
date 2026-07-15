@@ -175,27 +175,14 @@ import threading as _threading_gkd
 import hashlib as _hashlib_gkd
 import time as _time_gkd
 import logging as _logging_gkd
-from concurrent.futures import ThreadPoolExecutor as _TPE_gkd
 from ..task_manager import get_task_manager as _get_tm_gkd
 from ..storage import MeetingStorage as _MS_gkd
-from ..sub_session_controller import _dispatch_kind as _dk_gkd, BATCH_DOCS_KIND as _bk_gkd, DEMO_KIND as _dmk_gkd
+from ..sub_session_controller import run_docs as _run_docs
 
 _gkd_logger = _logging_gkd.getLogger("vpbuddy.gkd")
 _gkd_st = _MS_gkd(DATA_DIR)
 _gkd_last: dict[str, str] = {}
 _gkd_first = True
-
-def _gkd_runner(gen_id: int, mid: str):
-    try:
-        with _TPE_gkd(max_workers=2) as ex:
-            futures = {k: ex.submit(_dk_gkd, mid, k, False) for k in [_bk_gkd, _dmk_gkd]}
-            for f in futures.values():
-                try:
-                    f.result(timeout=300)
-                except Exception:
-                    pass
-    except Exception:
-        pass
 
 def _gkd_loop():
     global _gkd_first
@@ -220,8 +207,7 @@ def _gkd_loop():
                 prev = _gkd_last.get(mid, "")
                 if cur_hash != prev or _gkd_first:
                     _gkd_last[mid] = cur_hash
-                    print(f"[gkd] triggering docs for meeting={mid} len={len(cur)}", flush=True)
-                    _tm.submit(mid, _gkd_runner)
+                    _tm.submit(mid, _run_docs)
             _gkd_first = False
             # v0.22.5 #35 P2: 每轮扫描顺便清理孤儿 SSE subscriber
             try:
@@ -1298,17 +1284,7 @@ async def post_chat(meeting_id: str, request: Request, user: dict = Depends(get_
         if image_paths and result["status"] == "ok":
             try:
                 from ..task_manager import get_task_manager
-                from ..sub_session_controller import _dispatch_kind, BATCH_DOCS_KIND, DEMO_KIND
-                def _doc_runner(gen_id: int, mid: str) -> dict:
-                    results = {}
-                    for kind in [BATCH_DOCS_KIND, DEMO_KIND]:
-                        try:
-                            r = _dispatch_kind(mid, kind, dry_run=False)
-                            results[kind] = {"triggered": r.get("triggered"), "error": r.get("error")}
-                        except Exception as _e:
-                            results[kind] = {"triggered": False, "error": str(_e)}
-                    return results
-                get_task_manager().submit(meeting_id, _doc_runner)
+                get_task_manager().submit(meeting_id, _run_docs)
                 import logging as _l
                 _l.getLogger(__name__).info("re-trigger docs after image upload, meeting=%s", meeting_id)
             except Exception:
@@ -1691,41 +1667,13 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
         _doc_last_hash = [""]
         _doc_running[0] = True
 
-        def _doc_runner(gen_id: int, mid: str) -> dict:
-            """一次性文档 runner — batch_docs + demo 并行触发 (各自独立读 state)."""
-            from concurrent.futures import ThreadPoolExecutor
-            from ..sub_session_controller import _dispatch_kind, BATCH_DOCS_KIND, DEMO_KIND
-
-            kinds = [BATCH_DOCS_KIND, DEMO_KIND]
-            results = {}
-
-            def _run(kind):
-                try:
-                    r = _dispatch_kind(mid, kind, dry_run=False)
-                    return kind, {"triggered": r.get("triggered"), "error": r.get("error")}
-                except Exception as e:
-                    return kind, {"triggered": False, "error": str(e)}
-
-            with ThreadPoolExecutor(max_workers=2) as ex:
-                futures = [ex.submit(_run, k) for k in kinds]
-                for f in futures:
-                    try:
-                        kind, r = f.result(timeout=300)
-                        results[kind] = r
-                    except Exception:
-                        pass
-
-            return results
-
         # Issue #31: 自驱动文档调度 — hash-based 检测有意义变更, debounce 6s
         async def _kick_docs():
             import hashlib
             try:
-                from ..task_manager import get_task_manager
                 from ..storage import MeetingStorage
                 st = MeetingStorage(DATA_DIR)
                 debounce = 6
-                # 第 1 轮: 等 debounce 后, 若有文本则触发
                 await _asyncio.sleep(debounce)
                 while _doc_running[0]:
                     if st.exists(meeting_id):
@@ -1734,8 +1682,8 @@ async def ws_realtime_asr(websocket: WebSocket, meeting_id: str):
                         cur_hash = hashlib.md5(cur.encode()).hexdigest()
                         if cur_hash != _doc_last_hash[0]:
                             _doc_last_hash[0] = cur_hash
-                            _log.info("[_kick_docs] meaningful change detected, len=%d hast=%s", len(cur), cur_hash[:8])
-                            get_task_manager().submit(meeting_id, _doc_runner)
+                            _log.info("[_kick_docs] meaningful change detected, len=%d hash=%s", len(cur), cur_hash[:8])
+                            get_task_manager().submit(meeting_id, _run_docs)
                     await _asyncio.sleep(debounce)
             except Exception:
                 import logging

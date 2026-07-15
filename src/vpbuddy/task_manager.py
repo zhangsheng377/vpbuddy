@@ -40,49 +40,57 @@ class DocTask:
 
 
 class MeetingTaskQueue:
-    """单个会议的任务队列 (debounce: 只保留最新)."""
+    """单个会议的任务队列 (debounce: 只保留最新; running 时 defer 不挤压)."""
 
     def __init__(self, meeting_id: str):
         self.meeting_id = meeting_id
         self.lock = threading.Lock()
         self.current_task: DocTask | None = None
         self._generation_counter = 0
+        self._pending_runner: Callable | None = None
 
-    def submit(self, executor: ThreadPoolExecutor, runner: Callable) -> DocTask:
-        """提交新任务 (debounce: 替换旧 pending/running 任务)."""
+    def submit(self, executor: ThreadPoolExecutor, runner: Callable) -> DocTask | None:
+        """提交新任务 (debounce: running 时 defer, 完成后自动 kick)."""
         with self.lock:
+            if self.current_task is not None and self.current_task.status == DocTaskStatus.RUNNING:
+                self._pending_runner = runner
+                return None
+
             self._generation_counter += 1
             gen_id = self._generation_counter
-
-            # 取消旧 task (如果还在 running)
-            old = self.current_task
-            if old is not None and old.status == DocTaskStatus.RUNNING:
-                # 无法强制取消 running 的 LLM 调用, 但设标志让回调不写结果
-                old.status = DocTaskStatus.CANCELLED
 
             task = DocTask(generation_id=gen_id, meeting_id=self.meeting_id)
             self.current_task = task
             task.status = DocTaskStatus.RUNNING
 
             def _wrapped():
-                """包装 runner: 检查 generation_id 避免旧任务覆盖新结果."""
                 try:
                     result = runner(gen_id, self.meeting_id)
                     with self.lock:
-                        # 只有当前 task 的 generation_id 匹配才保存结果
                         if self.current_task is not None and self.current_task.generation_id == gen_id:
                             self.current_task.result = result
                             self.current_task.status = DocTaskStatus.COMPLETED
-                        return result
+                    return result
                 except Exception as e:
                     with self.lock:
                         if self.current_task is not None and self.current_task.generation_id == gen_id:
                             self.current_task.error = str(e)
                             self.current_task.status = DocTaskStatus.TIMED_OUT
                     return None
+                finally:
+                    with self.lock:
+                        pending = self._pending_runner
+                        self._pending_runner = None
+                    if pending is not None:
+                        self.submit(executor, pending)
 
             task.future = executor.submit(_wrapped)
             return task
+
+    def has_running(self) -> bool:
+        with self.lock:
+            return (self.current_task is not None
+                    and self.current_task.status == DocTaskStatus.RUNNING)
 
     @property
     def generation_id(self) -> int:
@@ -120,10 +128,17 @@ class DocTaskManager:
         self,
         meeting_id: str,
         runner: Callable[[int, str], Any],
-    ) -> DocTask:
-        """提交新任务 (debounce)."""
+    ) -> DocTask | None:
+        """提交新任务 (debounce). 若 meeting 有 running 任务则 defer, 返回 None."""
         queue = self.get_or_create_queue(meeting_id)
         return queue.submit(self.executor, runner)
+
+    def has_running(self, meeting_id: str) -> bool:
+        with self._lock:
+            queue = self._queues.get(meeting_id)
+            if queue is None:
+                return False
+            return queue.has_running()
 
     def cancel_meeting(self, meeting_id: str):
         """取消某会议的全部待处理任务."""
