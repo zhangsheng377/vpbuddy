@@ -9,6 +9,10 @@ pypdf>=4.0,<6
 numpy>=1.24,<2.8
 duckduckgo-search>=6.0,<8
 requests
+bcrypt>=4.0
+PyJWT>=2.8
+python-multipart>=0.0.9
+dashscope>=1.20
 
 # 测试
 pytest>=7.4,<9

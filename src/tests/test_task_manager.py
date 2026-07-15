@@ -51,6 +51,7 @@ class TestDocTask:
         assert DocTaskStatus.QUEUED.value == "queued"
         assert DocTaskStatus.RUNNING.value == "running"
         assert DocTaskStatus.COMPLETED.value == "completed"
+        assert DocTaskStatus.FAILED.value == "failed"
         assert DocTaskStatus.TIMED_OUT.value == "timed_out"
         assert DocTaskStatus.CANCELLED.value == "cancelled"
 
@@ -202,8 +203,8 @@ class TestMeetingTaskQueue:
         assert queue.current_task.status == DocTaskStatus.COMPLETED
         assert queue.current_task.result == result_value
 
-    def test_wrapped_error_sets_timed_out(self):
-        """_wrapped runner 抛异常应设置 TIMED_OUT + error."""
+    def test_wrapped_error_sets_failed(self):
+        """_wrapped runner 抛异常应设置 FAILED + error."""
         queue = MeetingTaskQueue("mtg1")
         queue._generation_counter = 2
         task = DocTask(generation_id=2, meeting_id="mtg1")
@@ -225,11 +226,11 @@ class TestMeetingTaskQueue:
                 with queue.lock:
                     if queue.current_task is not None and queue.current_task.generation_id == 2:
                         queue.current_task.error = str(e)
-                        queue.current_task.status = DocTaskStatus.TIMED_OUT
+                        queue.current_task.status = DocTaskStatus.FAILED
                 return None
 
         _wrapped()
-        assert queue.current_task.status == DocTaskStatus.TIMED_OUT
+        assert queue.current_task.status == DocTaskStatus.FAILED
         assert "模拟异常" in queue.current_task.error
 
 
@@ -392,3 +393,20 @@ class TestDocTaskManager:
         task = mgr.submit("ct", lambda gid, mid: None)
         task.status = DocTaskStatus.COMPLETED
         assert not mgr.has_running("ct")
+
+    def test_is_stale_for_current_gen(self):
+        """当前 gen 不 stale."""
+        mgr = DocTaskManager(max_workers=2)
+        mgr.executor.submit = lambda fn, *a, **kw: MagicMock()
+        t = mgr.submit("st", lambda gid, mid: None)
+        assert not mgr.is_stale("st", t.generation_id)
+
+    def test_is_stale_after_supersede(self):
+        """completed + 新 gen → 旧 gen stale."""
+        mgr = DocTaskManager(max_workers=2)
+        mgr.executor.submit = lambda fn, *a, **kw: MagicMock()
+        t1 = mgr.submit("st2", lambda gid, mid: None)
+        t1.status = DocTaskStatus.COMPLETED
+        t2 = mgr.submit("st2", lambda gid, mid: None)
+        assert mgr.is_stale("st2", t1.generation_id)
+        assert not mgr.is_stale("st2", t2.generation_id)

@@ -68,9 +68,16 @@ def push_event(meeting_id: str, event_type: str, payload: dict) -> int:
         "timestamp": time.time(),
     }
 
+    # doc-update: history 中不存完整 body
+    history_event = event
+    if event_type == "doc-update" and isinstance(payload, dict):
+        body = payload.get("content", "")
+        content_len = len(body) if isinstance(body, str) else 0
+        history_event = dict(event, payload={**payload, "content": f"<{content_len} chars>"})
+
     with _subscribers_lock:
         history = _event_history.setdefault(meeting_id, deque(maxlen=HISTORY_LIMIT))
-        history.append(event)
+        history.append(history_event)
         subs = list(_subscribers.get(meeting_id, []))
 
     sent = 0
@@ -205,8 +212,6 @@ def sse_generator(meeting_id: str, timeout: float = 5.0, last_event_id: str | No
                     yield _format_sse(event)
 
         last_event_time = time.time()
-        # 2026-06-27: heartbeat 用合法 JSON, 否则客户端 reqwest-eventsource 解析失败断开
-        heartbeat_payload = json.dumps({"type": "heartbeat", "ts": time.time()}, ensure_ascii=False).encode("utf-8")
         timeout_payload = json.dumps({"type": "timeout"}, ensure_ascii=False).encode("utf-8")
         while True:
             try:
@@ -220,13 +225,14 @@ def sse_generator(meeting_id: str, timeout: float = 5.0, last_event_id: str | No
                 yield _format_sse(event)
                 last_event_time = time.time()
             except queue.Empty:
-                # 2026-06-27: 修复前 b"data: {}\n\n" 把字面 "{}" 当 JSON 推, 客户端解析失败断开
-                yield b"event: heartbeat\n"
-                yield b"data: " + heartbeat_payload + b"\n\n"
-                last_event_time = time.time()
-                if time.time() - last_event_time > 120:
+                now = time.time()
+                if now - last_event_time > 120:
                     yield b"event: timeout\n"
                     yield b"data: " + timeout_payload + b"\n\n"
                     break
+                else:
+                    hb = json.dumps({"type": "heartbeat", "ts": now}, ensure_ascii=False).encode("utf-8")
+                    yield b"event: heartbeat\n"
+                    yield b"data: " + hb + b"\n\n"
     finally:
         _remove_subscriber(meeting_id, q)

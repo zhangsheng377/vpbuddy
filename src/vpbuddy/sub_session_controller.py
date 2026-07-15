@@ -279,9 +279,17 @@ def _dispatch_kind(meeting_id: str, kind: str, dry_run: bool = False) -> dict[st
 
 
 def run_docs(gen_id: int, mid: str) -> dict[str, Any]:
-    """统一文档 runner — batch_docs + demo 顺序触发，被 task_manager 调度."""
+    """统一文档 runner — batch_docs + demo 顺序触发，被 task_manager 调度.
+    
+    gen_id 用于 stale check: 若此 generation 已被 supersede, 跳过调度.
+    """
+    from .task_manager import get_task_manager
+    manager = get_task_manager()
     results = {}
     for kind in [BATCH_DOCS_KIND, DEMO_KIND]:
+        if manager.is_stale(mid, gen_id):
+            results[kind] = {"triggered": False, "error": "stale_generation_superseded"}
+            continue
         try:
             r = _dispatch_kind(mid, kind, dry_run=False)
             results[kind] = {"triggered": r.get("triggered"), "error": r.get("error")}

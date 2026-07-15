@@ -21,6 +21,7 @@ class DocTaskStatus(Enum):
     QUEUED = "queued"
     RUNNING = "running"
     COMPLETED = "completed"
+    FAILED = "failed"
     TIMED_OUT = "timed_out"
     CANCELLED = "cancelled"
 
@@ -75,7 +76,7 @@ class MeetingTaskQueue:
                     with self.lock:
                         if self.current_task is not None and self.current_task.generation_id == gen_id:
                             self.current_task.error = str(e)
-                            self.current_task.status = DocTaskStatus.TIMED_OUT
+                            self.current_task.status = DocTaskStatus.FAILED
                     return None
                 finally:
                     with self.lock:
@@ -139,6 +140,13 @@ class DocTaskManager:
             if queue is None:
                 return False
             return queue.has_running()
+
+    def is_stale(self, meeting_id: str, gen_id: int) -> bool:
+        with self._lock:
+            queue = self._queues.get(meeting_id)
+            if queue is None:
+                return False
+            return queue.is_stale(gen_id)
 
     def cancel_meeting(self, meeting_id: str):
         """取消某会议的全部待处理任务."""

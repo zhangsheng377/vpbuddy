@@ -1894,8 +1894,8 @@ async def fe_list_deliverables(meeting_id: str, user: dict = Depends(get_current
 @app.get("/deliverables/{deliverable_id}")
 async def fe_get_deliverable(deliverable_id: str, user: dict = Depends(get_current_user)):
     """GET /deliverables/:id → parse {meetingId}:{kind} → file content"""
-    # 格式: del-{meeting_id}-{kind}
-    parts = deliverable_id.split("-", 2)
+    # 格式: del-{meeting_id}-{kind}; meeting_id 可能含 '-', 从右拆
+    parts = deliverable_id.rsplit("-", 2)
     if len(parts) < 3:
         raise HTTPException(status_code=400, detail=f"Invalid deliverable_id: {deliverable_id}, expected del-{{meeting_id}}-{{kind}}")
     meeting_id, kind = parts[1], parts[2]
