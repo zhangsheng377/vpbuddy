@@ -17,6 +17,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from unittest.mock import MagicMock
 
 # 设置测试用临时目录(避免污染真实数据)
 TEST_DATA = tempfile.mkdtemp(prefix="vpbuddy_test_")
@@ -39,6 +40,7 @@ from vpbuddy.sub_session_controller import (
     get_doc_path,
     list_active_meetings,
     render_prompt,
+    run_docs,            # v0.23.0: 统一文档 runner
     run_one_round,
     trigger_sub_session,
 )
@@ -776,4 +778,58 @@ class TestTriggerWritesFile:
         assert len(doc_updates) >= 1
         for du in doc_updates:
             assert "content" not in du, f"batch doc-update 不应含 content: {list(du.keys())}"
+
+
+class TestRunDocs:
+    """v0.23.0: run_docs 统一入口 — batch_docs + demo 顺序触发."""
+
+    def test_run_docs_returns_both_kinds(self, populated_meeting):
+        r = run_docs(1, populated_meeting)
+        assert BATCH_DOCS_KIND in r
+        assert DEMO_KIND in r
+        assert "triggered" in r[BATCH_DOCS_KIND]
+        assert "triggered" in r[DEMO_KIND]
+
+    def test_run_docs_returns_both_keys(self, populated_meeting):
+        r = run_docs(2, populated_meeting)
+        assert set(r.keys()) == {BATCH_DOCS_KIND, DEMO_KIND}
+        for kind_data in r.values():
+            assert "triggered" in kind_data
+            assert "error" in kind_data
+
+    def test_run_docs_ignores_gen_id_for_output(self, populated_meeting):
+        """gen_id 只用于 task_manager 去重，不影响输出."""
+        r1 = run_docs(1, populated_meeting)
+        r2 = run_docs(42, populated_meeting)
+        assert r1.keys() == r2.keys()
+
+
+class TestDocTaskManagerIntegration:
+    """v0.23.0: DocTaskManager.has_running + defer 集成测试."""
+
+    def test_consecutive_submits_same_meeting_defer(self):
+        """同 meeting 连续 submit：第二个 defer."""
+        from vpbuddy.task_manager import DocTaskManager
+        mgr = DocTaskManager(max_workers=2)
+        mgr.executor.submit = MagicMock()
+
+        t1 = mgr.submit("def_test", lambda gid, mid: {"ok": True})
+        assert t1 is not None
+        assert mgr.has_running("def_test")
+
+        t2 = mgr.submit("def_test", lambda gid, mid: {"ok": True})
+        assert t2 is None, "第二次提交应 defer"
+
+    def test_running_blocks_new_submit(self):
+        """running 任务期间新提交不取消旧任务."""
+        from vpbuddy.task_manager import DocTaskManager
+        mgr = DocTaskManager(max_workers=2)
+
+        mgr.executor.submit = MagicMock()
+        t = mgr.submit("block_test", lambda gid, mid: {"done": True})
+        assert t is not None
+        assert mgr.has_running("block_test")
+
+        t2 = mgr.submit("block_test", lambda gid, mid: {"done": True})
+        assert t2 is None
 

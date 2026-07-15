@@ -1,8 +1,9 @@
-"""测试 task_manager — DocTaskManager / MeetingTaskQueue / DocTask (v0.9.0 #5)
+"""测试 task_manager — DocTaskManager / MeetingTaskQueue / DocTask (v0.9.0 #5 → v0.23.0)
 
 覆盖:
 - DocTaskManager 全局单例
-- MeetingTaskQueue.submit() debounce (连续提交仅保留最新)
+- MeetingTaskQueue.submit() defer: running 时不取消不挤压, 存 pending 完成后 auto-kick
+- has_running() 状态查询
 - generation_id 递增
 - is_stale() 判定过时任务
 - DocTask 状态流转 QUEUED->RUNNING->COMPLETED
@@ -58,11 +59,10 @@ class TestMeetingTaskQueue:
     """MeetingTaskQueue 单元测试 (mock ThreadPoolExecutor)."""
 
     def test_generation_id_increments(self):
-        """连续 submit 应递增 generation_id."""
+        """连续 submit 应递增 generation_id (无 running 时)."""
         queue = MeetingTaskQueue("mtg1")
         executor = MagicMock()
 
-        # executor.submit 返回的 future 模拟
         def fake_submit(fn, *args, **kwargs):
             return MagicMock()
 
@@ -70,15 +70,16 @@ class TestMeetingTaskQueue:
 
         t1 = queue.submit(executor, lambda gid, mid: None)
         g1 = t1.generation_id
+        # 手工设 completed → 无 running 状态 → 下次 submit 不 defer
+        t1.status = DocTaskStatus.COMPLETED
         t2 = queue.submit(executor, lambda gid, mid: None)
         g2 = t2.generation_id
         assert g2 > g1, "generation_id 应递增"
 
-    def test_submit_debounce_cancels_old_running(self):
-        """连续提交: 旧 RUNNING 任务应标记为 CANCELLED."""
+    def test_submit_running_defers_not_cancels(self):
+        """连续提交: 旧 RUNNING 任务不取消, 新任务 defer 返回 None."""
         queue = MeetingTaskQueue("mtg1")
 
-        # 手工设 current_task 为 RUNNING
         old_task = DocTask(generation_id=1, meeting_id="mtg1")
         old_task.status = DocTaskStatus.RUNNING
         queue.current_task = old_task
@@ -88,9 +89,55 @@ class TestMeetingTaskQueue:
         executor.submit = lambda fn, *a, **kw: MagicMock()
 
         t2 = queue.submit(executor, lambda gid, mid: None)
-        assert old_task.status == DocTaskStatus.CANCELLED
-        assert queue.current_task is t2
-        assert queue.current_task.generation_id == 2
+        assert t2 is None, "running 时应返回 None（defer）"
+        assert old_task.status == DocTaskStatus.RUNNING, "旧任务不取消"
+        assert queue.current_task is old_task, "current_task 仍是旧任务"
+
+    def test_pending_runner_auto_kick(self):
+        """完成后自动 kick pending runner."""
+        queue = MeetingTaskQueue("mtg1")
+        queue._generation_counter = 1
+        task = DocTask(generation_id=1, meeting_id="mtg1")
+        task.status = DocTaskStatus.RUNNING
+        queue.current_task = task
+
+        executor = MagicMock()
+        executor.submit = lambda fn, *a, **kw: MagicMock()
+
+        def runner1(gid, mid):
+            return {"ok": True}
+
+        queue._pending_runner = runner1
+
+        # 模拟 _wrapped finally: completed → 取 pending → unlock → submit
+        with queue.lock:
+            queue.current_task.status = DocTaskStatus.COMPLETED
+            pending = queue._pending_runner
+            queue._pending_runner = None
+
+        assert pending is runner1
+        t = queue.submit(executor, pending)
+        assert t is not None, "completed 后不再 defer"
+        assert t.generation_id == 2
+
+    def test_has_running_true(self):
+        queue = MeetingTaskQueue("mtg1")
+        task = DocTask(generation_id=1, meeting_id="mtg1")
+        task.status = DocTaskStatus.RUNNING
+        queue.current_task = task
+        assert queue.has_running()
+
+    def test_has_running_false_none(self):
+        queue = MeetingTaskQueue("mtg1")
+        queue.current_task = None
+        assert not queue.has_running()
+
+    def test_has_running_false_completed(self):
+        queue = MeetingTaskQueue("mtg1")
+        task = DocTask(generation_id=1, meeting_id="mtg1")
+        task.status = DocTaskStatus.COMPLETED
+        queue.current_task = task
+        assert not queue.has_running()
 
     def test_is_stale_fresh(self):
         """当前任务同 generation_id => not stale."""
@@ -214,10 +261,10 @@ class TestDocTaskManager:
         t2 = mgr.submit("mtg_b", lambda gid, mid: None)
         t3 = mgr.submit("mtg_a", lambda gid, mid: None)
 
-        # mtg_a 的第二次提交应使第一次 CANCELLED
-        assert t1.status == DocTaskStatus.CANCELLED
+        # v0.23.0: mtg_a 有 running 任务时 defer，返回 None
+        assert t1.status == DocTaskStatus.RUNNING
         assert t2.status == DocTaskStatus.RUNNING
-        assert t3.status == DocTaskStatus.RUNNING
+        assert t3 is None, "同 meeting running 时应 defer 返回 None"
 
     def test_get_or_create_queue(self):
         """get_or_create_queue 应创建新队列或返回已有."""
@@ -320,8 +367,28 @@ class TestDocTaskManager:
 
     def test_get_task_manager_singleton_reset(self):
         """验证单例模式 — 隐式依赖函数级全局."""
-        # 直接测试 get_task_manager 返回同一对象
-        # 注意: 全局单例会跨测试残留, 但 pytest 进程内不影响
         mgr_a = get_task_manager()
         mgr_b = get_task_manager()
         assert mgr_a is mgr_b
+
+    def test_has_running_true(self):
+        """has_running 对 running 的 meeting 返回 True."""
+        mgr = DocTaskManager(max_workers=2)
+        mgr.executor.submit = lambda fn, *a, **kw: MagicMock()
+        mgr.submit("hrt", lambda gid, mid: None)
+        assert mgr.has_running("hrt")
+
+    def test_has_running_false(self):
+        """has_running 对不存在的 meeting 返回 False."""
+        mgr = DocTaskManager(max_workers=2)
+        assert not mgr.has_running("no_such")
+
+    def test_completed_task_not_reported_running(self):
+        """has_running 对 COMPLETED 的 meeting 返回 False."""
+        mgr = DocTaskManager(max_workers=2)
+        mgr.executor.submit = lambda fn, *a, **kw: MagicMock()
+
+        # 提交 → 手动设 completed
+        task = mgr.submit("ct", lambda gid, mid: None)
+        task.status = DocTaskStatus.COMPLETED
+        assert not mgr.has_running("ct")
