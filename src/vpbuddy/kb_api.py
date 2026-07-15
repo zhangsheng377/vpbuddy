@@ -288,8 +288,9 @@ def handle_chat_upload(body: bytes, content_type: str, meeting_id: str, user_id:
                 raw_path = upload_dir / f"{file_uuid}_{fname}"
                 raw_path.write_bytes(data)
 
-                # v0.22.9: 上传后立即调用 DashScope qwen-vl-max 分析图片，
-                # 不依赖 agent vision tool（Hermes 内 qwen-vl-max 路由可能失败）
+                # v0.22.9: 上传后立即调用 DashScope 视觉模型分析图片，
+                # 不依赖 agent vision tool（Hermes 内 vision 工具可能失败）.
+                # v0.23.0: 多模型 fallback (qwen-vl-max → qwen-vl-plus)
                 vision_desc = ""
                 try:
                     import os as _os
@@ -297,25 +298,32 @@ def handle_chat_upload(body: bytes, content_type: str, meeting_id: str, user_id:
                     base_url = _os.environ.get("OPENAI_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
                     b64 = uri.split(",", 1)[1] if "," in uri else uri
                     import requests as _requests
-                    _vresp = _requests.post(
-                        f"{base_url}/chat/completions",
-                        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                        json={
-                            "model": "qwen-vl-max",
-                            "messages": [{"role": "user", "content": [
-                                {"type": "image_url", "image_url": {"url": f"data:{ct};base64,{b64}"}},
-                                {"type": "text", "text": "请简要描述这张图片的内容。"},
-                            ]}],
-                            "max_tokens": 300,
-                        },
-                        timeout=30,
-                    )
-                    if _vresp.status_code == 200:
-                        _vdata = _vresp.json()
-                        vision_desc = (_vdata.get("choices", [{}])[0]
-                                       .get("message", {}).get("content", "")).strip()
-                        if vision_desc:
-                            logger.info("chat upload vision: %s → %d chars", fname, len(vision_desc))
+                    for _vl_model in ["qwen-vl-max", "qwen-vl-plus"]:
+                        try:
+                            _vresp = _requests.post(
+                                f"{base_url}/chat/completions",
+                                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                                json={
+                                    "model": _vl_model,
+                                    "messages": [{"role": "user", "content": [
+                                        {"type": "image_url", "image_url": {"url": f"data:{ct};base64,{b64}"}},
+                                        {"type": "text", "text": "请简要描述这张图片的内容。"},
+                                    ]}],
+                                    "max_tokens": 300,
+                                },
+                                timeout=30,
+                            )
+                            if _vresp.status_code == 200:
+                                _vdata = _vresp.json()
+                                vision_desc = (_vdata.get("choices", [{}])[0]
+                                               .get("message", {}).get("content", "")).strip()
+                                if vision_desc:
+                                    logger.info("chat upload vision (%s): %s -> %d chars", _vl_model, fname, len(vision_desc))
+                                    break
+                            else:
+                                logger.warning("chat upload vision %s failed (%d): %s", _vl_model, _vresp.status_code, _vresp.text[:150])
+                        except Exception as _ve:
+                            logger.warning("chat upload vision %s exception: %s", _vl_model, _ve)
                 except Exception as _ve:
                     logger.warning("chat upload vision failed for %s: %s", fname, _ve)
 

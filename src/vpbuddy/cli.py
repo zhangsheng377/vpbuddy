@@ -20,6 +20,20 @@ import sys
 
 def cmd_ui(args: argparse.Namespace) -> int:
     """启动 VPBuddy Web UI(Browser-based, 端口 8765) — 默认 FastAPI"""
+    # v0.23.0: 持久化日志 — 写 /tmp/vpbuddy_ui.log (按天轮滚, 保留 3 天)
+    import logging
+    from logging.handlers import TimedRotatingFileHandler
+    _log_file = "/tmp/vpbuddy_ui.log"
+    _root = logging.getLogger()
+    _root.setLevel(logging.INFO)
+    try:
+        _fh = TimedRotatingFileHandler(_log_file, when="midnight", backupCount=3, encoding="utf-8")
+        _fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s",
+                                            datefmt="%Y-%m-%d %H:%M:%S"))
+        _root.addHandler(_fh)
+    except Exception:
+        pass
+
     from .server.fastapi_app import main as fastapi_main
     extra = ["--port", str(args.port), "--host", args.host]
     return fastapi_main(extra) or 0
